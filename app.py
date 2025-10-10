@@ -1,60 +1,129 @@
+# app.py
 """
-app.py
-Streamlit frontend for the Fintech Market Thesis Generator.
-
-- Lets user input a fintech topic
-- Uses FAISS + Gemini to build a mini "market thesis"
-- Displays structured JSON (themes, risks, signals, sources) + analyst summary
+Streamlit frontend for FinThesis (refactor branch)
+Uses core modules:
+ - core.utils: load_sample_articles, setup_logging
+ - core.retrieval: build_vectorstore
+ - core.gemini_client: generate_summary, generate_structured_thesis
 """
 
-import streamlit as st
+import logging
+import os
 import json
-from finthesis_gemini_faiss import build_vectorstore, SAMPLE_ARTICLES, generate_thesis
+import streamlit as st
 
-st.set_page_config(page_title="Fintech Market Thesis Generator", layout="wide")
+from core.utils import setup_logging, load_sample_articles
+from core.retrieval import build_vectorstore
+from core.gemini_client import generate_summary, generate_structured_thesis
 
-st.title("📊 Fintech Market Thesis Generator")
-st.write("Generate an investor-style thesis for a fintech sector using Gemini + FAISS.")
+# ---- Setup ----
+setup_logging()
+logger = logging.getLogger(__name__)
 
-# Input topic
-topic = st.text_input("Enter a fintech topic:", "B2B Payments")
+st.set_page_config(
+    page_title="FinThesis - AI Market Research Assistant", layout="wide")
 
+st.title("💼 FinThesis: AI-Powered Fintech Market Research Assistant")
+st.markdown(
+    "Generate structured **market theses** from financial context using semantic retrieval "
+    "and Gemini-powered reasoning."
+)
+
+# quick note about API key
+if not os.getenv("GOOGLE_API_KEY"):
+    st.warning(
+        "No GOOGLE_API_KEY detected in environment. "
+        "Gemini calls will fail without a valid API key. (Set GOOGLE_API_KEY in your environment.)"
+    )
+
+# Input
+query = st.text_input("Enter a market topic or question:",
+                      placeholder="e.g., Future of Digital Lending in Asia")
+
+# Helper: safe display of parsed JSON fields
+
+
+def display_parsed_thesis(parsed: dict):
+    st.subheader("🔑 Key Themes")
+    themes = parsed.get("key_themes", [])
+    st.write("\n".join(f"- {t}" for t in themes) or "No themes found.")
+
+    st.subheader("⚠️ Risks")
+    risks = parsed.get("risks", [])
+    st.write("\n".join(f"- {r}" for r in risks) or "No risks found.")
+
+    st.subheader("🚀 Investment Signals")
+    signals = parsed.get("investment_signals", [])
+    st.write("\n".join(f"- {s}" for s in signals) or "No signals found.")
+
+    st.subheader("🔗 Sources")
+    sources = parsed.get("sources", [])
+    st.write("\n".join(f"- {s}" for s in sources) or "No sources found.")
+
+
+# Main action
 if st.button("Generate Thesis"):
-    try:
-        with st.spinner("Building thesis..."):
-            vs = build_vectorstore(SAMPLE_ARTICLES)
-            result = generate_thesis(topic, vs)
+    if not query or not query.strip():
+        st.warning("Please enter a non-empty query.")
+    else:
+        try:
+            # Load sample articles (local data)
+            with st.spinner("Loading local sample articles..."):
+                articles = load_sample_articles()
 
-        # Always show raw JSON first
-        st.subheader("📄 Thesis (Raw JSON)")
-        st.code(result["raw"], language="json")
+            # Build or reuse vectorstore (cache in session_state)
+            if "vectorstore" not in st.session_state:
+                with st.spinner("Building FAISS vectorstore (one-time)..."):
+                    vs = build_vectorstore(articles)
+                    st.session_state["vectorstore"] = vs
+                    logger.info(
+                        "Vectorstore built and cached in session_state.")
+            else:
+                vs = st.session_state["vectorstore"]
 
-        # If structured JSON parsed correctly
-        if result["json"]:
-            parsed = result["json"]
+            # Retrieve relevant docs
+            with st.spinner("Retrieving relevant context from vectorstore..."):
+                retriever = vs.as_retriever(search_kwargs={"k": 4})
+                # use invoke for langchain new API compatibility
+                docs = retriever.invoke(query)
+                if not docs:
+                    st.warning("No relevant documents found for this query.")
+                    docs = []
 
-            st.subheader("🔑 Key Themes")
-            st.write("\n".join(
-                [f"- {t}" for t in parsed.get("key_themes", [])]) or "No themes found.")
+            # Summarize retrieved docs
+            with st.spinner("Summarizing retrieved context with Gemini..."):
+                thesis_text = generate_summary(docs)
+                if not thesis_text:
+                    st.error(
+                        "Failed to generate a summary from retrieved documents.")
+                    raise RuntimeError("Empty summary returned by Gemini.")
 
-            st.subheader("⚠️ Risks")
-            st.write(
-                "\n".join([f"- {r}" for r in parsed.get("risks", [])]) or "No risks found.")
+            # Ask Gemini to structure the thesis into JSON
+            with st.spinner("Structuring thesis into JSON..."):
+                structured = generate_structured_thesis(query, thesis_text)
+                raw_output = structured.get("raw", "")
+                parsed = structured.get("json", None)
 
-            st.subheader("🚀 Investment Signals")
-            st.write("\n".join(
-                [f"- {s}" for s in parsed.get("investment_signals", [])]) or "No signals found.")
+            # Show outputs
+            st.subheader("📄 Raw LLM Output")
+            st.code(raw_output or "No raw output available.", language="json")
 
-            st.subheader("🔗 Sources")
-            st.write("\n".join(
-                [f"- {src}" for src in parsed.get("sources", [])]) or "No sources found.")
-        else:
-            st.warning(
-                "⚠️ Could not parse structured JSON. Showing raw output above.")
+            st.subheader("📝 Analyst Summary (condensed)")
+            st.write(thesis_text or "No summary available.")
 
-        # Analyst summary is always useful
-        st.subheader("📝 Analyst Summary")
-        st.write(result.get("summary", "No summary available."))
+            if parsed:
+                st.success("✅ Parsed structured thesis")
+                display_parsed_thesis(parsed)
+            else:
+                st.warning(
+                    "Could not parse structured JSON from the model. See raw output above.")
 
-    except Exception as e:
-        st.error(f"An error occurred while generating the thesis: {str(e)}")
+        except Exception as exc:
+            logger.exception("Error while generating thesis")
+            st.error(f"An unexpected error occurred: {str(exc)}")
+
+else:
+    st.info("👆 Enter a query and click 'Generate Thesis' to start.")
+
+st.markdown("---")
+st.caption("Built with ❤️ using Streamlit, LangChain, FAISS, and Gemini API")
