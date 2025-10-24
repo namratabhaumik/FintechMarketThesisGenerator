@@ -15,6 +15,9 @@ import streamlit as st
 from core.utils import setup_logging, load_sample_articles
 from core.retrieval import build_vectorstore
 from core.gemini_client import generate_summary, generate_structured_thesis
+from core.fetch_articles import fetch_articles_from_rss
+from core.utils import normalize_articles
+
 
 # ---- Setup ----
 setup_logging()
@@ -67,9 +70,29 @@ if st.button("Generate Thesis"):
         st.warning("Please enter a non-empty query.")
     else:
         try:
-            # Load sample articles (local data)
-            with st.spinner("Loading local sample articles..."):
-                articles = load_sample_articles()
+            # Fetch + normalize live and local articles
+            with st.spinner("Fetching latest fintech news from Google News RSS..."):
+                live_articles = fetch_articles_from_rss(limit=10)
+                normalized_live = normalize_articles(live_articles)
+
+                if not normalized_live:
+                    st.warning(
+                        "No live articles found, falling back to local sample data.")
+                    local_articles = normalize_articles(load_sample_articles())
+                    articles = local_articles
+                else:
+                    # Merge live + local to enrich context
+                    local_articles = normalize_articles(load_sample_articles())
+                    articles = normalized_live + local_articles
+
+            # Show clickable article links
+            if articles:
+                st.subheader("📰 Latest Fintech Articles")
+                for a in articles[:10]:  # only show top 10 in UI
+                    if a.get("url"):
+                        st.markdown(f"• [{a['title']}]({a['url']})")
+                    else:
+                        st.markdown(f"• {a['title']}")
 
             # Build or reuse vectorstore (cache in session_state)
             if "vectorstore" not in st.session_state:
