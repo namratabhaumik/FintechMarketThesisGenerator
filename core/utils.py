@@ -1,5 +1,4 @@
 # core/utils.py
-import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -26,17 +25,9 @@ def normalize_articles(articles):
             "source": source.strip() if isinstance(source, str) else "unknown",
             "url": url
         })
-    logger.info(f"✅ Normalized {len(normalized)} articles.")
+    logger.info(f"Normalized {len(normalized)} articles.")
     return normalized
 
-
-def load_sample_articles(path="data/sample_articles.json"):
-    """Load articles from local JSON file."""
-    import os
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Sample data not found at {path}")
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
 
 
 def setup_logging():

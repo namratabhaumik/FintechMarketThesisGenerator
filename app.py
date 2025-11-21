@@ -1,8 +1,8 @@
 # app.py
 """
-Streamlit frontend for FinThesis (refactor branch)
+Streamlit frontend for FinThesis
 Uses core modules:
- - core.utils: load_sample_articles, setup_logging
+ - core.utils: setup_logging, normalize_articles
  - core.retrieval: build_vectorstore
  - core.gemini_client: generate_summary, generate_structured_thesis
 """
@@ -12,11 +12,10 @@ import os
 import json
 import streamlit as st
 
-from core.utils import setup_logging, load_sample_articles
+from core.utils import setup_logging, normalize_articles
 from core.retrieval import build_vectorstore
 from core.gemini_client import generate_summary, generate_structured_thesis
-from core.fetch_articles import fetch_articles_from_rss
-from core.utils import normalize_articles
+from core.ingestion import fetch_live_articles
 
 
 # ---- Setup ----
@@ -26,7 +25,7 @@ logger = logging.getLogger(__name__)
 st.set_page_config(
     page_title="FinThesis - AI Market Research Assistant", layout="wide")
 
-st.title("💼 FinThesis: AI-Powered Fintech Market Research Assistant")
+st.title("FinThesis: AI-Powered Fintech Market Research Assistant")
 st.markdown(
     "Generate structured **market theses** from financial context using semantic retrieval "
     "and Gemini-powered reasoning."
@@ -47,19 +46,19 @@ query = st.text_input("Enter a market topic or question:",
 
 
 def display_parsed_thesis(parsed: dict):
-    st.subheader("🔑 Key Themes")
+    st.subheader("Key Themes")
     themes = parsed.get("key_themes", [])
     st.write("\n".join(f"- {t}" for t in themes) or "No themes found.")
 
-    st.subheader("⚠️ Risks")
+    st.subheader("Risks")
     risks = parsed.get("risks", [])
     st.write("\n".join(f"- {r}" for r in risks) or "No risks found.")
 
-    st.subheader("🚀 Investment Signals")
+    st.subheader("Investment Signals")
     signals = parsed.get("investment_signals", [])
     st.write("\n".join(f"- {s}" for s in signals) or "No signals found.")
 
-    st.subheader("🔗 Sources")
+    st.subheader("Sources")
     sources = parsed.get("sources", [])
     st.write("\n".join(f"- {s}" for s in sources) or "No sources found.")
 
@@ -70,25 +69,18 @@ if st.button("Generate Thesis"):
         st.warning("Please enter a non-empty query.")
     else:
         try:
-            # Fetch + normalize live and local articles
-            with st.spinner("Fetching latest fintech news from Google News RSS..."):
-                live_articles = fetch_articles_from_rss(limit=10)
-                normalized_live = normalize_articles(live_articles)
-
-                if not normalized_live:
-                    st.warning(
-                        "No live articles found, falling back to local sample data.")
-                    local_articles = normalize_articles(load_sample_articles())
-                    articles = local_articles
-                else:
-                    # Merge live + local to enrich context
-                    local_articles = normalize_articles(load_sample_articles())
-                    articles = normalized_live + local_articles
+            # Fetch live articles from RSS feeds
+            with st.spinner("Fetching latest fintech news from RSS feeds..."):
+                live_articles = fetch_live_articles(limit=5)
+                articles = normalize_articles(live_articles)
+                
+                if not articles:
+                    st.warning("No articles found. Please try again later.")
 
             # Show clickable article links
             if articles:
-                st.subheader("📰 Latest Fintech Articles")
-                for a in articles[:10]:  # only show top 10 in UI
+                st.subheader("Latest Fintech Articles")
+                for a in articles[:5]:  # show all fetched articles
                     if a.get("url"):
                         st.markdown(f"• [{a['title']}]({a['url']})")
                     else:
@@ -106,8 +98,7 @@ if st.button("Generate Thesis"):
 
             # Retrieve relevant docs
             with st.spinner("Retrieving relevant context from vectorstore..."):
-                retriever = vs.as_retriever(search_kwargs={"k": 4})
-                # use invoke for langchain new API compatibility
+                retriever = vs.as_retriever(search_kwargs={"k": 5})
                 docs = retriever.invoke(query)
                 if not docs:
                     st.warning("No relevant documents found for this query.")
@@ -128,14 +119,14 @@ if st.button("Generate Thesis"):
                 parsed = structured.get("json", None)
 
             # Show outputs
-            st.subheader("📄 Raw LLM Output")
+            st.subheader("Raw LLM Output")
             st.code(raw_output or "No raw output available.", language="json")
 
-            st.subheader("📝 Analyst Summary (condensed)")
+            st.subheader("Analyst Summary (condensed)")
             st.write(thesis_text or "No summary available.")
 
             if parsed:
-                st.success("✅ Parsed structured thesis")
+                st.success("Parsed structured thesis")
                 display_parsed_thesis(parsed)
             else:
                 st.warning(
@@ -146,7 +137,7 @@ if st.button("Generate Thesis"):
             st.error(f"An unexpected error occurred: {str(exc)}")
 
 else:
-    st.info("👆 Enter a query and click 'Generate Thesis' to start.")
+    st.info("Enter a query and click 'Generate Thesis' to start.")
 
 st.markdown("---")
 st.caption("Built with ❤️ using Streamlit, LangChain, FAISS, and Gemini API")

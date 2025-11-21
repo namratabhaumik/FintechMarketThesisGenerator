@@ -41,8 +41,8 @@ def build_vectorstore(articles: list):
     try:
         embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         vectorstore = FAISS.from_documents(chunks, embeddings)
-        logger.info("✅ FAISS vectorstore built successfully.")
+        logger.info("FAISS vectorstore built successfully.")
         return vectorstore
     except Exception as e:
-        logger.error(f"❌ Failed to build FAISS vectorstore: {e}")
+        logger.error(f"Failed to build FAISS vectorstore: {e}")
         raise
