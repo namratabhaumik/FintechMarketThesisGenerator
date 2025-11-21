@@ -10,7 +10,7 @@ langchain-huggingface==0.3.1
 langchain-text-splitters==0.3.11
 
 # Google AI (let pip resolve compatible versions)
-google-generativeai
+
 
 # Vector Store
 faiss-cpu==1.12.0
