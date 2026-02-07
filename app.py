@@ -11,12 +11,15 @@ import logging
 import os
 import json
 import streamlit as st
+from dotenv import load_dotenv
 
 from core.utils import setup_logging, normalize_articles
 from core.retrieval import build_vectorstore
 from core.gemini_client import generate_summary, generate_structured_thesis
 from core.ingestion import fetch_live_articles
 
+# Load environment variables from .env
+load_dotenv()
 
 # ---- Setup ----
 setup_logging()
@@ -140,4 +143,4 @@ else:
     st.info("Enter a query and click 'Generate Thesis' to start.")
 
 st.markdown("---")
-st.caption("Built with ❤️ using Streamlit, LangChain, FAISS, and Gemini API")
+st.caption("Built with Streamlit, LangChain, FAISS, and Gemini API")
