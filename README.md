@@ -1,12 +1,12 @@
-# 📊 Fintech Market Thesis Generator
+# Fintech Market Thesis Generator
 
 An AI-powered application that generates investor-style market theses for fintech topics using **LangChain, FAISS, HuggingFace embeddings, and Gemini**. Features live RSS feed ingestion from TechCrunch for real-time fintech news analysis.
 
-👉 **Live Demo**: [Streamlit Cloud App](https://namratabhaumik-fintechmarketthesisGenerator-app-qqdzns.streamlit.app/)
+**Live Demo**: [Streamlit Cloud App](https://namratabhaumik-fintechmarketthesisGenerator-app-qqdzns.streamlit.app/)
 
 ---
 
-## ✨ Features
+## Features
 
 - **Live News Ingestion** – Fetches real-time fintech articles from TechCrunch RSS feeds
 - **Vector Database (FAISS)** – Semantic search over fintech articles
@@ -20,7 +20,7 @@ An AI-powered application that generates investor-style market theses for fintec
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 - **LangChain** – Chains, retrievers, and integrations
 - **FAISS** – Vector database for semantic retrieval
@@ -32,23 +32,34 @@ An AI-powered application that generates investor-style market theses for fintec
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 FintechMarketThesisGenerator/
-├── app.py                          # Streamlit frontend
+├── app.py                          # Streamlit frontend (main entry point)
 ├── core/
-│   ├── ingestion.py               # RSS feed fetching
-│   ├── retrieval.py               # FAISS vectorstore
-│   ├── gemini_client.py           # Gemini API integration
-│   ├── utils.py                   # Utility functions
-│   └── fetch_articles.py          # Article fetching utilities
-└── requirements.txt               # Python dependencies
+│   ├── ingestion.py               # RSS feed fetching + article scraping
+│   ├── retrieval.py               # FAISS vectorstore + semantic search
+│   ├── gemini_client.py           # Gemini API summarization + structuring
+│   └── utils.py                   # Article normalization + logging
+├── requirements.txt               # Python dependencies
+├── .env                           # Environment variables (GOOGLE_API_KEY)
+└── README.md                      # This file
 ```
+
+### Module Responsibilities
+
+| Module | Purpose | Key Functions |
+|--------|---------|----------------|
+| **app.py** | Main Streamlit UI | Orchestrates entire workflow, handles user input/output |
+| **ingestion.py** | Data Collection | `fetch_live_articles()` fetches from RSS, `scrape_article_text()` extracts content |
+| **retrieval.py** | Vector Search | `build_vectorstore()` creates FAISS index, enables semantic search |
+| **gemini_client.py** | AI Generation | `generate_summary()` and `generate_structured_thesis()` call Gemini API |
+| **utils.py** | Utilities | `normalize_articles()` standardizes format, `setup_logging()` configures logs |
 
 ---
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
@@ -76,18 +87,20 @@ streamlit run app.py
 
 ---
 
-## 💡 How It Works
+## How It Works
 
-1. **Fetch Articles**: Live RSS feeds from TechCrunch (configurable)
-2. **Embed**: Convert articles to vectors using HuggingFace embeddings
-3. **Store**: Index in FAISS for fast semantic search
-4. **Retrieve**: Find relevant articles for user query
-5. **Generate**: Use Gemini to create structured market thesis
-6. **Display**: Show results in Streamlit UI
+1. **Fetch Articles** – Scrapes latest fintech news from TechCrunch RSS feeds
+2. **Vectorize** – Converts articles to embeddings using HuggingFace and indexes them in FAISS
+3. **Retrieve** – Finds top-5 articles most relevant to your query using semantic search
+4. **Summarize** – Uses Gemini to create an analyst-style summary of retrieved articles
+5. **Structure** – Formats summary into JSON with key themes, risks, investment signals, and sources
+6. **Display** – Renders results in interactive Streamlit UI
+
+**For detailed architecture diagrams and data flow**, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 ---
 
-## 🔧 Configuration
+## Configuration
 
 ### RSS Feed Sources
 
@@ -110,7 +123,7 @@ DEFAULT_RSS_FEEDS = [
 
 ---
 
-## 🎨 Example Output
+## Example Output
 
 ### Input Query
 ```
@@ -144,7 +157,7 @@ DEFAULT_RSS_FEEDS = [
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Areas for improvement:
 - Additional RSS feed sources
@@ -154,13 +167,13 @@ Contributions are welcome! Areas for improvement:
 
 ---
 
-## 📝 License
+## License
 
 MIT License - see LICENSE file for details
 
 ---
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Built with [LangChain](https://www.langchain.com/)
 - Powered by [Google Gemini](https://deepmind.google/technologies/gemini/)
@@ -169,4 +182,4 @@ MIT License - see LICENSE file for details
 
 ---
 
-**Built with ❤️ for fintech market research**
+**Built for fintech market research**

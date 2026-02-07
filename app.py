@@ -143,4 +143,4 @@ else:
     st.info("Enter a query and click 'Generate Thesis' to start.")
 
 st.markdown("---")
-st.caption("Built with ❤️ using Streamlit, LangChain, FAISS, and Gemini API")
+st.caption("Built with Streamlit, LangChain, FAISS, and Gemini API")
