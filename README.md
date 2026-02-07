@@ -2,9 +2,12 @@
 
 An AI-powered application that generates investor-style market theses for fintech topics using **LangChain, FAISS, HuggingFace embeddings, and Gemini**. Features live RSS feed ingestion from TechCrunch for real-time fintech news analysis.
 
-**Live Demo**: [Streamlit Cloud App](https://namratabhaumik-fintechmarketthesisGenerator-app-qqdzns.streamlit.app/)
+Try it out here live: [Streamlit Cloud](https://namratabhaumik-fintechmarketthesisGenerator-app-qqdzns.streamlit.app/)
 
----
+## Demo Video
+
+[![FinThesis Demo](https://img.youtube.com/vi/CpHMJ3T2lGY/maxresdefault.jpg)](https://youtu.be/CpHMJ3T2lGY)
+
 
 ## Features
 
