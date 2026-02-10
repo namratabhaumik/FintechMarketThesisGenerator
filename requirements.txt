@@ -24,3 +24,20 @@ feedparser==6.0.12
 
 # Utilities
 python-dotenv
+
+# Development & Testing
+pytest==7.4.3
+pytest-cov==4.1.0
+pytest-mock==3.12.0
+
+# Type checking
+mypy==1.7.1
+types-requests
+types-beautifulsoup4
+
+# Linting
+ruff==0.1.7
+black==23.12.1
+
+# Pre-commit hooks
+pre-commit==3.6.0
