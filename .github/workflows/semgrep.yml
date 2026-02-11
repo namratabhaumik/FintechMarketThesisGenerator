@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   semgrep:
-    name: Semgrep Code Security Check
     runs-on: ubuntu-latest
     container:
       image: semgrep/semgrep:latest
