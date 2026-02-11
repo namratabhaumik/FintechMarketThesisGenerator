@@ -1,15 +1,9 @@
-name: Semgrep Security Analysis
+name: Semgrep Scan
 
 on:
-  push:
-    branches:
-      - master
-      - main
-      - 'refactor/**'
   pull_request:
     branches:
       - master
-      - main
 
 permissions:
   contents: read
@@ -25,17 +19,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Run Semgrep security analysis
-        run: |
-          semgrep scan \
-            --config=p/python \
-            --config=p/security-audit \
-            --config=p/secrets \
-            --config=p/bandit \
-            --config=p/owasp-top-ten \
-            --exclude='*.pyc' \
-            --exclude='__pycache__' \
-            --exclude='.venv' \
-            --exclude='venv' \
-            --exclude='.pytest_cache' \
-            --error
+      - name: Run Semgrep scan
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+        run: semgrep ci
