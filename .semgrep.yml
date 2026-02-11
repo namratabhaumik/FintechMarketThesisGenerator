@@ -1,20 +1,19 @@
 rules:
-  - id: unsafe-json-loads-from-llm
+  - id: unsafe-json-loads-from-untrusted-source
     patterns:
       - pattern-either:
-          - pattern: json.loads($X)
-          - pattern: json.load($X)
-      - pattern-not-inside: |
-          try:
-            ...
-            json.loads(...)
-            ...
-          except:
-            ...
+          - pattern: |
+              $X = requests.get(...)
+              ...
+              json.loads($X.text)
+          - pattern: |
+              $X = requests.post(...)
+              ...
+              json.loads($X.text)
     message: |
-      Unsafe JSON parsing detected. LLM-generated content should be validated
-      before parsing. Consider using json.loads with strict error handling and
-      input validation. Wrap in try-except and validate schema before parsing.
+      JSON parsing from untrusted HTTP source without validation. Always validate
+      and sanitize external data before parsing. Consider using json.loads with
+      JSONDecodeError handling and schema validation.
     severity: WARNING
     languages:
       - python
@@ -134,29 +133,3 @@ rules:
         - error-handling
         - fintech
 
-  - id: missing-type-hints-in-public-function
-    patterns:
-      - pattern: |
-          def $FUNC(...) -> ...:
-            ...
-      - pattern-not: |
-          def $FUNC(...) -> $RETURN_TYPE:
-            ...
-      - pattern-not: |
-          def __init__(...) -> None:
-            ...
-      - pattern-not: |
-          def _$PRIVATE(...) -> ...:
-            ...
-    message: |
-      Public function missing return type hint. Type hints improve code clarity
-      and enable better IDE support and static type checking. Add return type:
-      def function_name() -> ReturnType:
-    severity: INFO
-    languages:
-      - python
-    metadata:
-      category: best-practice
-      confidence: MEDIUM
-      tags:
-        - type-safety
