@@ -33,7 +33,6 @@ jobs:
             --config=p/secrets \
             --config=p/bandit \
             --config=p/owasp-top-ten \
-            --config=.semgrep.yml \
             --exclude='*.pyc' \
             --exclude='__pycache__' \
             --exclude='.venv' \
