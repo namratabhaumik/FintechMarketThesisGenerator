@@ -1,22 +1,19 @@
 # app.py
 """
-Streamlit frontend for FinThesis
-Uses core modules:
- - core.utils: setup_logging, normalize_articles
- - core.retrieval: build_vectorstore
- - core.gemini_client: generate_summary, generate_structured_thesis
+Streamlit frontend for FinThesis (Refactored with SOLID principles)
+Uses dependency injection to manage all dependencies.
 """
 
 import logging
 import os
-import json
+
 import streamlit as st
 from dotenv import load_dotenv
 
-from core.utils import setup_logging, normalize_articles
-from core.retrieval import build_vectorstore
-from core.gemini_client import generate_summary, generate_structured_thesis
-from core.ingestion import fetch_live_articles
+from config.settings import AppConfig
+from core.models.thesis import StructuredThesis
+from core.utils.logging import setup_logging
+from dependency_injection.container import ServiceContainer
 
 # Load environment variables from .env
 load_dotenv()
@@ -34,106 +31,116 @@ st.markdown(
     "and Gemini-powered reasoning."
 )
 
-# quick note about API key
+# Warning about API key
 if not os.getenv("GOOGLE_API_KEY"):
     st.warning(
         "No GOOGLE_API_KEY detected in environment. "
         "Gemini calls will fail without a valid API key. (Set GOOGLE_API_KEY in your environment.)"
     )
 
-# Input
-query = st.text_input("Enter a market topic or question:",
-                      placeholder="e.g., Future of Digital Lending in Asia")
 
-# Helper: safe display of parsed JSON fields
+# === Initialize DI Container (cached for performance) ===
+@st.cache_resource
+def get_container() -> ServiceContainer:
+    """Initialize and cache service container."""
+    config = AppConfig.from_env()
+    container = ServiceContainer(config)
+    logger.info("Service container initialized and cached")
+    return container
 
 
-def display_parsed_thesis(parsed: dict):
+container = get_container()
+
+
+# === UI Helper Functions ===
+
+def display_structured_thesis(thesis: StructuredThesis):
+    """Display structured thesis in Streamlit UI.
+
+    Args:
+        thesis: StructuredThesis object to display.
+    """
     st.subheader("Key Themes")
-    themes = parsed.get("key_themes", [])
+    themes = thesis.key_themes
     st.write("\n".join(f"- {t}" for t in themes) or "No themes found.")
 
     st.subheader("Risks")
-    risks = parsed.get("risks", [])
+    risks = thesis.risks
     st.write("\n".join(f"- {r}" for r in risks) or "No risks found.")
 
     st.subheader("Investment Signals")
-    signals = parsed.get("investment_signals", [])
+    signals = thesis.investment_signals
     st.write("\n".join(f"- {s}" for s in signals) or "No signals found.")
 
     st.subheader("Sources")
-    sources = parsed.get("sources", [])
+    sources = thesis.sources
     st.write("\n".join(f"- {s}" for s in sources) or "No sources found.")
 
 
-# Main action
+# === Main Application ===
+
+query = st.text_input(
+    "Enter a market topic or question:",
+    placeholder="e.g., Future of Digital Lending in Asia"
+)
+
 if st.button("Generate Thesis"):
     if not query or not query.strip():
         st.warning("Please enter a non-empty query.")
     else:
         try:
-            # Fetch live articles from RSS feeds
+            # Get services from DI container
+            ingestion_service = container.get_ingestion_service()
+            retrieval_service = container.get_retrieval_service()
+            thesis_service = container.get_thesis_service()
+
+            # Step 1: Fetch articles
             with st.spinner("Fetching latest fintech news from RSS feeds..."):
-                live_articles = fetch_live_articles(limit=5)
-                articles = normalize_articles(live_articles)
-                
+                articles = ingestion_service.fetch_articles(query="fintech", limit=5)
+
                 if not articles:
                     st.warning("No articles found. Please try again later.")
+                    st.stop()
 
-            # Show clickable article links
-            if articles:
-                st.subheader("Latest Fintech Articles")
-                for a in articles[:5]:  # show all fetched articles
-                    if a.get("url"):
-                        st.markdown(f"• [{a['title']}]({a['url']})")
-                    else:
-                        st.markdown(f"• {a['title']}")
+            # Display article links
+            st.subheader("Latest Fintech Articles")
+            for article in articles:
+                if article.url:
+                    st.markdown(f"• [{article.title}]({article.url})")
+                else:
+                    st.markdown(f"• {article.title}")
 
-            # Build or reuse vectorstore (cache in session_state)
-            if "vectorstore" not in st.session_state:
+            # Step 2: Build vectorstore (cache in session)
+            if "vectorstore_built" not in st.session_state:
                 with st.spinner("Building FAISS vectorstore (one-time)..."):
-                    vs = build_vectorstore(articles)
-                    st.session_state["vectorstore"] = vs
-                    logger.info(
-                        "Vectorstore built and cached in session_state.")
-            else:
-                vs = st.session_state["vectorstore"]
+                    documents = ingestion_service.convert_to_documents(articles)
+                    retrieval_service.build_vectorstore(documents)
+                    st.session_state["vectorstore_built"] = True
+                    logger.info("Vectorstore built and cached in session")
 
-            # Retrieve relevant docs
+            # Step 3: Retrieve relevant documents
             with st.spinner("Retrieving relevant context from vectorstore..."):
-                retriever = vs.as_retriever(search_kwargs={"k": 5})
-                docs = retriever.invoke(query)
+                docs = retrieval_service.retrieve(query, k=5)
+
                 if not docs:
                     st.warning("No relevant documents found for this query.")
-                    docs = []
+                    st.stop()
 
-            # Summarize retrieved docs
-            with st.spinner("Summarizing retrieved context with Gemini..."):
-                thesis_text = generate_summary(docs)
-                if not thesis_text:
-                    st.error(
-                        "Failed to generate a summary from retrieved documents.")
-                    raise RuntimeError("Empty summary returned by Gemini.")
+            # Step 4: Generate thesis
+            with st.spinner("Generating market thesis with Gemini..."):
+                thesis = thesis_service.generate_thesis(query, docs)
 
-            # Ask Gemini to structure the thesis into JSON
-            with st.spinner("Structuring thesis into JSON..."):
-                structured = generate_structured_thesis(query, thesis_text)
-                raw_output = structured.get("raw", "")
-                parsed = structured.get("json", None)
-
-            # Show outputs
-            st.subheader("Raw LLM Output")
-            st.code(raw_output or "No raw output available.", language="json")
+            # Step 5: Display results
+            if thesis.raw_output:
+                st.subheader("Raw LLM Output")
+                st.code(thesis.raw_output, language="json")
 
             st.subheader("Analyst Summary (condensed)")
-            st.write(thesis_text or "No summary available.")
-
-            if parsed:
-                st.success("Parsed structured thesis")
-                display_parsed_thesis(parsed)
+            if thesis.key_themes:
+                st.success("Structured thesis generated successfully")
+                display_structured_thesis(thesis)
             else:
-                st.warning(
-                    "Could not parse structured JSON from the model. See raw output above.")
+                st.warning("Could not parse structured output. See raw output above.")
 
         except Exception as exc:
             logger.exception("Error while generating thesis")
@@ -143,4 +150,4 @@ else:
     st.info("Enter a query and click 'Generate Thesis' to start.")
 
 st.markdown("---")
-st.caption("Built with Streamlit, LangChain, FAISS, and Gemini API")
+st.caption("Built with Streamlit, LangChain, FAISS, and Gemini API (SOLID Architecture)")
