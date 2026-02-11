@@ -1,0 +1,162 @@
+rules:
+  - id: unsafe-json-loads-from-llm
+    patterns:
+      - pattern-either:
+          - pattern: json.loads($X)
+          - pattern: json.load($X)
+      - pattern-not-inside: |
+          try:
+            ...
+            json.loads(...)
+            ...
+          except:
+            ...
+    message: |
+      Unsafe JSON parsing detected. LLM-generated content should be validated
+      before parsing. Consider using json.loads with strict error handling and
+      input validation. Wrap in try-except and validate schema before parsing.
+    severity: WARNING
+    languages:
+      - python
+    metadata:
+      category: security
+      cwe: "CWE-94: Improper Control of Generation of Code"
+      owasp: A03:2021 – Injection
+      confidence: MEDIUM
+      tags:
+        - llm-safety
+        - fintech
+
+  - id: missing-requests-timeout
+    patterns:
+      - pattern-either:
+          - pattern: requests.get($URL, ...)
+          - pattern: requests.post($URL, ...)
+          - pattern: requests.put($URL, ...)
+          - pattern: requests.delete($URL, ...)
+          - pattern: requests.patch($URL, ...)
+      - pattern-not: requests.$METHOD($URL, ..., timeout=$TIMEOUT, ...)
+    message: |
+      HTTP request without timeout parameter. This can cause indefinite hangs
+      and resource exhaustion. Always specify timeout parameter:
+      requests.get(url, timeout=10)
+    severity: WARNING
+    languages:
+      - python
+    metadata:
+      category: security
+      cwe: "CWE-400: Uncontrolled Resource Consumption"
+      owasp: A01:2021 – Broken Access Control
+      confidence: HIGH
+      tags:
+        - network-security
+        - fintech
+
+  - id: hardcoded-api-key-pattern
+    patterns:
+      - pattern-either:
+          - pattern: GOOGLE_API_KEY = "..."
+          - pattern: api_key = "AIza..."
+          - pattern: google_api_key = "AIza..."
+          - pattern: gemini_key = "..."
+          - pattern: huggingface_token = "..."
+    message: |
+      Potential hardcoded API key detected. This is a critical security risk
+      and should never be committed to version control. Use environment variables:
+      api_key = os.getenv("GOOGLE_API_KEY")
+    severity: ERROR
+    languages:
+      - python
+    metadata:
+      category: security
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+      owasp: A02:2021 – Cryptographic Failures
+      confidence: HIGH
+      tags:
+        - secrets
+        - credentials
+
+  - id: unvalidated-external-request
+    patterns:
+      - pattern-either:
+          - pattern: requests.get($URL, ...)
+          - pattern: requests.post($URL, ...)
+      - pattern-not-inside: |
+          if "https://" in $URL:
+            ...
+          else:
+            ...
+      - pattern-not-inside: |
+          if $URL.startswith("https://"):
+            ...
+          else:
+            ...
+    message: |
+      External HTTP request to potentially unvalidated URL. Consider validating
+      URL scheme and domain before making requests to prevent SSRF attacks.
+      Example: if not url.startswith("https://"): raise ValueError("Invalid URL")
+    severity: INFO
+    languages:
+      - python
+    metadata:
+      category: security
+      cwe: "CWE-918: Server-Side Request Forgery (SSRF)"
+      owasp: A10:2021 – Server-Side Request Forgery (SSRF)
+      confidence: LOW
+      tags:
+        - network-security
+        - fintech
+
+  - id: feedparser-without-error-handling
+    patterns:
+      - pattern: feedparser.parse($URL)
+      - pattern-not-inside: |
+          try:
+            ...
+          except:
+            ...
+    message: |
+      feedparser.parse() should be wrapped in try-except to handle parsing errors
+      and network failures gracefully. Unhandled parsing errors can crash the
+      application. Example:
+      try:
+        feed = feedparser.parse(url)
+      except Exception as e:
+        logger.error(f"Failed to parse feed: {e}")
+    severity: WARNING
+    languages:
+      - python
+    metadata:
+      category: reliability
+      cwe: "CWE-248: Uncaught Exception"
+      confidence: MEDIUM
+      tags:
+        - error-handling
+        - fintech
+
+  - id: missing-type-hints-in-public-function
+    patterns:
+      - pattern: |
+          def $FUNC(...) -> ...:
+            ...
+      - pattern-not: |
+          def $FUNC(...) -> $RETURN_TYPE:
+            ...
+      - pattern-not: |
+          def __init__(...) -> None:
+            ...
+      - pattern-not: |
+          def _$PRIVATE(...) -> ...:
+            ...
+    message: |
+      Public function missing return type hint. Type hints improve code clarity
+      and enable better IDE support and static type checking. Add return type:
+      def function_name() -> ReturnType:
+    severity: INFO
+    languages:
+      - python
+    metadata:
+      category: best-practice
+      confidence: MEDIUM
+      tags:
+        - type-safety

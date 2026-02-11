@@ -1,0 +1,105 @@
+name: Semgrep Security Analysis
+
+on:
+  push:
+    branches:
+      - master
+      - main
+      - 'refactor/**'
+  pull_request:
+    branches:
+      - master
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: Semgrep Static Analysis
+    runs-on: ubuntu-latest
+
+    container:
+      image: semgrep/semgrep:latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Semgrep scan with rulesets
+        id: semgrep-scan
+        run: |
+          semgrep scan \
+            --config=p/python \
+            --config=p/security-audit \
+            --config=p/secrets \
+            --config=p/bandit \
+            --config=p/owasp-top-ten \
+            --config=p/supply-chain \
+            --config=.semgrep.yml \
+            --exclude='*.pyc' \
+            --exclude='__pycache__' \
+            --exclude='.venv' \
+            --exclude='venv' \
+            --exclude='.pytest_cache' \
+            --json \
+            --output=semgrep-results.json \
+            --error \
+            --verbose \
+            . || EXIT_CODE=$?
+
+          if [ "${EXIT_CODE:-0}" -ne 0 ]; then
+            echo "Semgrep scan completed with findings or errors"
+          fi
+          exit 0
+
+      - name: Generate human-readable report
+        if: always()
+        run: |
+          echo "## Semgrep Security Analysis Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          semgrep scan \
+            --config=p/python \
+            --config=p/security-audit \
+            --config=p/secrets \
+            --config=p/bandit \
+            --config=p/owasp-top-ten \
+            --config=p/supply-chain \
+            --config=.semgrep.yml \
+            --exclude='*.pyc' \
+            --exclude='__pycache__' \
+            --exclude='.venv' \
+            --exclude='venv' \
+            --exclude='.pytest_cache' \
+            --text >> $GITHUB_STEP_SUMMARY 2>&1 || true
+
+      - name: Upload Semgrep results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-results
+          path: semgrep-results.json
+          retention-days: 30
+
+      - name: Check for security findings
+        if: always()
+        run: |
+          if [ -f semgrep-results.json ]; then
+            FINDINGS=$(jq '.results | length' semgrep-results.json)
+            echo "Total Semgrep findings: $FINDINGS"
+
+            if [ "$FINDINGS" -gt 0 ]; then
+              echo ""
+              echo "Security issues found. Details:"
+              jq '.results[] | "\(.path):\(.start.line): [\(.rule_id)] \(.message)"' semgrep-results.json
+              echo ""
+              echo "::error::Semgrep found $FINDINGS security or code quality issues. Please review and fix them."
+              exit 1
+            else
+              echo "✓ No security findings detected!"
+            fi
+          else
+            echo "Warning: semgrep-results.json not found"
+          fi
