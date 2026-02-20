@@ -1,7 +1,7 @@
 """Application configuration management."""
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List
 import os
 
 
@@ -23,17 +23,17 @@ class ScraperConfig:
 @dataclass
 class EmbeddingConfig:
     """Embedding model configuration."""
-    provider: str = "huggingface"
-    model_name: str = "all-MiniLM-L6-v2"
+    provider: str
+    model_name: str
 
 
 @dataclass
 class LLMConfig:
     """LLM configuration."""
-    provider: str = "gemini"
-    model_name: str = "gemini-3-flash-preview"
+    provider: str
+    model_name: str
+    api_key: str
     temperature: float = 0.0
-    api_key: Optional[str] = None
 
 
 @dataclass
@@ -47,8 +47,8 @@ class VectorStoreConfig:
 @dataclass
 class AppConfig:
     """Application-wide configuration."""
-    embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
-    llm: LLMConfig = field(default_factory=LLMConfig)
+    embedding: EmbeddingConfig
+    llm: LLMConfig
     vectorstore: VectorStoreConfig = field(default_factory=VectorStoreConfig)
     scraper: ScraperConfig = field(default_factory=ScraperConfig)
 
@@ -62,26 +62,51 @@ class AppConfig:
 
     @classmethod
     def from_env(cls) -> "AppConfig":
-        """Load configuration from environment variables."""
-        config = cls()
+        """Load and validate configuration from environment variables.
 
-        # Load API keys and model names from environment
-        if api_key := os.getenv("GOOGLE_API_KEY"):
-            config.llm.api_key = api_key
+        Raises:
+            EnvironmentError: If any required environment variable is missing.
+        """
+        missing = []
 
-        if model := os.getenv("GEMINI_MODEL"):
-            config.llm.model_name = model
+        llm_provider = os.getenv("LLM_PROVIDER")
+        llm_model = os.getenv("GEMINI_MODEL")
+        embed_provider = os.getenv("EMBEDDING_PROVIDER")
+        embed_model = os.getenv("EMBEDDING_MODEL")
 
-        if embed_model := os.getenv("EMBEDDING_MODEL"):
-            config.embedding.model_name = embed_model
+        # Resolve API key based on provider
+        api_key = None
+        if llm_provider == "gemini" or llm_provider is None:
+            api_key = os.getenv("GOOGLE_API_KEY")
+            if not api_key:
+                missing.append("GOOGLE_API_KEY")
 
-        if llm_provider := os.getenv("LLM_PROVIDER"):
-            config.llm.provider = llm_provider
+        if not llm_provider:
+            missing.append("LLM_PROVIDER")
+        if not llm_model:
+            missing.append("GEMINI_MODEL")
+        if not embed_provider:
+            missing.append("EMBEDDING_PROVIDER")
+        if not embed_model:
+            missing.append("EMBEDDING_MODEL")
 
-        if embed_provider := os.getenv("EMBEDDING_PROVIDER"):
-            config.embedding.provider = embed_provider
+        if missing:
+            raise EnvironmentError(
+                f"Missing required environment variables: {', '.join(missing)}. "
+                "Please set them in your .env file."
+            )
 
-        if vs_provider := os.getenv("VECTORSTORE_PROVIDER"):
-            config.vectorstore.provider = vs_provider
+        vs_provider = os.getenv("VECTORSTORE_PROVIDER", "faiss")
 
-        return config
+        return cls(
+            llm=LLMConfig(
+                provider=llm_provider,
+                model_name=llm_model,
+                api_key=api_key,
+            ),
+            embedding=EmbeddingConfig(
+                provider=embed_provider,
+                model_name=embed_model,
+            ),
+            vectorstore=VectorStoreConfig(provider=vs_provider),
+        )
