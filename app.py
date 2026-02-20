@@ -25,10 +25,10 @@ logger = logging.getLogger(__name__)
 st.set_page_config(
     page_title="FinThesis - AI Market Research Assistant", layout="wide")
 
-st.title("FinThesis: AI-Powered Fintech Market Research Assistant")
+st.title("FinThesis: Fintech Market Research Assistant")
 st.markdown(
-    "Generate structured **market theses** from financial context using semantic retrieval "
-    "and Gemini-powered reasoning."
+    "Generate structured **market theses** from live fintech news using semantic retrieval "
+    "and keyword-driven analysis — powered by a local summarizer or an LLM of your choice."
 )
 
 # Warning about API key
@@ -132,10 +132,9 @@ if st.button("Generate Thesis"):
 
             # Step 5: Display results
             if thesis.raw_output:
-                st.subheader("Raw LLM Output")
+                st.subheader("Raw Summary")
                 st.code(thesis.raw_output, language="json")
 
-            st.subheader("Analyst Summary (condensed)")
             if thesis.key_themes:
                 st.success("Structured thesis generated successfully")
                 display_structured_thesis(thesis)
@@ -150,4 +149,3 @@ else:
     st.info("Enter a query and click 'Generate Thesis' to start.")
 
 st.markdown("---")
-st.caption("Built with Streamlit, LangChain, FAISS, and Gemini API")

@@ -9,6 +9,7 @@ from core.implementations.embeddings.huggingface_embeddings import (
     HuggingFaceEmbeddingModel,
 )
 from core.implementations.llm.gemini_llm import GeminiLanguageModel
+from core.implementations.llm.local_summarizer import LocalSummarizerModel
 from core.implementations.scrapers.beautifulsoup_scraper import BeautifulSoupScraper
 from core.implementations.vectorstores.faiss_store import FAISSVectorStore
 from core.interfaces.article_source import IArticleSource
@@ -23,6 +24,7 @@ from core.services.thesis_generator_service import ThesisGeneratorService
 # To add a new LLM provider, see README.md
 LLM_PROVIDER_REGISTRY: Dict[str, Type[ILanguageModel]] = {
     "gemini": GeminiLanguageModel,
+    "local": LocalSummarizerModel,
 }
 
 # To add a new embedding provider, see README.md
