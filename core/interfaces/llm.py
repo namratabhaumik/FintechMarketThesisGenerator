@@ -1,7 +1,7 @@
 """Abstract interface for language models."""
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import List
 
 from langchain.docstore.document import Document
 
@@ -12,11 +12,6 @@ class ILanguageModel(ABC):
     @abstractmethod
     def summarize(self, documents: List[Document]) -> str:
         """Generate summary from documents."""
-        pass
-
-    @abstractmethod
-    def generate_structured_output(self, prompt: str) -> Dict[str, Any]:
-        """Generate structured JSON output from prompt."""
         pass
 
     @abstractmethod

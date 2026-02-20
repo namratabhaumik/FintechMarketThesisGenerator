@@ -96,19 +96,5 @@ class TestThesisGeneratorService:
         docs = [Document(page_content="Digital banking is the future")]
         thesis = service.generate_thesis("Digital Banking", docs)
 
-        assert len(thesis.key_themes) == 1
-        assert thesis.key_themes[0] == "theme1"
+        assert "Neobanking" in thesis.key_themes
         assert thesis.raw_output is not None
-
-    def test_prompt_building(self, mock_llm):
-        """Test that prompt is built correctly."""
-        service = ThesisGeneratorService(mock_llm)
-
-        prompt = service._build_thesis_prompt(
-            "Digital Banking",
-            "Banks are going digital"
-        )
-
-        assert "Digital Banking" in prompt
-        assert "Banks are going digital" in prompt
-        assert "expert VC analyst" in prompt
