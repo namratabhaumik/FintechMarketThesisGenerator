@@ -7,6 +7,7 @@ from langchain.docstore.document import Document
 
 from core.interfaces.llm import ILanguageModel
 from core.models.thesis import StructuredThesis
+from core.services.thesis_structuring_service import ThesisStructuringService
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +23,10 @@ class ThesisGeneratorService:
         """Initialize with language model.
 
         Args:
-            llm: Injected LLM implementation.
+            llm: Injected LLM implementation (only for summarization).
         """
         self._llm = llm
+        self._structuring_service = ThesisStructuringService()
 
     def generate_thesis(
         self,
@@ -42,7 +44,7 @@ class ThesisGeneratorService:
         """
         logger.info(f"Generating thesis for topic: {topic}")
 
-        # Step 1: Summarize documents
+        # Step 1: Summarize documents (LLM only)
         logger.info("Step 1: Summarizing retrieved documents...")
         summary = self._llm.summarize(documents)
 
@@ -50,50 +52,22 @@ class ThesisGeneratorService:
             logger.error("Empty summary returned by LLM")
             raise RuntimeError("Failed to generate summary")
 
-        # Step 2: Generate structured output
-        logger.info("Step 2: Generating structured thesis...")
-        prompt = self._build_thesis_prompt(topic, summary)
-        result = self._llm.generate_structured_output(prompt)
+        # Step 2: Structure summary into thesis (Python only - no LLM)
+        logger.info("Step 2: Structuring thesis from summary...")
+        result = self._structuring_service.structure_thesis(summary)
 
-        # Step 3: Parse into structured thesis
-        if result.get("json"):
-            logger.info("Successfully generated structured thesis")
-            return StructuredThesis(
-                key_themes=result["json"].get("key_themes", []),
-                risks=result["json"].get("risks", []),
-                investment_signals=result["json"].get("investment_signals", []),
-                sources=result["json"].get("sources", []),
-                raw_output=result["raw"]
-            )
-        else:
-            logger.warning("Failed to parse JSON output, returning partial thesis")
-            return StructuredThesis(
-                key_themes=[],
-                risks=[],
-                investment_signals=[],
-                sources=[],
-                raw_output=result.get("raw")
-            )
+        # Step 3: Extract sources from document metadata
+        sources = [
+            doc.metadata["url"]
+            for doc in documents
+            if doc.metadata.get("url")
+        ]
 
-    def _build_thesis_prompt(self, topic: str, summary: str) -> str:
-        """Build prompt for structured thesis generation.
-
-        Args:
-            topic: Market topic.
-            summary: Summarized context.
-
-        Returns:
-            Prompt string for the LLM.
-        """
-        return f"""
-You are an expert VC analyst. Based on this summarized evidence about "{topic}":
-
-{summary}
-
-Return a JSON object with keys:
-- key_themes: list of 3 concise themes
-- risks: list of 3 concise risks
-- investment_signals: list of 3 startup focus areas
-- sources: list of source titles or URLs
-Only output valid JSON.
-"""
+        logger.info("Successfully generated structured thesis")
+        return StructuredThesis(
+            key_themes=result.get("key_themes", []),
+            risks=result.get("risks", []),
+            investment_signals=result.get("investment_signals", []),
+            sources=sources,
+            raw_output=summary
+        )

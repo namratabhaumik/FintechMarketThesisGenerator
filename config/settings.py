@@ -31,7 +31,7 @@ class EmbeddingConfig:
 class LLMConfig:
     """LLM configuration."""
     provider: str = "gemini"
-    model_name: str = "gemini-2.5-flash"
+    model_name: str = "gemini-3-flash-preview"
     temperature: float = 0.0
     api_key: Optional[str] = None
 
