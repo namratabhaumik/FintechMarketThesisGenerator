@@ -1,9 +1,7 @@
 """Gemini LLM implementation."""
 
-import json
 import logging
-import re
-from typing import Any, Dict, List
+from typing import List
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.chains.summarize import load_summarize_chain
@@ -57,39 +55,6 @@ class GeminiLanguageModel(ILanguageModel):
 
         except Exception as e:
             logger.error(f"Gemini summarization failed: {e}")
-            raise
-
-    def generate_structured_output(self, prompt: str) -> Dict[str, Any]:
-        """Generate structured JSON output from prompt.
-
-        Args:
-            prompt: Prompt for the LLM.
-
-        Returns:
-            Dictionary with 'raw' (original response) and 'json' (parsed JSON or None).
-        """
-        try:
-            logger.info("Generating structured output with Gemini")
-            result = self._llm.invoke(prompt)
-            raw = getattr(result, "content", str(result))
-
-            # Clean markdown code blocks
-            cleaned = re.sub(
-                r"^```json|```$",
-                "",
-                raw.strip(),
-                flags=re.MULTILINE
-            ).strip()
-
-            parsed = json.loads(cleaned)
-            logger.info("Successfully parsed structured output")
-            return {"raw": raw, "json": parsed}
-
-        except json.JSONDecodeError as e:
-            logger.warning(f"Failed to parse Gemini output as JSON: {e}")
-            return {"raw": raw, "json": None}
-        except Exception as e:
-            logger.error(f"Error generating structured output: {e}")
             raise
 
     def get_model_name(self) -> str:

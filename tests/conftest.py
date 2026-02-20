@@ -7,7 +7,6 @@ from core.interfaces.article_source import IArticleSource
 from core.interfaces.scraper import IWebScraper
 from core.interfaces.llm import ILanguageModel
 from core.models.article import Article
-from config.settings import AppConfig, LLMConfig
 
 
 # === Mock Implementations ===
@@ -42,18 +41,6 @@ class MockLanguageModel(ILanguageModel):
     def summarize(self, documents) -> str:
         """Return mock summary."""
         return "Mock summary: " + " ".join([d.page_content[:50] for d in documents])
-
-    def generate_structured_output(self, prompt: str) -> dict:
-        """Return mock structured output."""
-        return {
-            "raw": '{"key_themes": ["theme1"], "risks": ["risk1"], "investment_signals": ["signal1"], "sources": []}',
-            "json": {
-                "key_themes": ["theme1"],
-                "risks": ["risk1"],
-                "investment_signals": ["signal1"],
-                "sources": []
-            }
-        }
 
     def get_model_name(self) -> str:
         """Return model name."""
@@ -105,9 +92,3 @@ def mock_llm() -> ILanguageModel:
     return MockLanguageModel()
 
 
-@pytest.fixture
-def test_config() -> AppConfig:
-    """Test configuration."""
-    config = AppConfig()
-    config.llm.api_key = "test_key"
-    return config

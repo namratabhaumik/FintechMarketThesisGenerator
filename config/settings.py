@@ -1,8 +1,21 @@
 """Application configuration management."""
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Dict, List
 import os
+
+# Registry: maps provider name → env var for its API key.
+# To add a new provider: add one entry here and a matching entry in PROVIDER_MODEL_ENV.
+# Example: "openai": "OPENAI_API_KEY"
+PROVIDER_API_KEY_ENV: Dict[str, str] = {
+    "gemini": "GOOGLE_API_KEY",
+}
+
+# Registry: maps provider name → env var for its model name.
+# Example: "openai": "OPENAI_MODEL"
+PROVIDER_MODEL_ENV: Dict[str, str] = {
+    "gemini": "GEMINI_MODEL",
+}
 
 
 @dataclass
@@ -23,17 +36,17 @@ class ScraperConfig:
 @dataclass
 class EmbeddingConfig:
     """Embedding model configuration."""
-    provider: str = "huggingface"
-    model_name: str = "all-MiniLM-L6-v2"
+    provider: str
+    model_name: str
 
 
 @dataclass
 class LLMConfig:
     """LLM configuration."""
-    provider: str = "gemini"
-    model_name: str = "gemini-2.5-flash"
+    provider: str
+    model_name: str
+    api_key: str
     temperature: float = 0.0
-    api_key: Optional[str] = None
 
 
 @dataclass
@@ -47,8 +60,8 @@ class VectorStoreConfig:
 @dataclass
 class AppConfig:
     """Application-wide configuration."""
-    embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
-    llm: LLMConfig = field(default_factory=LLMConfig)
+    embedding: EmbeddingConfig
+    llm: LLMConfig
     vectorstore: VectorStoreConfig = field(default_factory=VectorStoreConfig)
     scraper: ScraperConfig = field(default_factory=ScraperConfig)
 
@@ -62,26 +75,66 @@ class AppConfig:
 
     @classmethod
     def from_env(cls) -> "AppConfig":
-        """Load configuration from environment variables."""
-        config = cls()
+        """Load and validate configuration from environment variables.
 
-        # Load API keys and model names from environment
-        if api_key := os.getenv("GOOGLE_API_KEY"):
-            config.llm.api_key = api_key
+        Uses PROVIDER_API_KEY_ENV and PROVIDER_MODEL_ENV registries so that
+        adding a new LLM provider requires no changes here.
 
-        if model := os.getenv("GEMINI_MODEL"):
-            config.llm.model_name = model
+        Raises:
+            EnvironmentError: If any required environment variable is missing.
+            ValueError: If LLM_PROVIDER is not a recognised provider.
+        """
+        missing = []
 
-        if embed_model := os.getenv("EMBEDDING_MODEL"):
-            config.embedding.model_name = embed_model
+        llm_provider = os.getenv("LLM_PROVIDER")
+        embed_provider = os.getenv("EMBEDDING_PROVIDER")
+        embed_model = os.getenv("EMBEDDING_MODEL")
 
-        if llm_provider := os.getenv("LLM_PROVIDER"):
-            config.llm.provider = llm_provider
+        if not llm_provider:
+            missing.append("LLM_PROVIDER")
+        if not embed_provider:
+            missing.append("EMBEDDING_PROVIDER")
+        if not embed_model:
+            missing.append("EMBEDDING_MODEL")
 
-        if embed_provider := os.getenv("EMBEDDING_PROVIDER"):
-            config.embedding.provider = embed_provider
+        # Validate provider is known before resolving its env vars
+        if llm_provider and llm_provider not in PROVIDER_API_KEY_ENV:
+            raise ValueError(
+                f"Unknown LLM_PROVIDER '{llm_provider}'. "
+                f"Supported providers: {list(PROVIDER_API_KEY_ENV.keys())}"
+            )
 
-        if vs_provider := os.getenv("VECTORSTORE_PROVIDER"):
-            config.vectorstore.provider = vs_provider
+        # Resolve provider-specific env var names from registries
+        api_key = model_name = None
+        if llm_provider:
+            api_key_env = PROVIDER_API_KEY_ENV[llm_provider]
+            model_env = PROVIDER_MODEL_ENV[llm_provider]
 
-        return config
+            api_key = os.getenv(api_key_env)
+            model_name = os.getenv(model_env)
+
+            if not api_key:
+                missing.append(api_key_env)
+            if not model_name:
+                missing.append(model_env)
+
+        if missing:
+            raise EnvironmentError(
+                f"Missing required environment variables: {', '.join(missing)}. "
+                "Please set them in your .env file."
+            )
+
+        vs_provider = os.getenv("VECTORSTORE_PROVIDER", "faiss")
+
+        return cls(
+            llm=LLMConfig(
+                provider=llm_provider,
+                model_name=model_name,
+                api_key=api_key,
+            ),
+            embedding=EmbeddingConfig(
+                provider=embed_provider,
+                model_name=embed_model,
+            ),
+            vectorstore=VectorStoreConfig(provider=vs_provider),
+        )

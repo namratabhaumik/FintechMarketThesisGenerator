@@ -1,7 +1,7 @@
 """Dependency Injection Container for wiring dependencies."""
 
 import logging
-from typing import Optional
+from typing import Dict, Optional, Type
 
 from config.settings import AppConfig
 from core.implementations.article_sources.rss_source import RSSArticleSource
@@ -19,6 +19,16 @@ from core.interfaces.vectorstore import IVectorStore
 from core.services.ingestion_service import ArticleIngestionService
 from core.services.retrieval_service import DocumentRetrievalService
 from core.services.thesis_generator_service import ThesisGeneratorService
+
+# To add a new LLM provider, see README.md
+LLM_PROVIDER_REGISTRY: Dict[str, Type[ILanguageModel]] = {
+    "gemini": GeminiLanguageModel,
+}
+
+# To add a new embedding provider, see README.md
+EMBEDDING_PROVIDER_REGISTRY: Dict[str, Type[IEmbeddingModel]] = {
+    "huggingface": HuggingFaceEmbeddingModel,
+}
 
 logger = logging.getLogger(__name__)
 
@@ -87,19 +97,20 @@ class ServiceContainer:
             IEmbeddingModel implementation based on configuration.
 
         Raises:
-            ValueError: If configured embedding provider is unknown.
+            ValueError: If configured embedding provider is not in the registry.
         """
         if not self._embedding_model:
-            logger.info(f"Creating {self._config.embedding.provider} embedding model")
+            provider = self._config.embedding.provider
+            embedding_class = EMBEDDING_PROVIDER_REGISTRY.get(provider)
 
-            if self._config.embedding.provider == "huggingface":
-                self._embedding_model = HuggingFaceEmbeddingModel(
-                    self._config.embedding
-                )
-            else:
+            if not embedding_class:
                 raise ValueError(
-                    f"Unknown embedding provider: {self._config.embedding.provider}"
+                    f"Unknown embedding provider: '{provider}'. "
+                    f"Supported: {list(EMBEDDING_PROVIDER_REGISTRY.keys())}"
                 )
+
+            logger.info(f"Creating {provider} embedding model ({embedding_class.__name__})")
+            self._embedding_model = embedding_class(self._config.embedding)
 
         return self._embedding_model
 
@@ -131,21 +142,27 @@ class ServiceContainer:
     def get_llm(self) -> ILanguageModel:
         """Get or create LLM implementation.
 
+        Selects the concrete strategy from LLM_PROVIDER_REGISTRY based on
+        the configured provider. To add a new LLM, register it in the registry.
+
         Returns:
             ILanguageModel implementation based on configuration.
 
         Raises:
-            ValueError: If configured LLM provider is unknown.
+            ValueError: If configured LLM provider is not in the registry.
         """
         if not self._llm:
-            logger.info(f"Creating {self._config.llm.provider} LLM")
+            provider = self._config.llm.provider
+            llm_class = LLM_PROVIDER_REGISTRY.get(provider)
 
-            if self._config.llm.provider == "gemini":
-                self._llm = GeminiLanguageModel(self._config.llm)
-            else:
+            if not llm_class:
                 raise ValueError(
-                    f"Unknown LLM provider: {self._config.llm.provider}"
+                    f"Unknown LLM provider: '{provider}'. "
+                    f"Supported: {list(LLM_PROVIDER_REGISTRY.keys())}"
                 )
+
+            logger.info(f"Creating {provider} LLM ({llm_class.__name__})")
+            self._llm = llm_class(self._config.llm)
 
         return self._llm
 

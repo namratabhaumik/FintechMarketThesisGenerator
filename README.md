@@ -13,12 +13,12 @@ Try it out here live: [Streamlit Cloud](https://namratabhaumik-fintechmarketthes
 
 - **Live News Ingestion** – Fetches real-time fintech articles from TechCrunch RSS feeds
 - **Vector Database (FAISS)** – Semantic search over fintech articles
-- **LangChain Orchestration** – Integrates retrieval, summarization, and prompting
-- **Gemini AI** – Generates structured market theses with:
-  - Key themes
-  - Risks
-  - Investment signals
-  - Sources
+- **LangChain Orchestration** – Integrates retrieval and summarization
+- **Gemini AI** – Summarizes articles with advanced context understanding
+- **Pattern-Based Structuring** – Maps keywords to fintech taxonomy:
+  - Key themes (12 categories: AI, Digital Payments, Blockchain, etc.)
+  - Risks (10 categories: Regulatory, Cybersecurity, etc.)
+  - Investment signals (10 categories: Market growth, disruption, etc.)
 - **Streamlit UI** – Interactive web interface
 
 ---
@@ -40,25 +40,46 @@ Try it out here live: [Streamlit Cloud](https://namratabhaumik-fintechmarketthes
 ```
 FintechMarketThesisGenerator/
 ├── app.py                          # Streamlit frontend (main entry point)
+├── config/
+│   └── settings.py                # Configuration loaded from environment variables
 ├── core/
-│   ├── ingestion.py               # RSS feed fetching + article scraping
-│   ├── retrieval.py               # FAISS vectorstore + semantic search
-│   ├── gemini_client.py           # Gemini API summarization + structuring
-│   └── utils.py                   # Article normalization + logging
+│   ├── interfaces/                # Abstract interfaces (DIP)
+│   │   ├── article_source.py
+│   │   ├── embeddings.py
+│   │   ├── llm.py
+│   │   ├── scraper.py
+│   │   └── vectorstore.py
+│   ├── implementations/            # Concrete implementations (Strategy pattern)
+│   │   ├── article_sources/
+│   │   ├── embeddings/
+│   │   ├── llm/
+│   │   ├── scrapers/
+│   │   └── vectorstores/
+│   ├── services/
+│   │   ├── ingestion_service.py    # RSS feed fetching + article scraping
+│   │   ├── retrieval_service.py    # FAISS vectorstore + semantic search
+│   │   ├── thesis_generator_service.py    # Main orchestration
+│   │   └── thesis_structuring_service.py  # Pattern-based thesis structuring
+│   └── models/
+├── dependency_injection/
+│   └── container.py               # Service container with provider registries
+├── tests/
+│   ├── conftest.py                # Shared pytest fixtures
+│   └── unit/                      # Unit tests (72 tests)
 ├── requirements.txt               # Python dependencies
-├── .env                           # Environment variables (GOOGLE_API_KEY)
+├── .env                           # Environment variables
+├── run_tests.py                   # Simple test runner
 └── README.md                      # This file
 ```
 
-### Module Responsibilities
+### Core Services
 
-| Module | Purpose | Key Functions |
-|--------|---------|----------------|
-| **app.py** | Main Streamlit UI | Orchestrates entire workflow, handles user input/output |
-| **ingestion.py** | Data Collection | `fetch_live_articles()` fetches from RSS, `scrape_article_text()` extracts content |
-| **retrieval.py** | Vector Search | `build_vectorstore()` creates FAISS index, enables semantic search |
-| **gemini_client.py** | AI Generation | `generate_summary()` and `generate_structured_thesis()` call Gemini API |
-| **utils.py** | Utilities | `normalize_articles()` standardizes format, `setup_logging()` configures logs |
+| Service | Purpose | Key Methods |
+|---------|---------|------------|
+| **ThesisGeneratorService** | Main orchestration | `generate_thesis(topic, documents)` |
+| **ArticleIngestionService** | Data Collection | `fetch_articles(query)`, `convert_to_documents()` |
+| **DocumentRetrievalService** | Vector Search | `build_vectorstore()`, `retrieve()` |
+| **ThesisStructuringService** | Thesis Structuring | `structure_thesis(summary)` - maps keywords to fintech taxonomy |
 
 ---
 
@@ -95,8 +116,11 @@ streamlit run app.py
 1. **Fetch Articles** – Scrapes latest fintech news from TechCrunch RSS feeds
 2. **Vectorize** – Converts articles to embeddings using HuggingFace and indexes them in FAISS
 3. **Retrieve** – Finds top-5 articles most relevant to your query using semantic search
-4. **Summarize** – Uses Gemini to create an analyst-style summary of retrieved articles
-5. **Structure** – Formats summary into JSON with key themes, risks, investment signals, and sources
+4. **Summarize** – Uses Gemini to create an analyst-style summary of retrieved articles (LLM-only)
+5. **Structure** – Maps summary keywords to fintech taxonomy (pattern-based, no LLM):
+   - **Themes**: AI-Powered Automation, Digital Payments, Blockchain & Web3, Digital Lending, Neobanking, WealthTech, B2B Finance, RegTech, Embedded Finance, Consumer Finance, Infrastructure, Insurtech
+   - **Risks**: Regulatory, Cybersecurity, Market Adoption, Competitive Pressure, Credit & Liquidity, Macroeconomic, Data Privacy, Scalability, Geopolitical, Concentration
+   - **Signals**: B2B Expansion, AI-Driven Tools, Emerging Markets, Payment Infrastructure, Embedded Finance, Consumer Adoption, Alternative Lending, Crypto & Web3, RegTech, WealthTech
 6. **Display** – Renders results in interactive Streamlit UI
 
 **For detailed architecture diagrams and data flow**, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
@@ -105,23 +129,63 @@ streamlit run app.py
 
 ## Configuration
 
+### Environment Variables
+
+All configuration is loaded from `.env`. Required variables:
+
+```bash
+# LLM Configuration
+LLM_PROVIDER=gemini
+GEMINI_MODEL=gemini-2.0-flash
+GOOGLE_API_KEY=your_api_key_here
+
+# Embedding Configuration
+EMBEDDING_PROVIDER=huggingface
+EMBEDDING_MODEL=all-MiniLM-L6-v2
+
+# Vector Store Configuration (optional, defaults to faiss)
+VECTORSTORE_PROVIDER=faiss
+```
+
+### Adding New LLM Providers
+
+1. Create implementation in `core/implementations/llm/your_provider.py`:
+```python
+from core.interfaces.llm import ILanguageModel
+
+class YourLLM(ILanguageModel):
+    def summarize(self, documents: List[Document]) -> str:
+        # Implementation
+        pass
+
+    def get_model_name(self) -> str:
+        return "your-model-name"
+```
+
+2. Register in `config/settings.py`:
+```python
+PROVIDER_API_KEY_ENV["your_provider"] = "YOUR_API_KEY_ENV_VAR"
+PROVIDER_MODEL_ENV["your_provider"] = "YOUR_MODEL_ENV_VAR"
+```
+
+3. Register in `dependency_injection/container.py`:
+```python
+LLM_PROVIDER_REGISTRY["your_provider"] = YourLLM
+```
+
 ### RSS Feed Sources
 
-Edit `core/ingestion.py` to add/remove RSS feeds:
+Edit `config/settings.py` to add/remove RSS feeds:
 
 ```python
-DEFAULT_RSS_FEEDS = [
-    {
-        "name": "TechCrunch Fintech",
-        "url": "https://techcrunch.com/category/fintech/feed/",
-        "enabled": True
-    },
-    {
-        "name": "Your Custom Feed",
-        "url": "https://example.com/feed",
-        "enabled": True
-    },
-]
+rss_feeds: List[RSSFeedConfig] = field(default_factory=lambda: [
+    RSSFeedConfig(
+        name="TechCrunch Fintech",
+        url="https://techcrunch.com/category/fintech/feed/",
+        enabled=True
+    ),
+    # Add more feeds here
+])
 ```
 
 ---
@@ -160,29 +224,11 @@ DEFAULT_RSS_FEEDS = [
 
 ---
 
-## Contributing
-
-Contributions are welcome! Areas for improvement:
-- Additional RSS feed sources
-- UI improvements
-- Additional LLM integrations
-- Enhanced article filtering
-
----
-
 ## License
 
 MIT License - see LICENSE file for details
 
 ---
 
-## Acknowledgments
-
-- Built with [LangChain](https://www.langchain.com/)
-- Powered by [Google Gemini](https://deepmind.google/technologies/gemini/)
-- Embeddings from [HuggingFace](https://huggingface.co/)
-- UI with [Streamlit](https://streamlit.io/)
-
----
 
 **Built for fintech market research**
