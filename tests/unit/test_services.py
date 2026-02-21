@@ -77,11 +77,14 @@ class TestDocumentRetrievalService:
 class TestThesisGeneratorService:
     """Tests for ThesisGeneratorService."""
 
-    def test_generate_thesis_structure(self, mock_llm):
+    def test_generate_thesis_structure(self, mock_llm, mock_scoring_strategy):
         """Test that thesis has correct structure."""
-        service = ThesisGeneratorService(mock_llm)
+        from core.services.thesis_structuring_service import ThesisStructuringService
 
-        docs = [Document(page_content="Test content")]
+        structurer = ThesisStructuringService(mock_scoring_strategy)
+        service = ThesisGeneratorService(mock_llm, structurer)
+
+        docs = [Document(page_content="Test content", metadata={"url": "http://test.com"})]
         thesis = service.generate_thesis("Digital Banking", docs)
 
         assert thesis.key_themes is not None
@@ -89,12 +92,15 @@ class TestThesisGeneratorService:
         assert thesis.investment_signals is not None
         assert thesis.sources is not None
 
-    def test_generate_thesis_with_mock_llm(self, mock_llm):
+    def test_generate_thesis_with_mock_llm(self, mock_llm, mock_scoring_strategy):
         """Test thesis generation with mock LLM."""
-        service = ThesisGeneratorService(mock_llm)
+        from core.services.thesis_structuring_service import ThesisStructuringService
 
-        docs = [Document(page_content="Digital banking is the future")]
+        structurer = ThesisStructuringService(mock_scoring_strategy)
+        service = ThesisGeneratorService(mock_llm, structurer)
+
+        docs = [Document(page_content="Digital banking is the future", metadata={"url": "http://test.com"})]
         thesis = service.generate_thesis("Digital Banking", docs)
 
-        assert "Neobanking" in thesis.key_themes
         assert thesis.raw_output is not None
+        assert thesis.sources == ["http://test.com"]

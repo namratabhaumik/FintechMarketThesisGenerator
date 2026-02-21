@@ -3,57 +3,39 @@
 import logging
 from typing import Dict, List
 
+from core.services.category_mappings import ThemeMappings, RiskMappings, SignalMappings
+from core.interfaces.scoring_strategy import IScoringStrategy
+from core.interfaces.thesis_structurer import IThesisStructurer
+
 logger = logging.getLogger(__name__)
 
 
-class ThesisStructuringService:
+class ThesisStructuringService(IThesisStructurer):
     """Lightweight service for structuring thesis data from summaries.
 
-    Uses keyword-to-category mappings.
-    Each dict key is the category label; value is the list of trigger keywords.
-    The categories with the most keyword hits in the text are returned.
+    Single Responsibility: Orchestrate keyword-to-category matching.
+    Open/Closed: Category mappings and scoring strategy are injected.
+
+    Uses keyword-to-category mappings with injectable scoring strategy.
+    The categories with the highest scores are returned.
     """
 
-    THEME_MAP: Dict[str, List[str]] = {
-        "AI-Powered Automation":    ["ai agent", "ai-powered", "automation", "invoicing", "settlement", "workflow"],
-        "Digital Payments":         ["payment link", "payment request", "cash app", "transfer", "peer-to-peer", "p2p", "payment"],
-        "Blockchain & Web3":        ["blockchain", "crypto", "web3", "defi", "tokenization", "token", "wallet"],
-        "Digital Lending":          ["lending", "loan", "borrowing", "credit", "bnpl", "buy now pay later"],
-        "Neobanking":               ["neobank", "digital bank", "challenger bank", "online banking"],
-        "WealthTech":               ["wealth", "robo-advisor", "portfolio", "asset management", "wealthtech"],
-        "B2B Finance":              ["b2b", "enterprise", "corporate finance", "treasury", "accounts payable"],
-        "RegTech & Compliance":     ["regtech", "kyc", "aml", "compliance", "regulation", "regulatory"],
-        "Embedded Finance":         ["embedded finance", "banking as a service", "baas", "api banking"],
-        "Consumer Finance":         ["consumer", "retail finance", "personal finance", "gen z", "millennial"],
-        "Fintech Infrastructure":   ["infrastructure", "api", "integration", "platform", "sdk", "middleware"],
-        "Insurtech":                ["insurance", "insurtech", "underwriting", "premium", "claims"],
-    }
+    def __init__(
+        self,
+        scoring_strategy: IScoringStrategy,
+        max_results: int = 3
+    ):
+        """Initialize structuring service.
 
-    RISK_MAP: Dict[str, List[str]] = {
-        "Regulatory Risk":          ["regulatory", "regulation", "compliance", "sec", "gdpr", "enforcement", "ban"],
-        "Cybersecurity Risk":       ["breach", "hack", "fraud", "security", "vulnerability", "phishing", "data leak"],
-        "Market Adoption Risk":     ["adoption", "user resistance", "slow uptake", "trust", "awareness"],
-        "Competitive Pressure":     ["competition", "competitive", "incumbent", "big tech", "rival", "market share"],
-        "Credit & Liquidity Risk":  ["credit risk", "default", "liquidity", "insolvency", "bad debt", "npls"],
-        "Macroeconomic Risk":       ["recession", "downturn", "inflation", "interest rate", "macro"],
-        "Data Privacy Risk":        ["privacy", "data breach", "pii", "personal data", "gdpr", "data protection"],
-        "Scalability Risk":         ["scaling", "infrastructure cost", "technical debt", "outage", "downtime"],
-        "Geopolitical Risk":        ["geopolit", "sanction", "cross-border", "tariff", "trade war"],
-        "Concentration Risk":       ["concentration", "single vendor", "platform dependency", "lock-in"],
-    }
-
-    SIGNAL_MAP: Dict[str, List[str]] = {
-        "B2B Fintech Expansion":        ["b2b", "enterprise", "corporate", "invoicing", "accounts payable", "treasury"],
-        "AI-Driven Financial Tools":    ["ai", "llm", "generative", "chatbot", "financial advisor", "automation"],
-        "Emerging Market Growth":       ["emerging market", "india", "africa", "southeast asia", "latam", "developing"],
-        "Payment Infrastructure":       ["payment rail", "payment network", "real-time payment", "instant payment"],
-        "Embedded Finance Opportunity": ["embedded", "baas", "api-first", "white-label", "platform"],
-        "Consumer Fintech Adoption":    ["gen z", "millennial", "consumer adoption", "retail investor", "mass market"],
-        "Alternative Lending Growth":   ["bnpl", "alternative lending", "revenue-based", "micro-lending", "credit access"],
-        "Crypto & Web3 Opportunity":    ["crypto", "defi", "nft", "tokenization", "web3", "blockchain"],
-        "RegTech Investment Signal":    ["regtech", "compliance automation", "kyc", "aml", "regulatory tech"],
-        "WealthTech Disruption":        ["robo-advisor", "wealthtech", "wealth management", "retail investing"],
-    }
+        Args:
+            scoring_strategy: Injected strategy for scoring categories.
+            max_results: Maximum number of categories to return per type.
+        """
+        self._scoring_strategy = scoring_strategy
+        self._max_results = max_results
+        self._theme_map = ThemeMappings.get_mapping()
+        self._risk_map = RiskMappings.get_mapping()
+        self._signal_map = SignalMappings.get_mapping()
 
     def structure_thesis(self, summary: str) -> dict:
         """Map summary to structured category labels.
@@ -62,36 +44,48 @@ class ThesisStructuringService:
             summary: Summarized text from documents.
 
         Returns:
-            Dictionary with key_themes, risks, investment_signals, sources.
+            Dictionary with key_themes, risks, investment_signals.
         """
         logger.info("Structuring thesis from summary using category mapping")
         text_lower = summary.lower()
 
         return {
-            "key_themes": self._match_categories(text_lower, self.THEME_MAP),
-            "risks": self._match_categories(text_lower, self.RISK_MAP),
-            "investment_signals": self._match_categories(text_lower, self.SIGNAL_MAP),
+            "key_themes": self._match_categories(text_lower, self._theme_map.categories),
+            "risks": self._match_categories(text_lower, self._risk_map.categories),
+            "investment_signals": self._match_categories(text_lower, self._signal_map.categories),
         }
 
-    @staticmethod
-    def _match_categories(text_lower: str, category_map: Dict[str, List[str]]) -> List[str]:
-        """Score each category by keyword hits and return top 3 labels.
+    def get_structurer_name(self) -> str:
+        """Return the name of this structurer.
+
+        Returns:
+            Name of the structurer implementation.
+        """
+        return "KeywordMappingStructurer"
+
+    def _match_categories(
+        self,
+        text_lower: str,
+        category_map: Dict[str, List[str]]
+    ) -> List[str]:
+        """Score and rank categories based on keyword matches.
 
         Args:
             text_lower: Lowercased summary text.
             category_map: Dict of {label: [trigger_keywords]}.
 
         Returns:
-            Up to 3 category labels with at least one keyword match, sorted by hit count.
+            Up to max_results category labels with at least one match,
+            sorted by score descending.
         """
-        scored: Dict[str, int] = {
-            label: sum(1 for kw in keywords if kw in text_lower)
-            for label, keywords in category_map.items()
-        }
+        # Use injected scoring strategy
+        scored = self._scoring_strategy.score(text_lower, category_map)
 
-        # Filter out zero-hit categories, sort by hits descending, return top 3 labels
+        # Filter out zero-score categories, sort by score descending,
+        # return top N labels
         return [
-            label for label, hits in sorted(scored.items(), key=lambda x: x[1], reverse=True)
-            if hits > 0
-        ][:3]
+            label
+            for label, score in sorted(scored.items(), key=lambda x: x[1], reverse=True)
+            if score > 0
+        ][:self._max_results]
 

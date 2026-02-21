@@ -1,11 +1,12 @@
 """Pytest configuration and shared fixtures."""
 
 import pytest
-from typing import List
+from typing import Dict, List
 
 from core.interfaces.article_source import IArticleSource
 from core.interfaces.scraper import IWebScraper
 from core.interfaces.llm import ILanguageModel
+from core.interfaces.scoring_strategy import IScoringStrategy
 from core.models.article import Article
 
 
@@ -45,6 +46,17 @@ class MockLanguageModel(ILanguageModel):
     def get_model_name(self) -> str:
         """Return model name."""
         return "mock-model"
+
+
+class MockScoringStrategy(IScoringStrategy):
+    """Mock scoring strategy for testing."""
+
+    def score(self, text: str, category_keywords: Dict[str, List[str]]) -> Dict[str, int]:
+        """Return mock scores."""
+        return {
+            label: len(keywords)
+            for label, keywords in category_keywords.items()
+        }
 
 
 # === Fixtures ===
@@ -92,3 +104,7 @@ def mock_llm() -> ILanguageModel:
     return MockLanguageModel()
 
 
+@pytest.fixture
+def mock_scoring_strategy() -> IScoringStrategy:
+    """Mock scoring strategy."""
+    return MockScoringStrategy()

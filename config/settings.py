@@ -7,14 +7,18 @@ import os
 # Registry: maps provider name → env var for its API key.
 # To add a new provider: add one entry here and a matching entry in PROVIDER_MODEL_ENV.
 # Example: "openai": "OPENAI_API_KEY"
+# Note: "local" provider does not require an API key.
 PROVIDER_API_KEY_ENV: Dict[str, str] = {
     "gemini": "GOOGLE_API_KEY",
+    "local": "",  # Local provider doesn't need an API key
 }
 
 # Registry: maps provider name → env var for its model name.
 # Example: "openai": "OPENAI_MODEL"
+# Note: "local" provider always uses "local-extractor" model.
 PROVIDER_MODEL_ENV: Dict[str, str] = {
     "gemini": "GEMINI_MODEL",
+    "local": "LOCAL_MODEL",
 }
 
 
@@ -110,13 +114,22 @@ class AppConfig:
             api_key_env = PROVIDER_API_KEY_ENV[llm_provider]
             model_env = PROVIDER_MODEL_ENV[llm_provider]
 
-            api_key = os.getenv(api_key_env)
-            model_name = os.getenv(model_env)
+            # Local provider doesn't need an API key
+            if api_key_env:
+                api_key = os.getenv(api_key_env)
+                if not api_key:
+                    missing.append(api_key_env)
+            else:
+                # Local provider, use empty string
+                api_key = ""
 
-            if not api_key:
-                missing.append(api_key_env)
+            model_name = os.getenv(model_env)
             if not model_name:
-                missing.append(model_env)
+                # Local provider has a default model name
+                if llm_provider == "local":
+                    model_name = "local-extractor"
+                else:
+                    missing.append(model_env)
 
         if missing:
             raise EnvironmentError(

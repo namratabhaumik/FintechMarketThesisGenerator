@@ -10,6 +10,7 @@ from config.settings import RSSFeedConfig
 from core.interfaces.article_source import IArticleSource
 from core.interfaces.scraper import IWebScraper
 from core.models.article import Article
+from core.utils.text_utils import clean_article_text
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,9 @@ class RSSArticleSource(IArticleSource):
             if not text:
                 # Fallback to summary if scraping fails
                 text = entry.get("summary", "No content available")
+
+            # Clean text before storing (removes ads, normalizes whitespace)
+            text = clean_article_text(text)
 
             source = urlparse(url).netloc
 
