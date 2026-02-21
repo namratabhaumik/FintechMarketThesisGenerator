@@ -2,6 +2,8 @@
 
 import pytest
 from core.services.thesis_structuring_service import ThesisStructuringService
+from core.implementations.keyword_scoring_strategy import KeywordCountScoringStrategy
+from core.services.category_mappings import ThemeMappings, RiskMappings, SignalMappings
 
 
 class TestThesisStructuringService:
@@ -9,8 +11,8 @@ class TestThesisStructuringService:
 
     @pytest.fixture
     def service(self):
-        """Create service instance."""
-        return ThesisStructuringService()
+        """Create service instance with real scoring strategy."""
+        return ThesisStructuringService(KeywordCountScoringStrategy())
 
     # === Basic Functionality Tests ===
 
@@ -30,6 +32,10 @@ class TestThesisStructuringService:
         assert isinstance(result["key_themes"], list)
         assert isinstance(result["risks"], list)
         assert isinstance(result["investment_signals"], list)
+
+    def test_get_structurer_name(self, service):
+        """Test that structurer name is returned."""
+        assert service.get_structurer_name() == "KeywordMappingStructurer"
 
     # === Single Category Match Tests ===
 
@@ -82,8 +88,6 @@ class TestThesisStructuringService:
         summary = "Digital banking neobank challenger bank online banking enables payment transfers and p2p transactions"
         result = service.structure_thesis(summary)
 
-        # "Neobanking" has 4 hits: "digital bank", "neobank", "challenger bank", "online banking"
-        # "Digital Payments" has 3 hits: "payment", "transfer", "p2p"
         assert len(result["key_themes"]) >= 2
         assert "Neobanking" in result["key_themes"]
         assert "Digital Payments" in result["key_themes"]
@@ -130,15 +134,14 @@ class TestThesisStructuringService:
 
     def test_substring_keyword_matching(self, service):
         """Test that keywords match as substrings in text."""
-        # "digital bank" should match in "digital banking"
         result = service.structure_thesis("We offer digital banking solutions")
 
         assert "Neobanking" in result["key_themes"]
 
-    # === Category-Specific Tests ===
+    # === Category Map Tests (test data directly, not via service) ===
 
-    def test_all_theme_categories_defined(self, service):
-        """Test that THEME_MAP has expected categories."""
+    def test_all_theme_categories_defined(self):
+        """Test that ThemeMappings has expected categories."""
         expected_themes = [
             "AI-Powered Automation",
             "Digital Payments",
@@ -153,10 +156,10 @@ class TestThesisStructuringService:
             "Fintech Infrastructure",
             "Insurtech",
         ]
-        assert set(service.THEME_MAP.keys()) == set(expected_themes)
+        assert set(ThemeMappings.get_mapping().categories.keys()) == set(expected_themes)
 
-    def test_all_risk_categories_defined(self, service):
-        """Test that RISK_MAP has expected categories."""
+    def test_all_risk_categories_defined(self):
+        """Test that RiskMappings has expected categories."""
         expected_risks = [
             "Regulatory Risk",
             "Cybersecurity Risk",
@@ -169,10 +172,10 @@ class TestThesisStructuringService:
             "Geopolitical Risk",
             "Concentration Risk",
         ]
-        assert set(service.RISK_MAP.keys()) == set(expected_risks)
+        assert set(RiskMappings.get_mapping().categories.keys()) == set(expected_risks)
 
-    def test_all_signal_categories_defined(self, service):
-        """Test that SIGNAL_MAP has expected categories."""
+    def test_all_signal_categories_defined(self):
+        """Test that SignalMappings has expected categories."""
         expected_signals = [
             "B2B Fintech Expansion",
             "AI-Driven Financial Tools",
@@ -185,13 +188,13 @@ class TestThesisStructuringService:
             "RegTech Investment Signal",
             "WealthTech Disruption",
         ]
-        assert set(service.SIGNAL_MAP.keys()) == set(expected_signals)
+        assert set(SignalMappings.get_mapping().categories.keys()) == set(expected_signals)
 
-    # === Match Categories Static Method Tests ===
+    # === _match_categories Tests ===
 
     def test_match_categories_with_no_matches(self, service):
         """Test _match_categories with text containing no keywords."""
-        text = "The weather is nice"
+        text = "the weather is nice"
         category_map = {"Category A": ["keyword1", "keyword2"]}
         result = service._match_categories(text, category_map)
 
@@ -208,35 +211,33 @@ class TestThesisStructuringService:
 
         assert result == ["Category A"]
 
-    def test_match_categories_multiple_hits_in_category(self, service):
-        """Test scoring by hit count within a category."""
-        text = "keyword1 keyword2 keyword1 again"
+    def test_match_categories_multiple_hits_rank_higher(self, service):
+        """Test that categories with more keyword hits rank higher."""
+        text = "keyword1 keyword2 keyword3"
         category_map = {
-            "Category A": ["keyword1", "keyword2"],
-            "Category B": ["keyword3"],
+            "Category A": ["keyword1", "keyword2"],  # 2 keyword matches
+            "Category B": ["keyword3"],              # 1 keyword match
         }
         result = service._match_categories(text, category_map)
 
-        # Category A has 3 hits (2x keyword1, 1x keyword2), should rank first
         assert result[0] == "Category A"
 
     def test_match_categories_ranking_by_hits(self, service):
         """Test that categories are ranked by number of keyword hits."""
-        text = "a b c d e"  # 5 distinct keywords
+        text = "a b c d e"
         category_map = {
-            "Category A": ["a"],  # 1 hit
+            "Category A": ["a"],       # 1 hit
             "Category B": ["b", "c"],  # 2 hits
-            "Category C": ["d", "e"],  # 2 hits (tied with B)
+            "Category C": ["d", "e"],  # 2 hits
         }
         result = service._match_categories(text, category_map)
 
-        # B and C have 2 hits each, should come before A (1 hit)
         assert "Category A" not in result[:2]
         assert result[2] == "Category A"
 
-    def test_match_categories_respects_limit_of_3(self, service):
-        """Test that _match_categories returns at most 3 results."""
-        text = "a b c d e f g"
+    def test_match_categories_respects_max_results(self, service):
+        """Test that _match_categories returns at most max_results results."""
+        text = "a b c d e"
         category_map = {
             "Cat1": ["a"],
             "Cat2": ["b"],
@@ -246,7 +247,7 @@ class TestThesisStructuringService:
         }
         result = service._match_categories(text, category_map)
 
-        assert len(result) == 3
+        assert len(result) == 3  # default max_results=3
 
     # === Real-World Scenario Tests ===
 
@@ -261,7 +262,6 @@ class TestThesisStructuringService:
         )
         result = service.structure_thesis(summary)
 
-        # Should match payment, embedded finance, and infrastructure themes
         assert any(theme in result["key_themes"] for theme in [
             "Digital Payments", "Embedded Finance", "Fintech Infrastructure"
         ])
@@ -274,6 +274,5 @@ class TestThesisStructuringService:
         )
         result = service.structure_thesis(summary)
 
-        # Should detect regulatory and cybersecurity risks
         assert "Regulatory Risk" in result["risks"]
         assert "Cybersecurity Risk" in result["risks"]

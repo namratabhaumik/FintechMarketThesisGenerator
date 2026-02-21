@@ -131,13 +131,6 @@ class LocalSummarizerModel(ILanguageModel):
         """Get model identifier."""
         return "local-extractor"
 
-    # Promotional/ad phrases to filter out
-    _AD_PATTERNS = re.compile(
-        r'register now|early bird|save up to|\$\d+ off|buy tickets|get tickets|'
-        r'sign up|subscribe now|learn more|click here|limited time',
-        re.IGNORECASE
-    )
-
     @staticmethod
     def _split_sentences(text: str) -> List[str]:
         """Split text into sentences."""
@@ -148,7 +141,6 @@ class LocalSummarizerModel(ILanguageModel):
             if len(s.strip()) > 20                                  # At least 20 chars
             and s.strip()[-1] in ".!?"                             # Must end with punctuation
             and not re.search(r'[.,][A-Z]', s.strip()[:-1])       # No punctuation immediately followed by uppercase without space (scraping artifact)
-            and not LocalSummarizerModel._AD_PATTERNS.search(s)   # No ad/promo phrases
         ]
 
     @staticmethod

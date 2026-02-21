@@ -8,6 +8,7 @@ from core.implementations.article_sources.rss_source import RSSArticleSource
 from core.implementations.embeddings.huggingface_embeddings import (
     HuggingFaceEmbeddingModel,
 )
+from core.implementations.keyword_scoring_strategy import KeywordCountScoringStrategy
 from core.implementations.llm.gemini_llm import GeminiLanguageModel
 from core.implementations.llm.local_summarizer import LocalSummarizerModel
 from core.implementations.scrapers.beautifulsoup_scraper import BeautifulSoupScraper
@@ -16,10 +17,13 @@ from core.interfaces.article_source import IArticleSource
 from core.interfaces.embeddings import IEmbeddingModel
 from core.interfaces.llm import ILanguageModel
 from core.interfaces.scraper import IWebScraper
+from core.interfaces.scoring_strategy import IScoringStrategy
+from core.interfaces.thesis_structurer import IThesisStructurer
 from core.interfaces.vectorstore import IVectorStore
 from core.services.ingestion_service import ArticleIngestionService
 from core.services.retrieval_service import DocumentRetrievalService
 from core.services.thesis_generator_service import ThesisGeneratorService
+from core.services.thesis_structuring_service import ThesisStructuringService
 
 # To add a new LLM provider, see README.md
 LLM_PROVIDER_REGISTRY: Dict[str, Type[ILanguageModel]] = {
@@ -56,6 +60,8 @@ class ServiceContainer:
         self._embedding_model: Optional[IEmbeddingModel] = None
         self._vectorstore: Optional[IVectorStore] = None
         self._llm: Optional[ILanguageModel] = None
+        self._scoring_strategy: Optional[IScoringStrategy] = None
+        self._thesis_structurer: Optional[IThesisStructurer] = None
 
         # Services
         self._ingestion_service: Optional[ArticleIngestionService] = None
@@ -168,6 +174,32 @@ class ServiceContainer:
 
         return self._llm
 
+    def get_scoring_strategy(self) -> IScoringStrategy:
+        """Get or create scoring strategy implementation.
+
+        Returns:
+            IScoringStrategy implementation (KeywordCountScoringStrategy).
+        """
+        if not self._scoring_strategy:
+            logger.info("Creating KeywordCountScoringStrategy")
+            self._scoring_strategy = KeywordCountScoringStrategy()
+        return self._scoring_strategy
+
+    def get_thesis_structurer(self) -> IThesisStructurer:
+        """Get or create thesis structurer implementation.
+
+        Returns:
+            IThesisStructurer implementation (ThesisStructuringService).
+        """
+        if not self._thesis_structurer:
+            logger.info("Creating ThesisStructuringService")
+            scoring_strategy = self.get_scoring_strategy()
+            self._thesis_structurer = ThesisStructuringService(
+                scoring_strategy=scoring_strategy,
+                max_results=3
+            )
+        return self._thesis_structurer
+
     # === Service Factories ===
 
     def get_ingestion_service(self) -> ArticleIngestionService:
@@ -203,5 +235,9 @@ class ServiceContainer:
         if not self._thesis_service:
             logger.info("Creating ThesisGeneratorService")
             llm = self.get_llm()
-            self._thesis_service = ThesisGeneratorService(llm)
+            structurer = self.get_thesis_structurer()
+            self._thesis_service = ThesisGeneratorService(
+                llm=llm,
+                structuring_service=structurer,
+            )
         return self._thesis_service
