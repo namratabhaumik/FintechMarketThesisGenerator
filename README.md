@@ -1,6 +1,6 @@
 # Fintech Market Thesis Generator
 
-An AI-powered application that generates investor-style market theses for fintech topics using **LangChain, FAISS, HuggingFace embeddings, and Gemini**. Features live RSS feed ingestion from TechCrunch for real-time fintech news analysis.
+An AI-powered application that generates investor-style market theses for fintech topics using **LangChain, FAISS, HuggingFace embeddings, and your choice of summarizer**. Supports two modes: a Gemini-powered LLM flow and a fully local, no-API extractive flow.
 
 Try it out here live: [Streamlit Cloud](https://namratabhaumik-fintechmarketthesisGenerator-app-qqdzns.streamlit.app/)
 
@@ -14,8 +14,10 @@ Try it out here live: [Streamlit Cloud](https://namratabhaumik-fintechmarketthes
 - **Live News Ingestion** – Fetches real-time fintech articles from TechCrunch RSS feeds
 - **Vector Database (FAISS)** – Semantic search over fintech articles
 - **LangChain Orchestration** – Integrates retrieval and summarization
-- **Gemini AI** – Summarizes articles with advanced context understanding
-- **Pattern-Based Structuring** – Maps keywords to fintech taxonomy:
+- **Two Summarization Modes**:
+  - **Gemini (LLM)** – API-powered, analyst-style prose summary via Google Gemini
+  - **Local (no-API)** – Keyword-scored extractive summarizer, zero cost, works offline
+- **Pattern-Based Structuring** – Maps keywords to fintech taxonomy (same for both modes):
   - Key themes (12 categories: AI, Digital Payments, Blockchain, etc.)
   - Risks (10 categories: Regulatory, Cybersecurity, etc.)
   - Investment signals (10 categories: Market growth, disruption, etc.)
@@ -28,7 +30,7 @@ Try it out here live: [Streamlit Cloud](https://namratabhaumik-fintechmarketthes
 - **LangChain** – Chains, retrievers, and integrations
 - **FAISS** – Vector database for semantic retrieval
 - **HuggingFace Embeddings** – `all-MiniLM-L6-v2`
-- **Gemini (Google AI)** – LLM for structured outputs
+- **Gemini (Google AI)** – Optional LLM for cloud-powered summarization
 - **Streamlit** – Interactive web UI
 - **BeautifulSoup** – Article scraping
 - **Feedparser** – RSS feed parsing
@@ -48,24 +50,35 @@ FintechMarketThesisGenerator/
 │   │   ├── embeddings.py
 │   │   ├── llm.py
 │   │   ├── scraper.py
+│   │   ├── scoring_strategy.py
+│   │   ├── thesis_structurer.py
 │   │   └── vectorstore.py
-│   ├── implementations/            # Concrete implementations (Strategy pattern)
+│   ├── implementations/           # Concrete implementations
 │   │   ├── article_sources/
 │   │   ├── embeddings/
 │   │   ├── llm/
+│   │   │   ├── gemini_llm.py      # Gemini (API-based)
+│   │   │   └── local_summarizer.py  # Local extractive (no API)
 │   │   ├── scrapers/
-│   │   └── vectorstores/
+│   │   ├── vectorstores/
+│   │   └── keyword_scoring_strategy.py
 │   ├── services/
-│   │   ├── ingestion_service.py    # RSS feed fetching + article scraping
-│   │   ├── retrieval_service.py    # FAISS vectorstore + semantic search
+│   │   ├── category_mappings.py           # Fintech keyword-to-category data
+│   │   ├── ingestion_service.py           # RSS feed fetching + article scraping
+│   │   ├── retrieval_service.py           # FAISS vectorstore + semantic search
 │   │   ├── thesis_generator_service.py    # Main orchestration
 │   │   └── thesis_structuring_service.py  # Pattern-based thesis structuring
-│   └── models/
+│   ├── models/
+│   │   ├── article.py
+│   │   └── thesis.py
+│   └── utils/
+│       ├── text_utils.py          # Article text cleaning
+│       └── logging.py
 ├── dependency_injection/
 │   └── container.py               # Service container with provider registries
 ├── tests/
 │   ├── conftest.py                # Shared pytest fixtures
-│   └── unit/                      # Unit tests (72 tests)
+│   └── unit/                      # Unit tests (142 tests)
 ├── requirements.txt               # Python dependencies
 ├── .env                           # Environment variables
 ├── run_tests.py                   # Simple test runner
@@ -79,7 +92,7 @@ FintechMarketThesisGenerator/
 | **ThesisGeneratorService** | Main orchestration | `generate_thesis(topic, documents)` |
 | **ArticleIngestionService** | Data Collection | `fetch_articles(query)`, `convert_to_documents()` |
 | **DocumentRetrievalService** | Vector Search | `build_vectorstore()`, `retrieve()` |
-| **ThesisStructuringService** | Thesis Structuring | `structure_thesis(summary)` - maps keywords to fintech taxonomy |
+| **ThesisStructuringService** | Thesis Structuring | `structure_thesis(summary)` |
 
 ---
 
@@ -93,17 +106,29 @@ cd FintechMarketThesisGenerator
 pip install -r requirements.txt
 ```
 
-### Set API Key
+### Run with Local Mode (no API key needed)
 
 ```bash
-# Linux/Mac
-export GOOGLE_API_KEY="your_key_here"
-
-# Windows PowerShell
-$env:GOOGLE_API_KEY="your_key_here"
+# .env
+LLM_PROVIDER=local
+EMBEDDING_PROVIDER=huggingface
+EMBEDDING_MODEL=all-MiniLM-L6-v2
 ```
 
-### Run the App
+```bash
+streamlit run app.py
+```
+
+### Run with Gemini (API key required)
+
+```bash
+# .env
+LLM_PROVIDER=gemini
+GEMINI_MODEL=gemini-2.0-flash
+GOOGLE_API_KEY=your_api_key_here
+EMBEDDING_PROVIDER=huggingface
+EMBEDDING_MODEL=all-MiniLM-L6-v2
+```
 
 ```bash
 streamlit run app.py
@@ -113,11 +138,15 @@ streamlit run app.py
 
 ## How It Works
 
+Steps 1–3 and 5–6 are identical in both modes. Only step 4 differs.
+
 1. **Fetch Articles** – Scrapes latest fintech news from TechCrunch RSS feeds
-2. **Vectorize** – Converts articles to embeddings using HuggingFace and indexes them in FAISS
-3. **Retrieve** – Finds top-5 articles most relevant to your query using semantic search
-4. **Summarize** – Uses Gemini to create an analyst-style summary of retrieved articles (LLM-only)
-5. **Structure** – Maps summary keywords to fintech taxonomy (pattern-based, no LLM):
+2. **Vectorize** – Converts articles to embeddings (HuggingFace) and indexes in FAISS
+3. **Retrieve** – Finds top-5 articles most relevant to your query via semantic search
+4. **Summarize** *(mode-dependent)*:
+   - **Gemini flow** – Sends retrieved articles to Gemini via LangChain map-reduce chain; returns an analyst-style prose summary
+   - **Local flow** – Scores each sentence by fintech keyword count, extracts the top 7, deduplicates by word-overlap; no API call, no cost
+5. **Structure** – `ThesisStructuringService` maps the summary (from either mode) to fintech taxonomy via keyword scoring:
    - **Themes**: AI-Powered Automation, Digital Payments, Blockchain & Web3, Digital Lending, Neobanking, WealthTech, B2B Finance, RegTech, Embedded Finance, Consumer Finance, Infrastructure, Insurtech
    - **Risks**: Regulatory, Cybersecurity, Market Adoption, Competitive Pressure, Credit & Liquidity, Macroeconomic, Data Privacy, Scalability, Geopolitical, Concentration
    - **Signals**: B2B Expansion, AI-Driven Tools, Emerging Markets, Payment Infrastructure, Embedded Finance, Consumer Adoption, Alternative Lending, Crypto & Web3, RegTech, WealthTech
@@ -131,19 +160,29 @@ streamlit run app.py
 
 ### Environment Variables
 
-All configuration is loaded from `.env`. Required variables:
+All configuration is loaded from `.env`.
+
+#### Local mode (no API key needed)
 
 ```bash
-# LLM Configuration
-LLM_PROVIDER=gemini
-GEMINI_MODEL=gemini-2.0-flash
-GOOGLE_API_KEY=your_api_key_here
-
-# Embedding Configuration
+LLM_PROVIDER=local
 EMBEDDING_PROVIDER=huggingface
 EMBEDDING_MODEL=all-MiniLM-L6-v2
 
-# Vector Store Configuration (optional, defaults to faiss)
+# Optional
+VECTORSTORE_PROVIDER=faiss
+```
+
+#### Gemini mode
+
+```bash
+LLM_PROVIDER=gemini
+GEMINI_MODEL=gemini-2.0-flash
+GOOGLE_API_KEY=your_api_key_here
+EMBEDDING_PROVIDER=huggingface
+EMBEDDING_MODEL=all-MiniLM-L6-v2
+
+# Optional
 VECTORSTORE_PROVIDER=faiss
 ```
 
@@ -201,26 +240,34 @@ rss_feeds: List[RSSFeedConfig] = field(default_factory=lambda: [
 ```json
 {
   "key_themes": [
-    "Rapid adoption of embedded finance in Southeast Asian markets",
-    "Banking-as-a-Service platforms enabling non-financial companies",
-    "Regulatory evolution supporting open banking initiatives"
+    "Embedded Finance",
+    "Fintech Infrastructure",
+    "Digital Payments"
   ],
   "risks": [
-    "Regulatory uncertainty across different jurisdictions",
-    "Data privacy concerns with embedded financial services",
-    "Competition from established financial institutions"
+    "Regulatory Risk",
+    "Data Privacy Risk"
   ],
   "investment_signals": [
-    "Growing number of Series A/B rounds in embedded finance",
-    "Partnerships between fintechs and e-commerce platforms",
-    "Increasing API adoption rates"
+    "Embedded Finance Opportunity",
+    "Payment Infrastructure"
   ],
   "sources": [
-    "TechCrunch: Embedded finance startup raises $50M",
-    "TechCrunch: Asian banks partner with fintech platforms"
+    "https://techcrunch.com/...",
+    "https://techcrunch.com/..."
   ]
 }
 ```
+
+---
+
+## Testing
+
+```bash
+python run_tests.py
+```
+
+142 unit tests covering all pure-Python components (models, services, utils, summarizer, scoring).
 
 ---
 
@@ -229,6 +276,5 @@ rss_feeds: List[RSSFeedConfig] = field(default_factory=lambda: [
 MIT License - see LICENSE file for details
 
 ---
-
 
 **Built for fintech market research**
