@@ -8,6 +8,7 @@ from langchain.docstore.document import Document
 from core.interfaces.llm import ILanguageModel
 from core.interfaces.thesis_structurer import IThesisStructurer
 from core.models.thesis import StructuredThesis
+from core.services.opportunity_scoring_service import OpportunityScoringService
 
 logger = logging.getLogger(__name__)
 
@@ -24,15 +25,18 @@ class ThesisGeneratorService:
         self,
         llm: ILanguageModel,
         structuring_service: IThesisStructurer,
+        scoring_service: OpportunityScoringService,
     ):
         """Initialize with dependencies.
 
         Args:
             llm: Injected LLM implementation (for summarization).
             structuring_service: Injected thesis structurer implementation.
+            scoring_service: Injected opportunity scoring service.
         """
         self._llm = llm
         self._structuring_service = structuring_service
+        self._scoring_service = scoring_service
 
     def generate_thesis(
         self,
@@ -66,11 +70,28 @@ class ThesisGeneratorService:
         logger.info("Step 3: Extracting sources from documents...")
         sources = [doc.metadata["url"] for doc in documents if doc.metadata.get("url")]
 
-        logger.info("Successfully generated structured thesis")
+        # Step 4: Score opportunity (rule-based, no LLM)
+        logger.info("Step 4: Scoring opportunity...")
+        key_themes = result.get("key_themes", [])
+        risks = result.get("risks", [])
+        investment_signals = result.get("investment_signals", [])
+
+        score_result = self._scoring_service.score_opportunity(
+            key_themes=key_themes,
+            risks=risks,
+            investment_signals=investment_signals,
+            sources=sources
+        )
+
+        logger.info("Successfully generated structured thesis with scoring")
         return StructuredThesis(
-            key_themes=result.get("key_themes", []),
-            risks=result.get("risks", []),
-            investment_signals=result.get("investment_signals", []),
+            key_themes=key_themes,
+            risks=risks,
+            investment_signals=investment_signals,
             sources=sources,
-            raw_output=summary
+            raw_output=summary,
+            opportunity_score=score_result["score"],
+            confidence_level=score_result["confidence_level"],
+            recommendation=score_result["recommendation"],
+            key_risk_factors=score_result["key_risks"]
         )

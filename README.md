@@ -6,7 +6,7 @@ Try it out here live: [Streamlit Cloud](https://namratabhaumik-fintechmarketthes
 
 ## Demo Video
 
-[![FinThesis Demo](https://img.youtube.com/vi/CpHMJ3T2lGY/maxresdefault.jpg)](https://youtu.be/CpHMJ3T2lGY)
+[![FinThesis Demo](https://img.youtube.com/vi/6TXiDPOqnj0/hqdefault.jpg)](https://youtu.be/6TXiDPOqnj0)
 
 
 ## Features
@@ -21,7 +21,12 @@ Try it out here live: [Streamlit Cloud](https://namratabhaumik-fintechmarketthes
   - Key themes (12 categories: AI, Digital Payments, Blockchain, etc.)
   - Risks (10 categories: Regulatory, Cybersecurity, etc.)
   - Investment signals (10 categories: Market growth, disruption, etc.)
-- **Streamlit UI** – Interactive web interface
+- **Rule-Based Opportunity Scoring** – Generates AI-native investment recommendations:
+  - **Opportunity Score** (0–5 scale): Weighted by signals, themes, and risks
+  - **Confidence Level** (0–100%): Varies based on source count, signal consistency, and risk factors
+  - **Recommendation**: "Pursue" (≥3.75), "Investigate" (2.5–3.75), or "Skip" (<2.5)
+  - **Deterministic & Auditable**: Human-interpretable scoring logic, no black-box LLM decisions
+- **Streamlit UI** – Interactive web interface with investment scores and recommendations
 
 ---
 
@@ -67,7 +72,8 @@ FintechMarketThesisGenerator/
 │   │   ├── ingestion_service.py           # RSS feed fetching + article scraping
 │   │   ├── retrieval_service.py           # FAISS vectorstore + semantic search
 │   │   ├── thesis_generator_service.py    # Main orchestration
-│   │   └── thesis_structuring_service.py  # Pattern-based thesis structuring
+│   │   ├── thesis_structuring_service.py  # Pattern-based thesis structuring
+│   │   └── opportunity_scoring_service.py # Rule-based investment opportunity scoring
 │   ├── models/
 │   │   ├── article.py
 │   │   └── thesis.py
@@ -93,6 +99,7 @@ FintechMarketThesisGenerator/
 | **ArticleIngestionService** | Data Collection | `fetch_articles(query)`, `convert_to_documents()` |
 | **DocumentRetrievalService** | Vector Search | `build_vectorstore()`, `retrieve()` |
 | **ThesisStructuringService** | Thesis Structuring | `structure_thesis(summary)` |
+| **OpportunityScoringService** | Investment Scoring | `score_opportunity(themes, risks, signals, sources)` |
 
 ---
 
@@ -138,7 +145,7 @@ streamlit run app.py
 
 ## How It Works
 
-Steps 1–3 and 5–6 are identical in both modes. Only step 4 differs.
+Steps 1–3 and 6–7 are identical in both modes. Only step 4 differs.
 
 1. **Fetch Articles** – Scrapes latest fintech news from TechCrunch RSS feeds
 2. **Vectorize** – Converts articles to embeddings (HuggingFace) and indexes in FAISS
@@ -150,7 +157,12 @@ Steps 1–3 and 5–6 are identical in both modes. Only step 4 differs.
    - **Themes**: AI-Powered Automation, Digital Payments, Blockchain & Web3, Digital Lending, Neobanking, WealthTech, B2B Finance, RegTech, Embedded Finance, Consumer Finance, Infrastructure, Insurtech
    - **Risks**: Regulatory, Cybersecurity, Market Adoption, Competitive Pressure, Credit & Liquidity, Macroeconomic, Data Privacy, Scalability, Geopolitical, Concentration
    - **Signals**: B2B Expansion, AI-Driven Tools, Emerging Markets, Payment Infrastructure, Embedded Finance, Consumer Adoption, Alternative Lending, Crypto & Web3, RegTech, WealthTech
-6. **Display** – Renders results in interactive Streamlit UI
+6. **Score Opportunity** – `OpportunityScoringService` generates an AI-native investment recommendation:
+   - **Scores** based on detected signals (0.75 weight), themes (0.25 weight), and risk penalty (−0.25 per risk)
+   - **Calculates confidence** (0–100%) based on source coverage, signal strength, and risk balance
+   - **Generates recommendation**: "Pursue" (score ≥3.75), "Investigate" (2.5–3.75), or "Skip" (<2.5)
+   - **Rule-based & deterministic**: Human reviews the recommendation; final decision remains with human
+7. **Display** – Renders results in interactive Streamlit UI with investment scores and recommendations
 
 **For detailed architecture diagrams and data flow**, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
@@ -233,31 +245,47 @@ rss_feeds: List[RSSFeedConfig] = field(default_factory=lambda: [
 
 ### Input Query
 ```
-"Future of embedded finance in Asia"
+"Credit scoring in emerging markets"
 ```
 
 ### Generated Thesis
 ```json
 {
   "key_themes": [
-    "Embedded Finance",
-    "Fintech Infrastructure",
-    "Digital Payments"
+    "Digital Lending",
+    "AI-Powered Automation",
+    "Fintech Infrastructure"
   ],
   "risks": [
     "Regulatory Risk",
+    "Credit & Liquidity Risk",
     "Data Privacy Risk"
   ],
   "investment_signals": [
-    "Embedded Finance Opportunity",
-    "Payment Infrastructure"
+    "Emerging Market Growth",
+    "AI-Driven Financial Tools",
+    "Alternative Lending Growth"
   ],
   "sources": [
     "https://techcrunch.com/...",
     "https://techcrunch.com/..."
+  ],
+  "opportunity_score": 3.8,
+  "confidence_level": 0.77,
+  "recommendation": "Pursue",
+  "key_risk_factors": [
+    "Regulatory Risk",
+    "Credit & Liquidity Risk",
+    "Data Privacy Risk"
   ]
 }
 ```
+
+**Interpretation**:
+- **Score 3.8/5** indicates a strong opportunity above the Pursue threshold (≥3.75)
+- **Confidence 77%** reflects 5 sources, 2 strong signals, and moderate risk exposure
+- **Pursue recommendation** suggests AI system scores this favorably; human makes final decision
+- **Key risks** are explicitly listed so investors can conduct due diligence
 
 ---
 
@@ -267,7 +295,16 @@ rss_feeds: List[RSSFeedConfig] = field(default_factory=lambda: [
 python run_tests.py
 ```
 
-142 unit tests covering all pure-Python components (models, services, utils, summarizer, scoring).
+174 unit tests covering all pure-Python components:
+- **test_opportunity_scoring.py** (26 tests) – Scoring formula, confidence calculation, recommendations
+- **test_thesis_structuring.py** (31 tests) – Category matching, fallback mechanism, edge cases
+- **test_services.py** (8 tests) – Service integration, thesis generation with scoring
+- **test_text_utils.py** (19 tests) – Text cleaning, boilerplate removal
+- **test_local_summarizer.py** (23 tests) – Sentence extraction, keyword scoring, deduplication
+- **test_keyword_scoring.py** (12 tests) – Keyword matching logic
+- **test_models.py** (13 tests) – Model validation
+- **test_config.py** (17 tests) – Configuration loading
+- **test_container.py** (25 tests) – Dependency injection, service wiring
 
 ---
 

@@ -21,6 +21,7 @@ from core.interfaces.scoring_strategy import IScoringStrategy
 from core.interfaces.thesis_structurer import IThesisStructurer
 from core.interfaces.vectorstore import IVectorStore
 from core.services.ingestion_service import ArticleIngestionService
+from core.services.opportunity_scoring_service import OpportunityScoringService
 from core.services.retrieval_service import DocumentRetrievalService
 from core.services.thesis_generator_service import ThesisGeneratorService
 from core.services.thesis_structuring_service import ThesisStructuringService
@@ -66,6 +67,7 @@ class ServiceContainer:
         # Services
         self._ingestion_service: Optional[ArticleIngestionService] = None
         self._retrieval_service: Optional[DocumentRetrievalService] = None
+        self._opportunity_scoring_service: Optional[OpportunityScoringService] = None
         self._thesis_service: Optional[ThesisGeneratorService] = None
 
         logger.info("ServiceContainer initialized")
@@ -226,6 +228,17 @@ class ServiceContainer:
             self._retrieval_service = DocumentRetrievalService(vectorstore)
         return self._retrieval_service
 
+    def get_opportunity_scoring_service(self) -> OpportunityScoringService:
+        """Get or create opportunity scoring service.
+
+        Returns:
+            OpportunityScoringService instance.
+        """
+        if not self._opportunity_scoring_service:
+            logger.info("Creating OpportunityScoringService")
+            self._opportunity_scoring_service = OpportunityScoringService()
+        return self._opportunity_scoring_service
+
     def get_thesis_service(self) -> ThesisGeneratorService:
         """Get or create thesis generator service.
 
@@ -236,8 +249,10 @@ class ServiceContainer:
             logger.info("Creating ThesisGeneratorService")
             llm = self.get_llm()
             structurer = self.get_thesis_structurer()
+            scoring_service = self.get_opportunity_scoring_service()
             self._thesis_service = ThesisGeneratorService(
                 llm=llm,
                 structuring_service=structurer,
+                scoring_service=scoring_service,
             )
         return self._thesis_service

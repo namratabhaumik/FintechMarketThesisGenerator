@@ -75,17 +75,25 @@ class ThesisStructuringService(IThesisStructurer):
             category_map: Dict of {label: [trigger_keywords]}.
 
         Returns:
-            Up to max_results category labels with at least one match,
-            sorted by score descending.
+            Up to max_results category labels, sorted by score descending.
+            If no exact matches found, returns top-scored categories as fallback.
         """
         # Use injected scoring strategy
         scored = self._scoring_strategy.score(text_lower, category_map)
 
-        # Filter out zero-score categories, sort by score descending,
-        # return top N labels
-        return [
-            label
-            for label, score in sorted(scored.items(), key=lambda x: x[1], reverse=True)
-            if score > 0
-        ][:self._max_results]
+        # Sort by score descending
+        sorted_categories = sorted(scored.items(), key=lambda x: x[1], reverse=True)
+
+        # Try to return categories with at least one match (score > 0)
+        matched = [label for label, score in sorted_categories if score > 0]
+
+        if matched:
+            logger.debug(f"Found {len(matched)} categories with keyword matches")
+            return matched[:self._max_results]
+
+        # Fallback: if no matches, return top-scored categories anyway
+        # This ensures the system always produces output even with poor keyword alignment
+        fallback_result = [label for label, score in sorted_categories[:self._max_results]]
+        logger.warning(f"No keyword matches found. Using fallback: {fallback_result}")
+        return fallback_result if fallback_result else list(category_map.keys())[:self._max_results]
 
