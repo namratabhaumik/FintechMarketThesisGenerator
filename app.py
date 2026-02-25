@@ -31,6 +31,14 @@ st.markdown(
     "and keyword-driven analysis — powered by a local summarizer or an LLM of your choice."
 )
 
+# Cache control for testing
+if st.button("🔄 Clear Cache & Reset"):
+    st.cache_resource.clear()
+    if "vectorstore_built" in st.session_state:
+        del st.session_state["vectorstore_built"]
+    st.success("Cache cleared! Refresh the page.")
+    st.stop()
+
 # Warning about API key
 if not os.getenv("GOOGLE_API_KEY"):
     st.warning(
@@ -60,6 +68,26 @@ def display_structured_thesis(thesis: StructuredThesis):
     Args:
         thesis: StructuredThesis object to display.
     """
+    # Display opportunity score and recommendation prominently
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric("Investment Score", f"{thesis.opportunity_score}/5")
+
+    with col2:
+        st.metric("Confidence Level", f"{int(thesis.confidence_level * 100)}%")
+
+    with col3:
+        # Color code the recommendation
+        if thesis.recommendation == "Pursue":
+            st.success(f"✅ {thesis.recommendation}")
+        elif thesis.recommendation == "Investigate":
+            st.info(f"🔍 {thesis.recommendation}")
+        else:
+            st.warning(f"⏭️ {thesis.recommendation}")
+
+    st.divider()
+
     st.subheader("Key Themes")
     themes = thesis.key_themes
     st.write("\n".join(f"- {t}" for t in themes) or "No themes found.")
@@ -67,6 +95,9 @@ def display_structured_thesis(thesis: StructuredThesis):
     st.subheader("Risks")
     risks = thesis.risks
     st.write("\n".join(f"- {r}" for r in risks) or "No risks found.")
+
+    if thesis.key_risk_factors:
+        st.caption(f"⚠️ Key Risk Factors: {', '.join(thesis.key_risk_factors)}")
 
     st.subheader("Investment Signals")
     signals = thesis.investment_signals

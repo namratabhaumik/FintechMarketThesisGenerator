@@ -80,9 +80,11 @@ class TestThesisGeneratorService:
     def test_generate_thesis_structure(self, mock_llm, mock_scoring_strategy):
         """Test that thesis has correct structure."""
         from core.services.thesis_structuring_service import ThesisStructuringService
+        from core.services.opportunity_scoring_service import OpportunityScoringService
 
         structurer = ThesisStructuringService(mock_scoring_strategy)
-        service = ThesisGeneratorService(mock_llm, structurer)
+        scoring_service = OpportunityScoringService()
+        service = ThesisGeneratorService(mock_llm, structurer, scoring_service)
 
         docs = [Document(page_content="Test content", metadata={"url": "http://test.com"})]
         thesis = service.generate_thesis("Digital Banking", docs)
@@ -95,12 +97,57 @@ class TestThesisGeneratorService:
     def test_generate_thesis_with_mock_llm(self, mock_llm, mock_scoring_strategy):
         """Test thesis generation with mock LLM."""
         from core.services.thesis_structuring_service import ThesisStructuringService
+        from core.services.opportunity_scoring_service import OpportunityScoringService
 
         structurer = ThesisStructuringService(mock_scoring_strategy)
-        service = ThesisGeneratorService(mock_llm, structurer)
+        scoring_service = OpportunityScoringService()
+        service = ThesisGeneratorService(mock_llm, structurer, scoring_service)
 
         docs = [Document(page_content="Digital banking is the future", metadata={"url": "http://test.com"})]
         thesis = service.generate_thesis("Digital Banking", docs)
 
         assert thesis.raw_output is not None
         assert thesis.sources == ["http://test.com"]
+
+    def test_generate_thesis_includes_opportunity_score(self, mock_llm, mock_scoring_strategy):
+        """Test that thesis includes opportunity score and confidence."""
+        from core.services.thesis_structuring_service import ThesisStructuringService
+        from core.services.opportunity_scoring_service import OpportunityScoringService
+
+        structurer = ThesisStructuringService(mock_scoring_strategy)
+        scoring_service = OpportunityScoringService()
+        service = ThesisGeneratorService(mock_llm, structurer, scoring_service)
+
+        docs = [
+            Document(page_content="Digital banking innovation", metadata={"url": "http://test.com"}),
+            Document(page_content="Payment systems growth", metadata={"url": "http://test2.com"}),
+        ]
+        thesis = service.generate_thesis("Digital Banking", docs)
+
+        assert hasattr(thesis, "opportunity_score")
+        assert hasattr(thesis, "confidence_level")
+        assert hasattr(thesis, "recommendation")
+        assert hasattr(thesis, "key_risk_factors")
+        assert 0 <= thesis.opportunity_score <= 5.0
+        assert 0 <= thesis.confidence_level <= 1.0
+        assert thesis.recommendation in ["Pursue", "Investigate", "Skip"]
+
+    def test_generate_thesis_recommendation_based_on_score(self, mock_llm, mock_scoring_strategy):
+        """Test that recommendation matches score thresholds."""
+        from core.services.thesis_structuring_service import ThesisStructuringService
+        from core.services.opportunity_scoring_service import OpportunityScoringService
+
+        structurer = ThesisStructuringService(mock_scoring_strategy)
+        scoring_service = OpportunityScoringService()
+        service = ThesisGeneratorService(mock_llm, structurer, scoring_service)
+
+        docs = [Document(page_content="Test", metadata={"url": "http://test.com"})]
+        thesis = service.generate_thesis("Test Query", docs)
+
+        # Verify recommendation is consistent with score
+        if thesis.opportunity_score >= 3.75:
+            assert thesis.recommendation == "Pursue"
+        elif thesis.opportunity_score >= 2.5:
+            assert thesis.recommendation == "Investigate"
+        else:
+            assert thesis.recommendation == "Skip"

@@ -91,10 +91,33 @@ The application supports two modes, selected via `LLM_PROVIDER` in `.env`. Steps
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    [6] DISPLAY RESULTS                          │
+│   [6] SCORE OPPORTUNITY (Rule-Based Scoring)                    │
+│  • Calculate opportunity score (0-5 scale):                     │
+│    - Base: 2.5                                                  │
+│    - Signal boost: +0.75 per signal (max 3)                     │
+│    - Theme boost: +0.25 per theme (max 3)                       │
+│    - Risk penalty: -0.25 per risk (max 3)                       │
+│  • Calculate confidence (0-100%):                               │
+│    - Source factor: min(sources/5.0, 1.0)                       │
+│    - Signal factor: min(signals/3.0, 1.0)                       │
+│    - Risk factor: max(0.5, 1.0 - risks/4.0)                     │
+│    - Weighted: 40% sources + 40% signals + 20% risks            │
+│  • Generate recommendation:                                     │
+│    - "Pursue" if score >= 3.75                                  │
+│    - "Investigate" if 2.5 <= score < 3.75                       │
+│    - "Skip" if score < 2.5                                      │
+│  • Deterministic & auditable; human makes final decision        │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    [7] DISPLAY RESULTS                          │
 │  • Show fetched article source links                            │
 │  • Display raw summary output                                   │
-│  • Render structured thesis (themes, risks, signals)            │
+│  • Render structured thesis with scoring:                       │
+│    - Themes, risks, signals (from step 5)                       │
+│    - Opportunity score, confidence, recommendation (from step 6)│
+│    - Key risk factors highlighted                               │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -154,6 +177,13 @@ The application supports two modes, selected via `LLM_PROVIDER` in `.env`. Steps
 │  │    ├── IScoringStrategy (KeywordCountScoring)   │  │
 │  │    └── CategoryMappings (12+10+10 categories)   │  │
 │  └─────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────┐  │
+│  │ 5. OpportunityScoringService (rule-based)       │  │
+│  │    • Score: 0-5 scale (themes, signals, risks)  │  │
+│  │    • Confidence: 0-100% (sources, signals, risk)│  │
+│  │    • Recommendation: Pursue/Investigate/Skip    │  │
+│  │    • Deterministic & auditable logic            │  │
+│  └─────────────────────────────────────────────────┘  │
 └────────────────────────────────────────────────────────┘
 ```
 
@@ -168,7 +198,12 @@ The application supports two modes, selected via `LLM_PROVIDER` in `.env`. Steps
    - **`gemini`**: `GeminiLanguageModel` sends docs to Gemini via a LangChain map-reduce chain → analyst prose summary
    - **`local`**: `LocalSummarizerModel` scores every sentence by fintech keyword count, extracts the top 7, deduplicates by word overlap → extractive summary, no API call
 5. **Structure** – `ThesisStructuringService` receives the summary (identical interface for both flows) and keyword-scores it against 32 fintech categories; returns top-3 per type
-6. **Display** – `app.py` renders themes, risks, signals, and source URLs in Streamlit
+6. **Score** – `OpportunityScoringService` generates an AI-native investment recommendation:
+   - **Opportunity Score** (0–5): Base 2.5 + signal boost (0.75 per signal) + theme boost (0.25 per theme) − risk penalty (0.25 per risk)
+   - **Confidence** (0–100%): Weighted average of source coverage (40%), signal strength (40%), and risk balance (20%)
+   - **Recommendation**: "Pursue" (≥3.75), "Investigate" (2.5–3.75), or "Skip" (<2.5)
+   - **Rule-based & deterministic**: Auditable scoring logic; human makes final yes/no decision
+7. **Display** – `app.py` renders themes, risks, signals, scores, confidence, recommendation, and source URLs in Streamlit
 
 ---
 
@@ -199,15 +234,16 @@ Run all tests:
 python run_tests.py
 ```
 
-142 unit tests, all pure Python (no network calls):
+174 unit tests, all pure Python (no network calls):
 
 | File | Tests | Covers |
 |---|---|---|
-| `test_thesis_structuring.py` | 25 | Category matching, ranking, edge cases |
+| `test_opportunity_scoring.py` | 26 | Scoring formula, confidence calculation, recommendations |
+| `test_thesis_structuring.py` | 31 | Category matching, ranking, fallback mechanism, edge cases |
+| `test_services.py` | 12 | Ingestion, document conversion, thesis generation with scoring |
 | `test_text_utils.py` | 19 | Ad/boilerplate removal, whitespace normalisation |
 | `test_local_summarizer.py` | 23 | Sentence splitting, keyword scoring, deduplication, summarize |
 | `test_keyword_scoring.py` | 12 | `KeywordCountScoringStrategy` counting and edge cases |
 | `test_models.py` | 13 | `Article` validation, `StructuredThesis` defaults |
 | `test_config.py` | 17 | Env var loading, provider resolution, missing var errors |
 | `test_container.py` | 25 | Provider registries, singleton caching, error messages |
-| `test_services.py` | 8 | Ingestion, document conversion, thesis generation |
