@@ -4,9 +4,24 @@ This document describes how FinThesis works, covering both the **Gemini (LLM)** 
 
 ---
 
+## Overview
+
+The application follows an 8-step pipeline for generating market theses:
+
+1. **Fetch Articles** – Retrieve fintech news from RSS feeds
+2. **Vectorize** – Index articles in FAISS for semantic search
+3. **Retrieve** – Find relevant articles for user query
+4. **AI Gateway** *(Cost Optimization)* – Cache results and route to appropriate LLM
+5. **Summarize** – Generate summary (Gemini or Local)
+6. **Structure** – Map to fintech taxonomy (themes, risks, signals)
+7. **Score** – Calculate investment opportunity score
+8. **Display** – Render results in Streamlit UI
+
+Steps 1–3 and 6–8 are identical in both modes. The AI Gateway (Step 4) and Summarization (Step 5) vary based on configuration.
+
 ## Two Summarization Flows
 
-The application supports two modes, selected via `LLM_PROVIDER` in `.env`. Steps 1–3 and 5–6 are identical; only step 4 differs.
+The application supports two modes, selected via `LLM_PROVIDER` in `.env`. The AI Gateway wraps both modes for cost optimization.
 
 | | Gemini flow | Local flow |
 |---|---|---|
@@ -16,6 +31,133 @@ The application supports two modes, selected via `LLM_PROVIDER` in `.env`. Steps
 | **Summary quality** | Analyst-style prose | Extractive (top sentences by fintech keyword score) |
 | **Latency** | API round-trip (~2–5 s) | Local computation (~0.1 s) |
 | **Cost** | Per-token billing | Free |
+
+---
+
+## AI Gateway: Cost Optimization Layer
+
+The AI Gateway is an optional (but enabled by default) cost optimization wrapper that intelligently manages all LLM calls.
+
+### How AI Gateway Works
+
+**Step 1: Check Cache**
+```
+Input: (documents, query)
+  ↓
+1. Generate cache key from document content hash + query
+2. Look up in memory cache
+3. If found and not expired → Return cached response (instant, zero cost)
+4. If not found → Continue to Step 2
+```
+
+**Step 2: Check Cost Limits**
+```
+Input: Current daily spend
+  ↓
+1. Query cost tracker for today's total
+2. If >= daily limit → Fallback to Local (avoid charges)
+3. If < daily limit → Continue to Step 3
+```
+
+**Step 3: Route Request**
+```
+Using strategy (hybrid, cost_optimized, or quality_first):
+  ├─ Estimate document token count
+  ├─ Calculate cost/quality tradeoff
+  └─ Return (provider, model) to use
+```
+
+**Step 4: Call LLM**
+```
+1. Invoke selected provider (Gemini or Local)
+2. On failure → Fallback to other provider
+3. Return summary
+```
+
+**Step 5: Cache Result**
+```
+1. Store summary with document hash key
+2. Set TTL (default: 7 days)
+3. Return summary
+```
+
+**Step 6: Track Cost**
+```
+1. Calculate token counts
+2. Calculate cost using provider pricing
+3. Record metric (provider, tokens, cost, latency)
+```
+
+### AI Gateway Architecture
+
+```
+┌─────────────────────────────────────────┐
+│          AIGateway Orchestrator          │
+├─────────────────────────────────────────┤
+│                                         │
+│  ┌──────────────────────────────────┐   │
+│  │ CacheManager (L1 In-Memory)      │   │
+│  │ • SHA256-based key generation   │   │
+│  │ • TTL expiration (7 days)       │   │
+│  │ • Hit/miss tracking             │   │
+│  └──────────────────────────────────┘   │
+│                                         │
+│  ┌──────────────────────────────────┐   │
+│  │ RoutingStrategy                  │   │
+│  │ • CostOptimized: Local if large  │   │
+│  │ • QualityFirst: Always Gemini    │   │
+│  │ • Hybrid: Smart mix (default)    │   │
+│  └──────────────────────────────────┘   │
+│                                         │
+│  ┌──────────────────────────────────┐   │
+│  │ CostTracker                      │   │
+│  │ • Provider pricing               │   │
+│  │ • Daily/monthly spend            │   │
+│  │ • Cost metrics aggregation       │   │
+│  └──────────────────────────────────┘   │
+│                                         │
+│  ┌──────────────────────────────────┐   │
+│  │ LLM Wrappers                     │   │
+│  │ ├─ Gemini (API-based)           │   │
+│  │ └─ Local (free extractor)       │   │
+│  └──────────────────────────────────┘   │
+│                                         │
+└─────────────────────────────────────────┘
+```
+
+### Cost Optimization Examples
+
+**Example 1: Hybrid Strategy (Recommended)**
+```
+Query: "Digital Lending"
+  ├─ Documents: 3 articles (~3000 tokens)
+  ├─ Daily spend: $1.50 / $5.00 limit
+  │
+  ├─ Cache check: MISS
+  ├─ Cost limit check: OK
+  ├─ Route decision: Small docs + in budget → Use Gemini
+  ├─ LLM call: Gemini API ($0.10)
+  ├─ Cache: Store result
+  └─ Return summary
+
+Query: "Digital Lending" (same, 30 minutes later)
+  ├─ Cache check: HIT ✓
+  └─ Return cached result (0ms, $0.00)
+```
+
+**Example 2: Cost-Optimized Strategy**
+```
+Query: "Blockchain in Banking"
+  ├─ Documents: 10 articles (~8000 tokens)
+  ├─ Daily spend: $4.50 / $5.00 limit
+  │
+  ├─ Cache check: MISS
+  ├─ Cost limit check: Near limit (90%)
+  ├─ Route decision: Documents large OR near budget → Use Local
+  ├─ LLM call: Local extractor ($0.00)
+  ├─ Cache: Store result
+  └─ Return summary (adequate quality, zero cost)
+```
 
 ---
 
@@ -55,13 +197,25 @@ The application supports two modes, selected via `LLM_PROVIDER` in `.env`. Steps
 └────────────────────────────┬────────────────────────────────────┘
                              │
                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│         [4] AI GATEWAY (Cost Optimization Layer)                 │
+│  • Check cache: Return if documents summarized before            │
+│  • Check cost limits: Fallback to Local if budget exceeded       │
+│  • Route request:                                               │
+│    - Hybrid: Small docs→Gemini, Large docs→Local                │
+│    - Cost-optimized: Prefer Local if possible                   │
+│    - Quality-first: Always use Gemini                           │
+│  • On success: Cache result for future queries                  │
+│  • Track cost: Record tokens, cost, latency metrics             │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
               ┌──────────────┴──────────────┐
               │                             │
-    LLM_PROVIDER=gemini           LLM_PROVIDER=local
+    AI_GATEWAY selects provider      (Both: Gemini or Local)
               │                             │
               ▼                             ▼
 ┌─────────────────────────┐   ┌─────────────────────────────────┐
-│  [4a] GEMINI SUMMARY    │   │  [4b] LOCAL EXTRACTIVE SUMMARY  │
+│  [5a] GEMINI SUMMARY    │   │  [5b] LOCAL EXTRACTIVE SUMMARY  │
 │                         │   │                                 │
 │ • Send docs to Gemini   │   │ • Split all doc text into       │
 │   via LangChain         │   │   sentences                     │
@@ -78,7 +232,7 @@ The application supports two modes, selected via `LLM_PROVIDER` in `.env`. Steps
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│     [5] STRUCTURE INTO THESIS (Pattern Matching)                │
+│     [6] STRUCTURE INTO THESIS (Pattern Matching)                │
 │  • Lowercase summary                                            │
 │  • Score 32 fintech categories against summary keywords:        │
 │    - 12 themes  (AI, Payments, Blockchain, Lending...)          │
@@ -91,7 +245,7 @@ The application supports two modes, selected via `LLM_PROVIDER` in `.env`. Steps
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│   [6] SCORE OPPORTUNITY (Rule-Based Scoring)                    │
+│   [7] SCORE OPPORTUNITY (Rule-Based Scoring)                    │
 │  • Calculate opportunity score (0-5 scale):                     │
 │    - Base: 2.5                                                  │
 │    - Signal boost: +0.75 per signal (max 3)                     │
@@ -111,13 +265,15 @@ The application supports two modes, selected via `LLM_PROVIDER` in `.env`. Steps
                              │
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    [7] DISPLAY RESULTS                          │
+│                    [8] DISPLAY RESULTS                          │
 │  • Show fetched article source links                            │
 │  • Display raw summary output                                   │
 │  • Render structured thesis with scoring:                       │
-│    - Themes, risks, signals (from step 5)                       │
-│    - Opportunity score, confidence, recommendation (from step 6)│
+│    - Themes, risks, signals (from step 6)                       │
+│    - Opportunity score, confidence, recommendation (from step 7)│
 │    - Key risk factors highlighted                               │
+│  • Display AI Gateway metrics (if enabled):                      │
+│    - Cache hit rate, daily spend, latency                       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
