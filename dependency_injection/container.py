@@ -21,6 +21,7 @@ from core.interfaces.scraper import IWebScraper
 from core.interfaces.scoring_strategy import IScoringStrategy
 from core.interfaces.thesis_structurer import IThesisStructurer
 from core.interfaces.vectorstore import IVectorStore
+from core.services.approval_service import ApprovalService
 from core.services.ingestion_service import ArticleIngestionService
 from core.services.opportunity_scoring_service import OpportunityScoringService
 from core.services.retrieval_service import DocumentRetrievalService
@@ -68,6 +69,7 @@ class ServiceContainer:
         # Services
         self._ingestion_service: Optional[ArticleIngestionService] = None
         self._retrieval_service: Optional[DocumentRetrievalService] = None
+        self._approval_service: Optional[ApprovalService] = None
         self._opportunity_scoring_service: Optional[OpportunityScoringService] = None
         self._thesis_service: Optional[ThesisGeneratorService] = None
 
@@ -240,6 +242,17 @@ class ServiceContainer:
             vectorstore = self.get_vectorstore()
             self._retrieval_service = DocumentRetrievalService(vectorstore)
         return self._retrieval_service
+
+    def get_approval_service(self) -> ApprovalService:
+        """Get or create approval service.
+
+        Returns:
+            ApprovalService instance for human approval workflows.
+        """
+        if not self._approval_service:
+            logger.info("Creating ApprovalService")
+            self._approval_service = ApprovalService()
+        return self._approval_service
 
     def get_opportunity_scoring_service(self) -> OpportunityScoringService:
         """Get or create opportunity scoring service.
