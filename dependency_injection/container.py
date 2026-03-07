@@ -11,6 +11,7 @@ from core.implementations.embeddings.huggingface_embeddings import (
 from core.implementations.keyword_scoring_strategy import KeywordCountScoringStrategy
 from core.implementations.llm.gemini_llm import GeminiLanguageModel
 from core.implementations.llm.local_summarizer import LocalSummarizerModel
+from core.implementations.llm.llm_wrapper import LLMWrapper
 from core.implementations.scrapers.beautifulsoup_scraper import BeautifulSoupScraper
 from core.implementations.vectorstores.faiss_store import FAISSVectorStore
 from core.interfaces.article_source import IArticleSource
@@ -152,8 +153,8 @@ class ServiceContainer:
     def get_llm(self) -> ILanguageModel:
         """Get or create LLM implementation.
 
-        Selects the concrete strategy from LLM_PROVIDER_REGISTRY based on
-        the configured provider. To add a new LLM, register it in the registry.
+        For Gemini: Wraps with fallback to Local using LLMWrapper for resilience.
+        For Local: Returns directly without wrapper.
 
         Returns:
             ILanguageModel implementation based on configuration.
@@ -172,7 +173,19 @@ class ServiceContainer:
                 )
 
             logger.info(f"Creating {provider} LLM ({llm_class.__name__})")
-            self._llm = llm_class(self._config.llm)
+            primary_llm = llm_class(self._config.llm)
+
+            # Wrap Gemini with fallback to Local for resilience
+            if provider == "gemini":
+                logger.info("Wrapping Gemini with fallback to Local")
+                fallback_llm = LocalSummarizerModel(self._config.llm)
+                self._llm = LLMWrapper(
+                    primary_llm=primary_llm,
+                    fallback_llm=fallback_llm,
+                    max_retries=2
+                )
+            else:
+                self._llm = primary_llm
 
         return self._llm
 
