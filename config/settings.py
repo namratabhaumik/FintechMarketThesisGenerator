@@ -62,12 +62,26 @@ class VectorStoreConfig:
 
 
 @dataclass
+class AIGatewayConfig:
+    """AI Gateway configuration for cost optimization."""
+    enabled: bool = True
+    strategy: str = "hybrid"  # cost_optimized | quality_first | hybrid
+    cache_enabled: bool = True
+    cache_type: str = "memory"  # memory | sqlite
+    cache_ttl_seconds: int = 604800  # 7 days
+    cost_limit_daily: float = 5.0
+    cost_limit_monthly: float = 100.0
+    track_metrics: bool = True
+
+
+@dataclass
 class AppConfig:
     """Application-wide configuration."""
     embedding: EmbeddingConfig
     llm: LLMConfig
     vectorstore: VectorStoreConfig = field(default_factory=VectorStoreConfig)
     scraper: ScraperConfig = field(default_factory=ScraperConfig)
+    ai_gateway: AIGatewayConfig = field(default_factory=AIGatewayConfig)
 
     rss_feeds: List[RSSFeedConfig] = field(default_factory=lambda: [
         RSSFeedConfig(
@@ -139,6 +153,16 @@ class AppConfig:
 
         vs_provider = os.getenv("VECTORSTORE_PROVIDER", "faiss")
 
+        # Load AI Gateway configuration
+        ai_gateway_enabled = os.getenv("AI_GATEWAY_ENABLED", "true").lower() == "true"
+        ai_gateway_strategy = os.getenv("AI_GATEWAY_STRATEGY", "hybrid")
+        ai_gateway_cache_enabled = os.getenv("AI_GATEWAY_CACHE_ENABLED", "true").lower() == "true"
+        ai_gateway_cache_type = os.getenv("AI_GATEWAY_CACHE_TYPE", "memory")
+        ai_gateway_cache_ttl = int(os.getenv("AI_GATEWAY_CACHE_TTL_SECONDS", "604800"))
+        ai_gateway_cost_limit_daily = float(os.getenv("AI_GATEWAY_COST_LIMIT_DAILY", "5.0"))
+        ai_gateway_cost_limit_monthly = float(os.getenv("AI_GATEWAY_COST_LIMIT_MONTHLY", "100.0"))
+        ai_gateway_track_metrics = os.getenv("AI_GATEWAY_TRACK_METRICS", "true").lower() == "true"
+
         return cls(
             llm=LLMConfig(
                 provider=llm_provider,
@@ -150,4 +174,14 @@ class AppConfig:
                 model_name=embed_model,
             ),
             vectorstore=VectorStoreConfig(provider=vs_provider),
+            ai_gateway=AIGatewayConfig(
+                enabled=ai_gateway_enabled,
+                strategy=ai_gateway_strategy,
+                cache_enabled=ai_gateway_cache_enabled,
+                cache_type=ai_gateway_cache_type,
+                cache_ttl_seconds=ai_gateway_cache_ttl,
+                cost_limit_daily=ai_gateway_cost_limit_daily,
+                cost_limit_monthly=ai_gateway_cost_limit_monthly,
+                track_metrics=ai_gateway_track_metrics,
+            ),
         )

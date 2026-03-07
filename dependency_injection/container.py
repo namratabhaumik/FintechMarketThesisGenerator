@@ -9,6 +9,9 @@ from core.implementations.embeddings.huggingface_embeddings import (
     HuggingFaceEmbeddingModel,
 )
 from core.implementations.keyword_scoring_strategy import KeywordCountScoringStrategy
+from core.implementations.llm.ai_gateway import AIGateway
+from core.implementations.llm.cache_manager import CacheManager
+from core.implementations.llm.cost_tracker import CostTracker
 from core.implementations.llm.gemini_llm import GeminiLanguageModel
 from core.implementations.llm.local_summarizer import LocalSummarizerModel
 from core.implementations.llm.llm_wrapper import LLMWrapper
@@ -65,6 +68,10 @@ class ServiceContainer:
         self._llm: Optional[ILanguageModel] = None
         self._scoring_strategy: Optional[IScoringStrategy] = None
         self._thesis_structurer: Optional[IThesisStructurer] = None
+
+        # AI Gateway components (singletons)
+        self._cache_manager: Optional[CacheManager] = None
+        self._cost_tracker: Optional[CostTracker] = None
 
         # Services
         self._ingestion_service: Optional[ArticleIngestionService] = None
@@ -152,11 +159,36 @@ class ServiceContainer:
 
         return self._vectorstore
 
+    def get_cache_manager(self) -> CacheManager:
+        """Get or create cache manager for AI Gateway.
+
+        Returns:
+            CacheManager instance.
+        """
+        if not self._cache_manager:
+            logger.info("Creating CacheManager")
+            self._cache_manager = CacheManager(
+                ttl_seconds=self._config.ai_gateway.cache_ttl_seconds
+            )
+        return self._cache_manager
+
+    def get_cost_tracker(self) -> CostTracker:
+        """Get or create cost tracker for AI Gateway.
+
+        Returns:
+            CostTracker instance.
+        """
+        if not self._cost_tracker:
+            logger.info("Creating CostTracker")
+            self._cost_tracker = CostTracker()
+        return self._cost_tracker
+
     def get_llm(self) -> ILanguageModel:
         """Get or create LLM implementation.
 
         For Gemini: Wraps with fallback to Local using LLMWrapper for resilience.
         For Local: Returns directly without wrapper.
+        If AI Gateway enabled: Wraps with AIGateway for cost optimization.
 
         Returns:
             ILanguageModel implementation based on configuration.
@@ -188,6 +220,23 @@ class ServiceContainer:
                 )
             else:
                 self._llm = primary_llm
+
+            # Wrap with AI Gateway if enabled
+            if self._config.ai_gateway.enabled:
+                logger.info("Wrapping LLM with AI Gateway for cost optimization")
+                cache_manager = self.get_cache_manager()
+                cost_tracker = self.get_cost_tracker()
+
+                # Create fallback LLM for gateway if not already created
+                fallback_llm = fallback_llm if provider == "gemini" else LocalSummarizerModel(self._config.llm)
+
+                self._llm = AIGateway(
+                    primary_llm=self._llm,
+                    fallback_llm=fallback_llm,
+                    config=self._config.ai_gateway,
+                    cache_manager=cache_manager,
+                    cost_tracker=cost_tracker,
+                )
 
         return self._llm
 
