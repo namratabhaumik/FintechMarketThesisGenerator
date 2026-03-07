@@ -86,6 +86,12 @@ def display_structured_thesis(thesis: StructuredThesis):
         else:
             st.warning(f"⏭️ {thesis.recommendation}")
 
+    # Approval toggle — unique key per thesis ensures it resets for each new generation
+    col_toggle = st.columns(3)[0]
+    with col_toggle:
+        toggle_key = f"approval_toggle_{st.session_state.get('thesis_count', 0)}"
+        st.toggle("Approved", value=False, key=toggle_key)
+
     st.divider()
 
     st.subheader("Key Themes")
@@ -102,10 +108,6 @@ def display_structured_thesis(thesis: StructuredThesis):
     st.subheader("Investment Signals")
     signals = thesis.investment_signals
     st.write("\n".join(f"- {s}" for s in signals) or "No signals found.")
-
-    st.subheader("Sources")
-    sources = thesis.sources
-    st.write("\n".join(f"- {s}" for s in sources) or "No sources found.")
 
 
 # === Main Application ===
@@ -133,13 +135,8 @@ if st.button("Generate Thesis"):
                     st.warning("No articles found. Please try again later.")
                     st.stop()
 
-            # Display article links
-            st.subheader("Latest Fintech Articles")
-            for article in articles:
-                if article.url:
-                    st.markdown(f"• [{article.title}]({article.url})")
-                else:
-                    st.markdown(f"• {article.title}")
+                # Store articles in session state for display outside button block
+                st.session_state["articles"] = articles
 
             # Step 2: Build vectorstore (cache in session)
             if "vectorstore_built" not in st.session_state:
@@ -160,22 +157,37 @@ if st.button("Generate Thesis"):
             # Step 4: Generate thesis
             with st.spinner("Generating market thesis with Gemini..."):
                 thesis = thesis_service.generate_thesis(query, docs)
-
-            # Step 5: Display results
-            if thesis.raw_output:
-                st.subheader("Raw Summary")
-                st.code(thesis.raw_output, language="json")
-
-            if thesis.key_themes:
-                st.success("Structured thesis generated successfully")
-                display_structured_thesis(thesis)
-            else:
-                st.warning("Could not parse structured output. See raw output above.")
+                st.session_state["generated_thesis"] = thesis
+                # Increment counter so the toggle gets a new unique key (resets automatically)
+                st.session_state["thesis_count"] = st.session_state.get("thesis_count", 0) + 1
 
         except Exception as exc:
             logger.exception("Error while generating thesis")
             st.error(f"An unexpected error occurred: {str(exc)}")
 
+# Step 5: Display articles (outside button block so they persist across reruns)
+if "articles" in st.session_state:
+    st.subheader("Latest Fintech Articles")
+    articles = st.session_state["articles"]
+    for article in articles:
+        if article.url:
+            st.markdown(f"• [{article.title}]({article.url})")
+        else:
+            st.markdown(f"• {article.title}")
+
+# Step 6: Display results (outside button block so toggle doesn't disappear)
+if "generated_thesis" in st.session_state:
+    thesis = st.session_state["generated_thesis"]
+
+    if thesis.raw_output:
+        st.subheader("Raw Summary")
+        st.code(thesis.raw_output, language="json")
+
+    if thesis.key_themes:
+        st.success("Structured thesis generated successfully")
+        display_structured_thesis(thesis)
+    else:
+        st.warning("Could not parse structured output. See raw output above.")
 else:
     st.info("Enter a query and click 'Generate Thesis' to start.")
 
