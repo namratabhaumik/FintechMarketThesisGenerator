@@ -165,6 +165,28 @@ def show_history(history: list):
             )
 
 
+def show_execution_trace(execution_log: list):
+    """Display tool execution trace showing what actually executed.
+
+    Args:
+        execution_log: List of execution events from the graph.
+    """
+    if not execution_log:
+        return
+
+    with st.expander("📋 Execution Trace", expanded=False):
+        st.caption("Tools that actually executed during refinement:")
+        for i, event in enumerate(execution_log, 1):
+            tool_name = event.get("tool_name", "unknown")
+            status = event.get("status", "unknown")
+            status_icon = "✅" if status == "executed" else "❌"
+            st.write(f"{status_icon} **{i}. {tool_name}** - {status}")
+            if event.get("refinement_number"):
+                st.caption(f"Refinement #{event['refinement_number']}")
+            if event.get("reason"):
+                st.caption(f"Reason: {event['reason']}")
+
+
 def show_hallucination_analysis(analysis: dict):
     """Display hallucination detection results only when hallucinations found.
 
@@ -255,6 +277,7 @@ def _run_refinement_step(selected_feedback: list):
         "feedback_history": ref_state.get("feedback_history", []) + [selected_feedback],
         "refinement_count": ref_state.get("refinement_count", 0),
         "status": "refining",
+        "execution_log": st.session_state.get("execution_log", []),
     }
 
     with st.spinner("🔧 Refining thesis based on your feedback..."):
@@ -280,6 +303,7 @@ def _run_refinement_step(selected_feedback: list):
     # Persist updated state to session
     st.session_state["generated_thesis"] = refined_thesis
     st.session_state["hallucination_analysis"] = hallucination_analysis
+    st.session_state["execution_log"] = result_state.get("execution_log", [])
     st.session_state["refinement_state"] = {
         "topic": result_state["topic"],
         "refinement_count": result_state["refinement_count"],
@@ -394,6 +418,7 @@ if st.button("Generate Thesis"):
                     "refinement_supported": True,  # Assume supported until proven otherwise
                 }
                 st.session_state["refinement_history"] = []
+                st.session_state["execution_log"] = []
 
                 # Increment counter so the toggle gets a new unique key (resets automatically)
                 st.session_state["thesis_count"] = st.session_state.get("thesis_count", 0) + 1
@@ -431,6 +456,10 @@ if "generated_thesis" in st.session_state:
         if "hallucination_analysis" in st.session_state:
             st.divider()
             show_hallucination_analysis(st.session_state["hallucination_analysis"])
+
+        # Display execution trace
+        if "execution_log" in st.session_state:
+            show_execution_trace(st.session_state["execution_log"])
     else:
         st.warning("Could not parse structured output. See raw output above.")
 else:

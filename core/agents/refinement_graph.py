@@ -2,11 +2,12 @@
 
 import logging
 from functools import partial
-from typing import List, Optional, TypedDict
+from typing import List, Optional, TypedDict, Dict, Any
 
 from langchain_core.documents import Document
 from langgraph.graph import StateGraph, START, END
 
+from core.agents.execution_tracker import ExecutionTracker
 from core.models.thesis import StructuredThesis
 from core.services.thesis_generator_service import ThesisGeneratorService
 
@@ -26,6 +27,7 @@ class ThesisRefinementState(TypedDict):
         feedback_history: List of feedback rounds, each containing feedback items selected.
         refinement_count: Number of refinements completed so far [0, 1, 2].
         status: Current status ("refining", "escalated", "done").
+        execution_log: List of executed tool events for tracking actual execution.
     """
 
     topic: str
@@ -34,6 +36,7 @@ class ThesisRefinementState(TypedDict):
     feedback_history: List[List[str]]  # Each entry is one round's selected feedback items
     refinement_count: int  # Range: [0, 3)
     status: str  # "refining" | "escalated" | "done"
+    execution_log: List[Dict[str, Any]]  # Tool execution events
 
 
 def refine_node(
@@ -44,13 +47,14 @@ def refine_node(
 
     Calls thesis_service.refine_thesis() with the latest feedback,
     updates the thesis, and increments refinement_count.
+    Logs the execution event.
 
     Args:
         state: Current refinement state.
         thesis_service: Service for thesis refinement.
 
     Returns:
-        Updated state with refined thesis and incremented count.
+        Updated state with refined thesis, incremented count, and execution log.
     """
     current_feedback = state["feedback_history"][-1]  # Latest feedback items
 
@@ -69,11 +73,22 @@ def refine_node(
 
     logger.info(f"Refinement complete. New count: {new_refinement_count}")
 
+    # Log tool execution
+    execution_log = state.get("execution_log", [])
+    execution_log.append(
+        {
+            "tool_name": "refine_thesis",
+            "status": "executed",
+            "refinement_number": new_refinement_count,
+        }
+    )
+
     return {
         **state,
         "current_thesis": refined_thesis,
         "refinement_count": new_refinement_count,
         "status": "refining",  # Keep as refining, let router decide escalation
+        "execution_log": execution_log,
     }
 
 
@@ -81,19 +96,30 @@ def escalate_node(state: ThesisRefinementState) -> ThesisRefinementState:
     """Terminal node when max refinements reached.
 
     Sets status to "escalated" to signal the UI that further refinements
-    are not allowed.
+    are not allowed. Logs the escalation event.
 
     Args:
         state: Current refinement state.
 
     Returns:
-        State with status set to "escalated".
+        State with status set to "escalated" and execution log updated.
     """
     logger.info("Max refinements reached. Escalating.")
+
+    # Log escalation event
+    execution_log = state.get("execution_log", [])
+    execution_log.append(
+        {
+            "tool_name": "escalate",
+            "status": "executed",
+            "reason": "max_refinements_reached",
+        }
+    )
 
     return {
         **state,
         "status": "escalated",
+        "execution_log": execution_log,
     }
 
 
