@@ -4,8 +4,8 @@ import logging
 from typing import List
 
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.chains.summarize import load_summarize_chain
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
+from langchain_core.messages import HumanMessage
 
 from config.settings import LLMConfig
 from core.interfaces.llm import ILanguageModel
@@ -45,13 +45,18 @@ class GeminiLanguageModel(ILanguageModel):
         """
         try:
             logger.info(f"Summarizing {len(documents)} documents with Gemini")
-            chain = load_summarize_chain(self._llm, chain_type="map_reduce")
-            result = chain.invoke(documents)
 
-            if isinstance(result, dict) and "output_text" in result:
-                return result["output_text"]
+            # Combine documents for summarization
+            doc_content = "\n\n".join(doc.page_content for doc in documents)
 
-            return str(result)
+            prompt = f"""Provide a concise summary of the following documents:
+
+{doc_content}
+
+Summary:"""
+
+            result = self._llm.invoke([HumanMessage(content=prompt)])
+            return result.content
 
         except Exception as e:
             logger.error(f"Gemini summarization failed: {e}")
@@ -60,3 +65,51 @@ class GeminiLanguageModel(ILanguageModel):
     def get_model_name(self) -> str:
         """Get model identifier."""
         return self._config.model_name
+
+    def refine(
+        self,
+        documents: List[Document],
+        current_thesis_text: str,
+        feedback_items: List[str],
+    ) -> str:
+        """Refine thesis based on user feedback using direct chat call.
+
+        Args:
+            documents: Source documents for context.
+            current_thesis_text: Original thesis to refine.
+            feedback_items: Feedback constraints from user.
+
+        Returns:
+            Refined thesis text.
+        """
+        # Build feedback constraints as bullet points
+        feedback_str = "\n".join(f"- {item}" for item in feedback_items)
+
+        # Concatenate document content for context
+        doc_content = "\n\n".join(doc.page_content for doc in documents)
+
+        # Build the refinement prompt
+        prompt = f"""You are a fintech market analyst. The user has reviewed an investment thesis
+and provided specific feedback. Your task is to revise the thesis to directly address their concerns.
+
+ORIGINAL THESIS:
+{current_thesis_text}
+
+USER FEEDBACK (things to improve):
+{feedback_str}
+
+SOURCE DOCUMENTS (for context):
+{doc_content}
+
+Please produce a revised thesis that:
+1. Directly addresses the user's feedback points
+2. Maintains the same structured format as the original
+3. Uses evidence from the source documents
+4. Provides actionable insights
+
+Refined Thesis:"""
+
+        logger.info("Refining thesis with Gemini based on user feedback")
+        result = self._llm.invoke([HumanMessage(content=prompt)])
+        logger.info("Thesis refinement complete")
+        return result.content

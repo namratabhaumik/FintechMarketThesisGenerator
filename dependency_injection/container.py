@@ -80,6 +80,9 @@ class ServiceContainer:
         self._opportunity_scoring_service: Optional[OpportunityScoringService] = None
         self._thesis_service: Optional[ThesisGeneratorService] = None
 
+        # Agents
+        self._refinement_graph: Optional[object] = None
+
         logger.info("ServiceContainer initialized")
 
     # === Factory Methods for Core Interfaces ===
@@ -331,3 +334,17 @@ class ServiceContainer:
                 scoring_service=scoring_service,
             )
         return self._thesis_service
+
+    def get_refinement_graph(self) -> object:
+        """Get or create the compiled LangGraph refinement graph.
+
+        Returns:
+            Compiled LangGraph StateGraph ready for invocation.
+        """
+        if not self._refinement_graph:
+            logger.info("Creating LangGraph refinement graph")
+            from core.agents.refinement_graph import build_refinement_graph
+
+            thesis_service = self.get_thesis_service()
+            self._refinement_graph = build_refinement_graph(thesis_service)
+        return self._refinement_graph

@@ -4,7 +4,7 @@ import logging
 import time
 from typing import List, Dict
 
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 from core.interfaces.llm import ILanguageModel
 from core.implementations.llm.cache_manager import CacheManager
@@ -218,6 +218,138 @@ class AIGateway(ILanguageModel):
                 return result
             except Exception as fallback_error:
                 logger.error(f"Fallback LLM also failed: {fallback_error}")
+                raise
+
+    def refine(
+        self,
+        documents: List[Document],
+        current_thesis_text: str,
+        feedback_items: List[str],
+    ) -> str:
+        """Refine thesis with caching, cost optimization, and routing.
+
+        Delegates to primary LLM, with caching based on thesis + feedback hash.
+
+        Args:
+            documents: Source documents for context.
+            current_thesis_text: Original thesis to refine.
+            feedback_items: Feedback constraints from user.
+
+        Returns:
+            Refined thesis text.
+        """
+        start_time = time.time()
+        docs_text = self._get_documents_text(documents)
+        topic = "fintech"  # Default topic
+
+        # Generate cache key from thesis + feedback
+        feedback_key = "".join(sorted(feedback_items))
+        cache_input = current_thesis_text + feedback_key
+
+        # Step 1: Check cache
+        if self._config.cache_enabled:
+            cache_key = self._cache_manager.generate_key(cache_input, topic, "refine")
+            cached_entry = self._cache_manager.get(cache_key)
+
+            if cached_entry is not None:
+                logger.info(f"Cache hit for refinement: {cache_key}")
+                if self._config.track_metrics:
+                    latency_ms = (time.time() - start_time) * 1000
+                    self._cost_tracker.record_call(
+                        provider="cache",
+                        model="cache",
+                        input_tokens=0,
+                        output_tokens=0,
+                        latency_ms=latency_ms,
+                        cache_hit=True,
+                    )
+                return cached_entry.response
+
+        # Step 2: Check cost limit
+        daily_spend = self._cost_tracker.get_daily_spend()
+        if daily_spend >= self._config.cost_limit_daily:
+            logger.warning(
+                f"Daily cost limit reached: ${daily_spend:.2f} >= ${self._config.cost_limit_daily}"
+            )
+            # Use fallback to avoid charges
+            try:
+                logger.info("Using fallback LLM due to cost limit")
+                result = self._fallback_llm.refine(
+                    documents, current_thesis_text, feedback_items
+                )
+                latency_ms = (time.time() - start_time) * 1000
+                if self._config.track_metrics:
+                    self._cost_tracker.record_call(
+                        provider="local",
+                        model="local-extractor",
+                        input_tokens=0,
+                        output_tokens=0,
+                        latency_ms=latency_ms,
+                    )
+                return result
+            except Exception as e:
+                logger.error(f"Fallback LLM failed during refinement: {e}")
+                raise
+
+        # Step 3: Select provider
+        provider, llm = self._select_provider(documents, topic)
+
+        # Step 4: Call selected provider
+        try:
+            logger.info(f"Calling {provider} LLM for refinement")
+            result = llm.refine(documents, current_thesis_text, feedback_items)
+
+            # Step 5: Cache result
+            if self._config.cache_enabled:
+                cache_key = self._cache_manager.generate_key(cache_input, topic, "refine")
+                input_tokens = len(cache_input.split()) * 1.3
+                output_tokens = len(result.split()) * 1.3
+                self._cache_manager.set(
+                    key=cache_key,
+                    response=result,
+                    model=llm.get_model_name(),
+                    input_tokens=int(input_tokens),
+                    output_tokens=int(output_tokens),
+                )
+
+            # Step 6: Track cost
+            if self._config.track_metrics:
+                latency_ms = (time.time() - start_time) * 1000
+                input_tokens = len(cache_input.split()) * 1.3
+                output_tokens = len(result.split()) * 1.3
+                cost = self._cost_tracker.record_call(
+                    provider=provider,
+                    model=llm.get_model_name(),
+                    input_tokens=int(input_tokens),
+                    output_tokens=int(output_tokens),
+                    latency_ms=latency_ms,
+                )
+                logger.info(f"{provider} refinement succeeded - cost: ${cost:.6f}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"{provider} LLM failed during refinement: {e}")
+            # Try fallback
+            try:
+                logger.info("Attempting fallback LLM after primary failure")
+                result = self._fallback_llm.refine(
+                    documents, current_thesis_text, feedback_items
+                )
+
+                if self._config.track_metrics:
+                    latency_ms = (time.time() - start_time) * 1000
+                    self._cost_tracker.record_call(
+                        provider="local",
+                        model="local-extractor",
+                        input_tokens=0,
+                        output_tokens=0,
+                        latency_ms=latency_ms,
+                    )
+
+                return result
+            except Exception as fallback_error:
+                logger.error(f"Fallback LLM also failed during refinement: {fallback_error}")
                 raise
 
     def get_model_name(self) -> str:
