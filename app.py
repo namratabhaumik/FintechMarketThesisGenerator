@@ -11,6 +11,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from config.settings import AppConfig
+from core.agents.hallucination_detector import HallucinationDetector
 from core.models.thesis import StructuredThesis
 from core.utils.logging import setup_logging
 from dependency_injection.container import ServiceContainer
@@ -164,6 +165,23 @@ def show_history(history: list):
             )
 
 
+def show_hallucination_analysis(analysis: dict):
+    """Display hallucination detection results only when hallucinations found.
+
+    Args:
+        analysis: Hallucination detection analysis dictionary.
+    """
+    # Only show panel if hallucinations detected (invalid tools found)
+    if not analysis or not analysis.get("invalid_tools"):
+        return
+
+    st.divider()
+    st.warning("⚠️ **Hallucinations Detected**")
+    with st.expander("🔍 Tool Call Analysis", expanded=True):
+        st.write(analysis["summary"])
+        st.error(f"❌ Invalid tools (do not exist): {', '.join(analysis['invalid_tools'])}")
+
+
 def display_refinement_panel():
     """Display thesis refinement panel with approval, feedback options, and history.
 
@@ -254,8 +272,14 @@ def _run_refinement_step(selected_feedback: list):
             st.error(f"Refinement failed: {str(e)}")
             return
 
+    # Analyze refined thesis for hallucinations
+    refined_thesis = result_state["current_thesis"]
+    detector = HallucinationDetector()
+    hallucination_analysis = detector.analyze(refined_thesis.raw_output or "")
+
     # Persist updated state to session
-    st.session_state["generated_thesis"] = result_state["current_thesis"]
+    st.session_state["generated_thesis"] = refined_thesis
+    st.session_state["hallucination_analysis"] = hallucination_analysis
     st.session_state["refinement_state"] = {
         "topic": result_state["topic"],
         "refinement_count": result_state["refinement_count"],
@@ -402,6 +426,11 @@ if "generated_thesis" in st.session_state:
 
         # Display refinement panel if thesis is available
         display_refinement_panel()
+
+        # Display hallucination analysis if available
+        if "hallucination_analysis" in st.session_state:
+            st.divider()
+            show_hallucination_analysis(st.session_state["hallucination_analysis"])
     else:
         st.warning("Could not parse structured output. See raw output above.")
 else:

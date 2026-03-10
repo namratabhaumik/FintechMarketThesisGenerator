@@ -8,6 +8,7 @@ from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage
 
 from config.settings import LLMConfig
+from core.agents.tool_registry import get_tools_description
 from core.interfaces.llm import ILanguageModel
 
 logger = logging.getLogger(__name__)
@@ -88,9 +89,16 @@ Summary:"""
         # Concatenate document content for context
         doc_content = "\n\n".join(doc.page_content for doc in documents)
 
-        # Build the refinement prompt
+        # Build the refinement prompt with tool constraints to prevent hallucination
+        tools_description = get_tools_description()
         prompt = f"""You are a fintech market analyst. The user has reviewed an investment thesis
 and provided specific feedback. Your task is to revise the thesis to directly address their concerns.
+
+AVAILABLE TOOLS (only mention these):
+{tools_description}
+
+IMPORTANT: Do NOT mention, reference, or claim to use any tools or functions other than those listed above.
+Do NOT invent or hallucinate tool names. Only use the available tools listed.
 
 ORIGINAL THESIS:
 {current_thesis_text}
