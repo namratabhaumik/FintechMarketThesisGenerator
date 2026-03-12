@@ -336,15 +336,28 @@ class ServiceContainer:
         return self._thesis_service
 
     def get_refinement_graph(self) -> object:
-        """Get or create the compiled LangGraph refinement graph.
+        """Get or create the compiled LangGraph refinement graph with real tool calling.
 
         Returns:
             Compiled LangGraph StateGraph ready for invocation.
+
+        Raises:
+            NotImplementedError: If Gemini API key is not configured.
         """
         if not self._refinement_graph:
-            logger.info("Creating LangGraph refinement graph")
+            if not self._config.llm.api_key:
+                raise NotImplementedError(
+                    "Refinement graph requires a Gemini API key (GOOGLE_API_KEY)."
+                )
+
+            logger.info("Creating LangGraph refinement graph with real tool calling")
             from core.agents.refinement_graph import build_refinement_graph
 
-            thesis_service = self.get_thesis_service()
-            self._refinement_graph = build_refinement_graph(thesis_service)
+            self._refinement_graph = build_refinement_graph(
+                thesis_service=self.get_thesis_service(),
+                structuring_service=self.get_thesis_structurer(),
+                scoring_service=self.get_opportunity_scoring_service(),
+                gemini_api_key=self._config.llm.api_key,
+                model_name=self._config.llm.model_name,
+            )
         return self._refinement_graph

@@ -278,6 +278,7 @@ def _run_refinement_step(selected_feedback: list):
         "refinement_count": ref_state.get("refinement_count", 0),
         "status": "refining",
         "execution_log": st.session_state.get("execution_log", []),
+        "messages": [],
     }
 
     with st.spinner("🔧 Refining thesis based on your feedback..."):

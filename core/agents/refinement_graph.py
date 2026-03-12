@@ -1,187 +1,282 @@
-"""LangGraph-based iterative thesis refinement agent."""
+"""LangGraph-based iterative thesis refinement with real tool calling."""
 
+import json
 import logging
-from functools import partial
-from typing import List, Optional, TypedDict, Dict, Any
+from typing import Any, Dict, List, TypedDict
 
 from langchain_core.documents import Document
-from langgraph.graph import StateGraph, START, END
+from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.graph import END, START, StateGraph
+from langgraph.prebuilt import ToolNode
 
-from core.agents.execution_tracker import ExecutionTracker
+from core.agents.execution_tracker import ExecutionTracker  # noqa: F401 (kept for compatibility)
+from core.agents.thesis_tools import create_thesis_tools
+from core.interfaces.thesis_structurer import IThesisStructurer
 from core.models.thesis import StructuredThesis
+from core.services.opportunity_scoring_service import OpportunityScoringService
 from core.services.thesis_generator_service import ThesisGeneratorService
 
 logger = logging.getLogger(__name__)
 
-# Maximum number of refinements allowed (refinement_count ∈ [0, 3))
 MAX_REFINEMENTS = 3
 
 
 class ThesisRefinementState(TypedDict):
-    """State for thesis refinement graph.
+    """State for the thesis refinement graph.
 
     Attributes:
         topic: Original market topic.
-        documents: List of source documents for context.
+        documents: Source documents for context.
         current_thesis: Current StructuredThesis object.
-        feedback_history: List of feedback rounds, each containing feedback items selected.
-        refinement_count: Number of refinements completed so far [0, 1, 2].
-        status: Current status ("refining", "escalated", "done").
-        execution_log: List of executed tool events for tracking actual execution.
+        feedback_history: List of feedback rounds.
+        refinement_count: Number of refinements completed [0, MAX_REFINEMENTS).
+        status: Current status ("refining" | "escalated").
+        execution_log: Tool execution events for the UI trace.
+        messages: LLM conversation messages for tool calling.
     """
 
     topic: str
     documents: List[Document]
     current_thesis: StructuredThesis
-    feedback_history: List[List[str]]  # Each entry is one round's selected feedback items
-    refinement_count: int  # Range: [0, 3)
-    status: str  # "refining" | "escalated" | "done"
-    execution_log: List[Dict[str, Any]]  # Tool execution events
+    feedback_history: List[List[str]]
+    refinement_count: int
+    status: str
+    execution_log: List[Dict[str, Any]]
+    messages: List[BaseMessage]
 
 
-def refine_node(
-    state: ThesisRefinementState,
-    thesis_service: ThesisGeneratorService,
-) -> ThesisRefinementState:
-    """Execute one refinement iteration.
+def _make_planner_node(llm_with_tools):
+    """Return a planner node that asks the LLM which tool to invoke."""
 
-    Calls thesis_service.refine_thesis() with the latest feedback,
-    updates the thesis, and increments refinement_count.
-    Logs the execution event.
+    def planner_node(state: ThesisRefinementState) -> dict:
+        latest_feedback = (
+            state["feedback_history"][-1] if state["feedback_history"] else []
+        )
+        feedback_str = "\n".join(f"- {f}" for f in latest_feedback)
 
-    Args:
-        state: Current refinement state.
-        thesis_service: Service for thesis refinement.
+        prompt = (
+            f"You are a fintech market analyst assistant. A user reviewed an investment "
+            f"thesis and provided feedback. Choose the right tool to address it.\n\n"
+            f"CURRENT THESIS SCORE: {state['current_thesis'].opportunity_score}/5\n"
+            f"RECOMMENDATION: {state['current_thesis'].recommendation}\n\n"
+            f"USER FEEDBACK:\n{feedback_str}\n\n"
+            f"Tool selection guide:\n"
+            f"- refine_thesis: content needs changing (missing trends, vague signals, "
+            f"too many risks, too broad, weak evidence)\n"
+            f"- score_opportunity: ONLY if user explicitly says score is wrong\n"
+            f"- structure_thesis: ONLY if themes/risks/signals need reorganising"
+        )
 
-    Returns:
-        Updated state with refined thesis, incremented count, and execution log.
-    """
-    current_feedback = state["feedback_history"][-1]  # Latest feedback items
+        messages = state.get("messages", []) + [HumanMessage(content=prompt)]
+        response = llm_with_tools.invoke(messages)
 
-    logger.info(
-        f"Refining thesis (refinement {state['refinement_count'] + 1}/{MAX_REFINEMENTS})"
-    )
+        if hasattr(response, "tool_calls") and response.tool_calls:
+            tool_names = [tc["name"] for tc in response.tool_calls]
+            logger.info(f"Planner chose tools: {tool_names}")
+        else:
+            logger.info("Planner made no tool call — will pass through to assemble")
 
-    refined_thesis = thesis_service.refine_thesis(
-        topic=state["topic"],
-        documents=state["documents"],
-        current_thesis=state["current_thesis"],
-        feedback_items=current_feedback,
-    )
+        return {"messages": messages + [response]}
 
-    new_refinement_count = state["refinement_count"] + 1
+    return planner_node
 
-    logger.info(f"Refinement complete. New count: {new_refinement_count}")
 
-    # Log tool execution
-    execution_log = state.get("execution_log", [])
-    execution_log.append(
-        {
-            "tool_name": "refine_thesis",
+def _make_assemble_node(scoring_service: OpportunityScoringService):
+    """Return an assemble node that rebuilds StructuredThesis from tool output."""
+
+    def assemble_node(state: ThesisRefinementState) -> dict:
+        # Find the last ToolMessage
+        tool_messages = [m for m in state["messages"] if isinstance(m, ToolMessage)]
+
+        current = state["current_thesis"]
+        execution_log = list(state.get("execution_log", []))
+        new_refinement_count = state["refinement_count"] + 1
+
+        if not tool_messages:
+            logger.warning("assemble_node: no ToolMessage found, keeping current thesis")
+            execution_log.append({
+                "tool_name": "no_tool",
+                "status": "skipped",
+                "refinement_number": new_refinement_count,
+            })
+            return {
+                "refinement_count": new_refinement_count,
+                "status": "refining",
+                "execution_log": execution_log,
+            }
+
+        last_tool_msg = tool_messages[-1]
+        try:
+            result = json.loads(last_tool_msg.content)
+        except (json.JSONDecodeError, TypeError):
+            logger.error("assemble_node: could not parse tool result as JSON")
+            return {
+                "refinement_count": new_refinement_count,
+                "status": "refining",
+                "execution_log": execution_log,
+            }
+
+        tool_name = result.get("tool", "unknown")
+
+        if tool_name == "refine_thesis":
+            new_thesis = StructuredThesis(
+                key_themes=result.get("key_themes", current.key_themes),
+                risks=result.get("risks", current.risks),
+                investment_signals=result.get("investment_signals", current.investment_signals),
+                sources=result.get("sources", current.sources),
+                raw_output=result.get("raw_output", current.raw_output),
+                opportunity_score=result.get("opportunity_score", current.opportunity_score),
+                confidence_level=result.get("confidence_level", current.confidence_level),
+                recommendation=result.get("recommendation", current.recommendation),
+                key_risk_factors=result.get("key_risk_factors", current.key_risk_factors),
+            )
+
+        elif tool_name == "score_opportunity":
+            # Keep content, update score fields only
+            new_thesis = StructuredThesis(
+                key_themes=current.key_themes,
+                risks=current.risks,
+                investment_signals=current.investment_signals,
+                sources=current.sources,
+                raw_output=current.raw_output,
+                opportunity_score=result.get("opportunity_score", current.opportunity_score),
+                confidence_level=result.get("confidence_level", current.confidence_level),
+                recommendation=result.get("recommendation", current.recommendation),
+                key_risk_factors=result.get("key_risk_factors", current.key_risk_factors),
+            )
+
+        elif tool_name == "structure_thesis":
+            # Update structure, re-score with new components
+            key_themes = result.get("key_themes", current.key_themes)
+            risks = result.get("risks", current.risks)
+            investment_signals = result.get("investment_signals", current.investment_signals)
+            score_result = scoring_service.score_opportunity(
+                key_themes=key_themes,
+                risks=risks,
+                investment_signals=investment_signals,
+                sources=current.sources,
+            )
+            new_thesis = StructuredThesis(
+                key_themes=key_themes,
+                risks=risks,
+                investment_signals=investment_signals,
+                sources=current.sources,
+                raw_output=current.raw_output,
+                opportunity_score=score_result["score"],
+                confidence_level=score_result["confidence_level"],
+                recommendation=score_result["recommendation"],
+                key_risk_factors=score_result["key_risks"],
+            )
+
+        else:
+            logger.warning(f"assemble_node: unknown tool '{tool_name}', keeping current thesis")
+            new_thesis = current
+
+        execution_log.append({
+            "tool_name": tool_name,
             "status": "executed",
             "refinement_number": new_refinement_count,
-        }
-    )
+        })
 
-    return {
-        **state,
-        "current_thesis": refined_thesis,
-        "refinement_count": new_refinement_count,
-        "status": "refining",  # Keep as refining, let router decide escalation
-        "execution_log": execution_log,
-    }
-
-
-def escalate_node(state: ThesisRefinementState) -> ThesisRefinementState:
-    """Terminal node when max refinements reached.
-
-    Sets status to "escalated" to signal the UI that further refinements
-    are not allowed. Logs the escalation event.
-
-    Args:
-        state: Current refinement state.
-
-    Returns:
-        State with status set to "escalated" and execution log updated.
-    """
-    logger.info("Max refinements reached. Escalating.")
-
-    # Log escalation event
-    execution_log = state.get("execution_log", [])
-    execution_log.append(
-        {
-            "tool_name": "escalate",
-            "status": "executed",
-            "reason": "max_refinements_reached",
-        }
-    )
-
-    return {
-        **state,
-        "status": "escalated",
-        "execution_log": execution_log,
-    }
-
-
-def route_entry(state: ThesisRefinementState) -> str:
-    """Conditional router at graph entry.
-
-    Checks if refinement_count has already reached MAX_REFINEMENTS.
-    If so, go to escalate_node. Otherwise, go to refine_node.
-
-    Args:
-        state: Current refinement state.
-
-    Returns:
-        Route name: "refine" or "escalate".
-    """
-    if state["refinement_count"] >= MAX_REFINEMENTS:
         logger.info(
-            f"Refinement count {state['refinement_count']} >= MAX {MAX_REFINEMENTS}, escalating"
+            f"assemble_node: thesis updated via {tool_name} "
+            f"(refinement {new_refinement_count}/{MAX_REFINEMENTS})"
         )
+
+        return {
+            "current_thesis": new_thesis,
+            "refinement_count": new_refinement_count,
+            "status": "refining",
+            "execution_log": execution_log,
+        }
+
+    return assemble_node
+
+
+def _escalate_node(state: ThesisRefinementState) -> dict:
+    """Terminal node when max refinements reached."""
+    logger.info("Max refinements reached. Escalating.")
+    execution_log = list(state.get("execution_log", []))
+    execution_log.append({
+        "tool_name": "escalate",
+        "status": "executed",
+        "reason": "max_refinements_reached",
+    })
+    return {"status": "escalated", "execution_log": execution_log}
+
+
+def _route_entry(state: ThesisRefinementState) -> str:
+    if state["refinement_count"] >= MAX_REFINEMENTS:
+        logger.info(f"refinement_count={state['refinement_count']} >= MAX, escalating")
         return "escalate"
-    return "refine"
+    return "planner"
+
+
+def _route_after_planner(state: ThesisRefinementState) -> str:
+    last_message = state["messages"][-1]
+    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        return "tools"
+    return "assemble"
 
 
 def build_refinement_graph(
     thesis_service: ThesisGeneratorService,
+    structuring_service: IThesisStructurer,
+    scoring_service: OpportunityScoringService,
+    gemini_api_key: str,
+    model_name: str = "gemini-2.0-flash",
 ) -> object:
-    """Build and compile the LangGraph refinement state machine.
+    """Build and compile the LangGraph refinement graph with real tool calling.
 
-    Defines nodes and edges:
-    - Entry: route_entry conditional (checks refinement_count)
-    - refine_node: Executes one refinement iteration
-    - escalate_node: Terminal node when max reached
-    - Edges: START → route_entry → {refine | escalate} → END
+    Graph flow:
+        START → route_entry → planner (LLM picks tool) → ToolNode (executes)
+                                                        → assemble (rebuilds thesis) → END
+                            → escalate → END
 
     Args:
-        thesis_service: Service for thesis refinement operations.
+        thesis_service: For LLM-driven thesis rewriting.
+        structuring_service: For keyword-based re-structuring.
+        scoring_service: For rule-based re-scoring.
+        gemini_api_key: API key for the planner LLM.
+        model_name: Gemini model to use for tool-call decisions.
 
     Returns:
         Compiled LangGraph graph ready for invocation.
     """
+    tools = create_thesis_tools(thesis_service, structuring_service, scoring_service)
+
+    planner_llm = ChatGoogleGenerativeAI(
+        model=model_name,
+        temperature=0,
+        google_api_key=gemini_api_key,
+    ).bind_tools(tools)
+
     graph = StateGraph(ThesisRefinementState)
 
-    # Add nodes
-    graph.add_node("refine", partial(refine_node, thesis_service=thesis_service))
-    graph.add_node("escalate", escalate_node)
+    graph.add_node("planner", _make_planner_node(planner_llm))
+    graph.add_node("tools", ToolNode(tools))
+    graph.add_node("assemble", _make_assemble_node(scoring_service))
+    graph.add_node("escalate", _escalate_node)
 
-    # Conditional routing from entry point
     graph.set_conditional_entry_point(
-        route_entry,
-        {
-            "refine": "refine",
-            "escalate": "escalate",
-        },
+        _route_entry,
+        {"planner": "planner", "escalate": "escalate"},
     )
 
-    # Both paths lead to END
-    graph.add_edge("refine", END)
+    graph.add_conditional_edges(
+        "planner",
+        _route_after_planner,
+        {"tools": "tools", "assemble": "assemble"},
+    )
+
+    graph.add_edge("tools", "assemble")
+    graph.add_edge("assemble", END)
     graph.add_edge("escalate", END)
 
-    # Compile and return
-    compiled_graph = graph.compile()
+    compiled = graph.compile()
     logger.info(
-        f"Refinement graph built with MAX_REFINEMENTS={MAX_REFINEMENTS}, compiled and ready"
+        f"Refinement graph compiled with real tool calling, "
+        f"MAX_REFINEMENTS={MAX_REFINEMENTS}, model={model_name}"
     )
-    return compiled_graph
+    return compiled
