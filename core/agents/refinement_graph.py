@@ -2,7 +2,8 @@
 
 import json
 import logging
-from typing import Any, Dict, List, TypedDict
+import os
+from typing import Any, Dict, List, Optional, TypedDict
 
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
@@ -46,7 +47,28 @@ class ThesisRefinementState(TypedDict):
     messages: List[BaseMessage]
 
 
-def _make_planner_node(llm_with_tools):
+def _create_langfuse_handler() -> Optional[object]:
+    """Create a Langfuse callback handler if credentials are configured."""
+    secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+    public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
+    host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+
+    if not secret_key or not public_key:
+        logger.info("Langfuse credentials not set — tracing disabled")
+        return None
+
+    from langfuse.callback import CallbackHandler
+
+    handler = CallbackHandler(
+        secret_key=secret_key,
+        public_key=public_key,
+        host=host,
+    )
+    logger.info("Langfuse tracing enabled")
+    return handler
+
+
+def _make_planner_node(llm_with_tools, langfuse_handler=None):
     """Return a planner node that asks the LLM which tool to invoke."""
 
     def planner_node(state: ThesisRefinementState) -> dict:
@@ -69,7 +91,10 @@ def _make_planner_node(llm_with_tools):
         )
 
         messages = state.get("messages", []) + [HumanMessage(content=prompt)]
-        response = llm_with_tools.invoke(messages)
+        invoke_kwargs = {}
+        if langfuse_handler:
+            invoke_kwargs["config"] = {"callbacks": [langfuse_handler]}
+        response = llm_with_tools.invoke(messages, **invoke_kwargs)
 
         if hasattr(response, "tool_calls") and response.tool_calls:
             tool_names = [tc["name"] for tc in response.tool_calls]
@@ -252,9 +277,11 @@ def build_refinement_graph(
         google_api_key=gemini_api_key,
     ).bind_tools(tools)
 
+    langfuse_handler = _create_langfuse_handler()
+
     graph = StateGraph(ThesisRefinementState)
 
-    graph.add_node("planner", _make_planner_node(planner_llm))
+    graph.add_node("planner", _make_planner_node(planner_llm, langfuse_handler))
     graph.add_node("tools", ToolNode(tools))
     graph.add_node("assemble", _make_assemble_node(scoring_service))
     graph.add_node("escalate", _escalate_node)
