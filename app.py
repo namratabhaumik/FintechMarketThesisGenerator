@@ -262,9 +262,9 @@ def _run_refinement_step(selected_feedback: list):
     history.append(current_thesis)
     st.session_state["refinement_history"] = history
 
-    # Get the LangGraph refinement graph
+    # Get the LangGraph refinement graph and Langfuse handler
     try:
-        graph = container.get_refinement_graph()
+        graph, langfuse_handler = container.get_refinement_graph()
     except NotImplementedError as e:
         st.error(f"Refinement not supported: {e}")
         return
@@ -283,8 +283,9 @@ def _run_refinement_step(selected_feedback: list):
 
     with st.spinner("🔧 Refining thesis based on your feedback..."):
         try:
-            # Invoke the graph for one step
-            result_state = graph.invoke(langgraph_state)
+            # Invoke the graph — Langfuse traces the full graph when handler is set
+            invoke_config = {"callbacks": [langfuse_handler]} if langfuse_handler else {}
+            result_state = graph.invoke(langgraph_state, config=invoke_config)
         except NotImplementedError as e:
             st.error(f"Refinement not available: {e}. Try using Gemini instead of local mode.")
             # Mark refinement as not supported (don't show history)
