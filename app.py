@@ -296,10 +296,10 @@ def _run_refinement_step(selected_feedback: list):
             st.error(f"Refinement failed: {str(e)}")
             return
 
-    # Analyze refined thesis for hallucinations
+    # Analyze actual tool calls from LLM messages for hallucinations
     refined_thesis = result_state["current_thesis"]
     detector = HallucinationDetector()
-    hallucination_analysis = detector.analyze(refined_thesis.raw_output or "")
+    hallucination_analysis = detector.analyze(result_state.get("messages", []))
 
     # Persist updated state to session
     st.session_state["generated_thesis"] = refined_thesis
