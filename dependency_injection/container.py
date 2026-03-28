@@ -5,8 +5,8 @@ from typing import Dict, Optional, Type
 
 from config.settings import AppConfig
 from core.implementations.article_sources.rss_source import RSSArticleSource
-from core.implementations.embeddings.huggingface_embeddings import (
-    HuggingFaceEmbeddingModel,
+from core.implementations.embeddings.fastembed_embeddings import (
+    FastEmbedEmbeddingModel,
 )
 from core.implementations.keyword_scoring_strategy import KeywordCountScoringStrategy
 from core.implementations.llm.ai_gateway import AIGateway
@@ -39,7 +39,7 @@ LLM_PROVIDER_REGISTRY: Dict[str, Type[ILanguageModel]] = {
 
 # To add a new embedding provider, see README.md
 EMBEDDING_PROVIDER_REGISTRY: Dict[str, Type[IEmbeddingModel]] = {
-    "huggingface": HuggingFaceEmbeddingModel,
+    "fastembed": FastEmbedEmbeddingModel,
 }
 
 logger = logging.getLogger(__name__)

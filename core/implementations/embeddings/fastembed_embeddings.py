@@ -1,8 +1,8 @@
-"""HuggingFace embeddings implementation."""
+"""FastEmbed embeddings implementation (ONNX-based, no PyTorch dependency)."""
 
 import logging
 
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_core.embeddings import Embeddings
 
 from config.settings import EmbeddingConfig
@@ -11,8 +11,8 @@ from core.interfaces.embeddings import IEmbeddingModel
 logger = logging.getLogger(__name__)
 
 
-class HuggingFaceEmbeddingModel(IEmbeddingModel):
-    """HuggingFace embeddings implementation."""
+class FastEmbedEmbeddingModel(IEmbeddingModel):
+    """FastEmbed embeddings implementation using ONNX runtime."""
 
     def __init__(self, config: EmbeddingConfig):
         """Initialize with embedding configuration.
@@ -21,8 +21,8 @@ class HuggingFaceEmbeddingModel(IEmbeddingModel):
             config: Embedding configuration with model name.
         """
         self._config = config
-        logger.info(f"Loading HuggingFace embeddings model: {config.model_name}")
-        self._embeddings = HuggingFaceEmbeddings(
+        logger.info(f"Loading FastEmbed model: {config.model_name}")
+        self._embeddings = FastEmbedEmbeddings(
             model_name=config.model_name
         )
 
