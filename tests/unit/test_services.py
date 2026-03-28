@@ -55,19 +55,18 @@ class TestDocumentRetrievalService:
     def test_build_vectorstore(self, mock_llm):
         """Test that vectorstore is built from documents."""
         from tests.conftest import MockLanguageModel
-        from core.implementations.embeddings.huggingface_embeddings import HuggingFaceEmbeddingModel
+        from core.implementations.embeddings.fastembed_embeddings import FastEmbedEmbeddingModel
         from core.implementations.vectorstores.faiss_store import FAISSVectorStore
         from config.settings import EmbeddingConfig, VectorStoreConfig
 
-        # This would require actual HuggingFace embeddings, so we skip in test
-        # In production, use mocks or skip this test
-        pytest.skip("Requires HuggingFace embeddings initialization")
+        # This would require actual FastEmbed model, so we skip in test
+        pytest.skip("Requires FastEmbed model initialization")
 
     def test_is_built_false_initially(self, mock_llm):
         """Test that vectorstore is not built initially."""
         from core.implementations.vectorstores.faiss_store import FAISSVectorStore
         from config.settings import VectorStoreConfig
-        from core.implementations.embeddings.huggingface_embeddings import HuggingFaceEmbeddingModel
+        from core.implementations.embeddings.fastembed_embeddings import FastEmbedEmbeddingModel
         from config.settings import EmbeddingConfig
 
         # Create minimal setup to test is_built() without actual vectorstore

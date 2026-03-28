@@ -29,9 +29,9 @@ class TestProviderRegistries:
         for provider, cls in LLM_PROVIDER_REGISTRY.items():
             assert issubclass(cls, ILanguageModel)
 
-    def test_embedding_provider_registry_contains_huggingface(self):
-        """Test that embedding registry includes HuggingFace provider."""
-        assert "huggingface" in EMBEDDING_PROVIDER_REGISTRY
+    def test_embedding_provider_registry_contains_fastembed(self):
+        """Test that embedding registry includes FastEmbed provider."""
+        assert "fastembed" in EMBEDDING_PROVIDER_REGISTRY
 
     def test_embedding_provider_registry_values_are_classes(self):
         """Test that embedding registry values are class types."""
@@ -58,7 +58,7 @@ class TestServiceContainer:
         config.llm.temperature = 0.0
 
         config.embedding = Mock(spec=EmbeddingConfig)
-        config.embedding.provider = "huggingface"
+        config.embedding.provider = "fastembed"
         config.embedding.model_name = "test-embedding-model"
 
         config.vectorstore = Mock(spec=VectorStoreConfig)
@@ -127,9 +127,9 @@ class TestServiceContainer:
 
     def test_get_embedding_model_uses_provider_registry(self, mock_config):
         """Test that get_embedding_model looks up provider from EMBEDDING_PROVIDER_REGISTRY."""
-        # Provider "huggingface" should be in the registry
-        assert "huggingface" in EMBEDDING_PROVIDER_REGISTRY
-        assert EMBEDDING_PROVIDER_REGISTRY["huggingface"].__name__ == "HuggingFaceEmbeddingModel"
+        # Provider "fastembed" should be in the registry
+        assert "fastembed" in EMBEDDING_PROVIDER_REGISTRY
+        assert EMBEDDING_PROVIDER_REGISTRY["fastembed"].__name__ == "FastEmbedEmbeddingModel"
 
     def test_get_embedding_model_raises_error_for_unknown_provider(self, mock_config):
         """Test that get_embedding_model raises ValueError for unknown provider."""
@@ -153,7 +153,7 @@ class TestServiceContainer:
 
         error_msg = str(exc_info.value)
         assert "Supported" in error_msg
-        assert "huggingface" in error_msg
+        assert "fastembed" in error_msg
 
     # === Vectorstore Provider Lookup ===
 
