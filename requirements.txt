@@ -23,6 +23,11 @@ beautifulsoup4==4.12.3
 requests>=2.32.5
 feedparser==6.0.12
 
+# API
+fastapi
+uvicorn[standard]
+sse-starlette
+
 # Utilities
 python-dotenv==1.0.0
 
