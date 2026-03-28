@@ -80,6 +80,10 @@ class ServiceContainer:
         self._opportunity_scoring_service: Optional[OpportunityScoringService] = None
         self._thesis_service: Optional[ThesisGeneratorService] = None
 
+        # Agents
+        self._refinement_graph: Optional[object] = None
+        self._langfuse_handler: Optional[object] = None
+
         logger.info("ServiceContainer initialized")
 
     # === Factory Methods for Core Interfaces ===
@@ -331,3 +335,30 @@ class ServiceContainer:
                 scoring_service=scoring_service,
             )
         return self._thesis_service
+
+    def get_refinement_graph(self) -> tuple:
+        """Get or create the compiled LangGraph refinement graph with real tool calling.
+
+        Returns:
+            Tuple of (compiled graph, langfuse handler or None).
+
+        Raises:
+            NotImplementedError: If Gemini API key is not configured.
+        """
+        if not self._refinement_graph:
+            if not self._config.llm.api_key:
+                raise NotImplementedError(
+                    "Refinement graph requires a Gemini API key (GOOGLE_API_KEY)."
+                )
+
+            logger.info("Creating LangGraph refinement graph with real tool calling")
+            from core.agents.refinement_graph import build_refinement_graph
+
+            self._refinement_graph, self._langfuse_handler = build_refinement_graph(
+                thesis_service=self.get_thesis_service(),
+                structuring_service=self.get_thesis_structurer(),
+                scoring_service=self.get_opportunity_scoring_service(),
+                gemini_api_key=self._config.llm.api_key,
+                model_name=self._config.llm.model_name,
+            )
+        return self._refinement_graph, self._langfuse_handler
