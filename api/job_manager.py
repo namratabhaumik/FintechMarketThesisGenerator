@@ -39,7 +39,7 @@ class JobManager:
 
     def __init__(self):
         self._jobs: Dict[str, Job] = {}
-        self._lock = Lock() #lock for? How does it work?
+        self._lock = Lock()
 
     def create_job(self, query: str) -> Job:
         """Create a new job and return it."""
