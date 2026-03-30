@@ -29,7 +29,7 @@ class ThesisRequest(BaseModel):
 
 class RefinementRequest(BaseModel):
     """Request to refine an existing thesis."""
-    feedback: List[str] = Field(..., min_items=1)
+    feedback: List[str] = Field(..., min_length=1)
 
 
 # --- Response schemas ---
