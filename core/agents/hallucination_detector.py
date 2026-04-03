@@ -13,8 +13,7 @@ logger = logging.getLogger(__name__)
 class HallucinationDetector:
     """Detect hallucinated tool calls from structured LLM tool_calls.
 
-    Analyzes actual tool_calls from AIMessages (not regex on text),
-    validating each against the tool registry.
+    Analyzes actual tool_calls from AIMessages, validating each against the tool registry.
     """
 
     def analyze(self, messages: List[BaseMessage]) -> Dict[str, Any]:
