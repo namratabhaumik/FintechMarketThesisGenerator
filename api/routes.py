@@ -175,7 +175,7 @@ async def stream_thesis_progress(
                 }
 
             if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
-                # Send final result
+                # Send final result and close the sse session
                 yield {
                     "event": "done",
                     "data": _job_to_response(job).model_dump_json(),
