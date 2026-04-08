@@ -31,9 +31,6 @@ sse-starlette
 # Supabase
 supabase
 
-# MCP (agent ↔ Supabase)
-langchain-mcp-adapters
-
 # Utilities
 python-dotenv==1.0.0
 

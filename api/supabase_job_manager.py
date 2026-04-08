@@ -32,7 +32,7 @@ class SupabaseJobManager:
     def create_job(self, query: str):
         """Create a new job row and return it."""
         job_id = uuid.uuid4().hex[:12]
-        row = {
+        row: Dict[str, Any] = {
             "id": job_id,
             "query": query,
             "status": JobStatus.PENDING.value,
@@ -59,7 +59,7 @@ class SupabaseJobManager:
             .maybe_single()
             .execute()
         )
-        if not resp.data:
+        if resp is None or not resp.data:
             return None
         return _RowProxy(resp.data)
 
@@ -146,5 +146,14 @@ class _RowProxy:
             if isinstance(a, dict):
                 self.articles.append(Article(**a))
 
-        # Retrieved docs stay as plain dicts (used by refinement agent)
-        self.retrieved_docs: list = data.get("retrieved_docs", [])
+        # Rehydrate retrieved docs from stored JSON dicts → Document objects
+        from langchain_core.documents import Document
+        raw_docs = data.get("retrieved_docs", [])
+        self.retrieved_docs: list = []
+        for d in raw_docs:
+            if isinstance(d, dict) and "page_content" in d:
+                self.retrieved_docs.append(
+                    Document(page_content=d["page_content"], metadata=d.get("metadata", {}))
+                )
+            else:
+                self.retrieved_docs.append(d)

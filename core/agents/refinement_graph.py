@@ -132,7 +132,12 @@ def _make_assemble_node(scoring_service: OpportunityScoringService):
         try:
             result = json.loads(last_tool_msg.content)
         except (json.JSONDecodeError, TypeError):
-            logger.error("assemble_node: could not parse tool result as JSON")
+            logger.error(f"assemble_node: could not parse tool result as JSON: {last_tool_msg.content[:200]}")
+            execution_log.append({
+                "tool_name": "unknown",
+                "status": "parse_error",
+                "refinement_number": new_refinement_count,
+            })
             return {
                 "refinement_count": new_refinement_count,
                 "status": "refining",
