@@ -62,6 +62,14 @@ class VectorStoreConfig:
 
 
 @dataclass
+class SupabaseConfig:
+    """Supabase connection configuration."""
+    url: str = ""
+    anon_key: str = ""
+    enabled: bool = False
+
+
+@dataclass
 class AIGatewayConfig:
     """AI Gateway configuration for cost optimization."""
     enabled: bool = True
@@ -81,6 +89,7 @@ class AppConfig:
     llm: LLMConfig
     vectorstore: VectorStoreConfig = field(default_factory=VectorStoreConfig)
     scraper: ScraperConfig = field(default_factory=ScraperConfig)
+    supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
     ai_gateway: AIGatewayConfig = field(default_factory=AIGatewayConfig)
 
     rss_feeds: List[RSSFeedConfig] = field(default_factory=lambda: [
@@ -153,6 +162,11 @@ class AppConfig:
 
         vs_provider = os.getenv("VECTORSTORE_PROVIDER", "faiss")
 
+        # Supabase configuration (optional — falls back to in-memory if not set)
+        supabase_url = os.getenv("SUPABASE_URL", "")
+        supabase_anon_key = os.getenv("SUPABASE_ANON_KEY", "")
+        supabase_enabled = bool(supabase_url and supabase_anon_key)
+
         # Load AI Gateway configuration
         ai_gateway_enabled = os.getenv("AI_GATEWAY_ENABLED", "true").lower() == "true"
         ai_gateway_strategy = os.getenv("AI_GATEWAY_STRATEGY", "hybrid")
@@ -174,6 +188,11 @@ class AppConfig:
                 model_name=embed_model,
             ),
             vectorstore=VectorStoreConfig(provider=vs_provider),
+            supabase=SupabaseConfig(
+                url=supabase_url,
+                anon_key=supabase_anon_key,
+                enabled=supabase_enabled,
+            ),
             ai_gateway=AIGatewayConfig(
                 enabled=ai_gateway_enabled,
                 strategy=ai_gateway_strategy,
