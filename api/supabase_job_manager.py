@@ -8,15 +8,18 @@ interface that route handlers expect.
 
 import logging
 import uuid
-from dataclasses import asdict
 from typing import Any, Dict, List, Optional
 
 from supabase import Client, create_client
 
 from api.schemas import JobStatus
+from api.serializers import (
+    rehydrate_articles,
+    rehydrate_docs,
+    rehydrate_thesis,
+    serialise_job_fields,
+)
 from core.interfaces.job_manager import IJobManager
-from core.models.article import Article
-from core.models.thesis import StructuredThesis
 
 logger = logging.getLogger(__name__)
 
@@ -74,23 +77,8 @@ class SupabaseJobManager(IJobManager):
         self._client.table(TABLE).update(update).eq("id", job_id).execute()
 
     def update_job(self, job_id: str, **fields):
-        """Persist arbitrary field updates to the job row.
-
-        Handles serialisation of dataclass fields (thesis, articles)
-        and LangChain Documents (retrieved_docs) to JSON-safe dicts.
-        """
-        payload: Dict[str, Any] = {}
-        for key, value in fields.items():
-            if key == "thesis" and value is not None:
-                payload[key] = asdict(value)
-            elif key == "articles":
-                payload[key] = [asdict(a) for a in value]
-            elif key == "status" and isinstance(value, JobStatus):
-                payload[key] = value.value
-            elif key == "retrieved_docs":
-                payload[key] = _serialise_docs(value)
-            else:
-                payload[key] = value
+        """Persist arbitrary field updates to the job row."""
+        payload = serialise_job_fields(**fields)
         if payload:
             self._client.table(TABLE).update(payload).eq("id", job_id).execute()
 
@@ -105,20 +93,12 @@ class SupabaseJobManager(IJobManager):
         return [_RowProxy(row) for row in resp.data]
 
 
-def _serialise_docs(docs: list) -> list:
-    """Convert LangChain Documents to JSON-safe dicts."""
-    result = []
-    for d in docs:
-        if hasattr(d, "page_content"):
-            result.append({"page_content": d.page_content, "metadata": d.metadata})
-        else:
-            result.append(d)
-    return result
-
-
 class _RowProxy:
     """Exposes a Supabase row dict as attributes so route handlers can use
     job.id, job.thesis, etc. instead of job["id"], job["thesis"].
+
+    Deserialization (JSON dicts → domain objects) is delegated to
+    api.serializers so this class only handles attribute mapping.
     """
 
     def __init__(self, data: dict):
@@ -132,29 +112,6 @@ class _RowProxy:
         self.refinement_status: str = data.get("refinement_status", "refining")
         self.feedback_history: list = data.get("feedback_history", [])
         self.execution_log: list = data.get("execution_log", [])
-
-        # Rehydrate thesis from stored JSON dict → StructuredThesis
-        raw_thesis = data.get("thesis")
-        if raw_thesis and isinstance(raw_thesis, dict):
-            self.thesis: Optional[StructuredThesis] = StructuredThesis(**raw_thesis)
-        else:
-            self.thesis = None
-
-        # Rehydrate articles from stored JSON dicts → Article objects
-        raw_articles = data.get("articles", [])
-        self.articles: List[Article] = []
-        for a in raw_articles:
-            if isinstance(a, dict):
-                self.articles.append(Article(**a))
-
-        # Rehydrate retrieved docs from stored JSON dicts → Document objects
-        from langchain_core.documents import Document
-        raw_docs = data.get("retrieved_docs", [])
-        self.retrieved_docs: list = []
-        for d in raw_docs:
-            if isinstance(d, dict) and "page_content" in d:
-                self.retrieved_docs.append(
-                    Document(page_content=d["page_content"], metadata=d.get("metadata", {}))
-                )
-            else:
-                self.retrieved_docs.append(d)
+        self.thesis = rehydrate_thesis(data.get("thesis"))
+        self.articles = rehydrate_articles(data.get("articles", []))
+        self.retrieved_docs = rehydrate_docs(data.get("retrieved_docs", []))
