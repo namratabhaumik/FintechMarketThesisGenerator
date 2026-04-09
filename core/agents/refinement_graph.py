@@ -3,12 +3,13 @@
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Optional, TypedDict
 
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
 from core.agents.execution_tracker import ExecutionTracker  # noqa: F401 (kept for compatibility)
@@ -44,7 +45,7 @@ class ThesisRefinementState(TypedDict):
     refinement_count: int
     status: str
     execution_log: List[Dict[str, Any]]
-    messages: List[BaseMessage]
+    messages: Annotated[List[BaseMessage], add_messages]
 
 
 def _create_langfuse_handler() -> Optional[object]:
