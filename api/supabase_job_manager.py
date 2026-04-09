@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from supabase import Client, create_client
 
 from api.schemas import JobStatus
+from core.interfaces.job_manager import IJobManager
 from core.models.article import Article
 from core.models.thesis import StructuredThesis
 
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 TABLE = "jobs"
 
 
-class SupabaseJobManager:
+class SupabaseJobManager(IJobManager):
     """Persistent job store backed by Supabase."""
 
     def __init__(self, url: str, anon_key: str):
