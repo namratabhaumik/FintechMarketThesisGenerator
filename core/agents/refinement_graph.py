@@ -3,12 +3,13 @@
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, Optional, TypedDict
 
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
 from core.agents.execution_tracker import ExecutionTracker  # noqa: F401 (kept for compatibility)
@@ -44,7 +45,7 @@ class ThesisRefinementState(TypedDict):
     refinement_count: int
     status: str
     execution_log: List[Dict[str, Any]]
-    messages: List[BaseMessage]
+    messages: Annotated[List[BaseMessage], add_messages]
 
 
 def _create_langfuse_handler() -> Optional[object]:
@@ -132,7 +133,12 @@ def _make_assemble_node(scoring_service: OpportunityScoringService):
         try:
             result = json.loads(last_tool_msg.content)
         except (json.JSONDecodeError, TypeError):
-            logger.error("assemble_node: could not parse tool result as JSON")
+            logger.error(f"assemble_node: could not parse tool result as JSON: {last_tool_msg.content[:200]}")
+            execution_log.append({
+                "tool_name": "unknown",
+                "status": "parse_error",
+                "refinement_number": new_refinement_count,
+            })
             return {
                 "refinement_count": new_refinement_count,
                 "status": "refining",

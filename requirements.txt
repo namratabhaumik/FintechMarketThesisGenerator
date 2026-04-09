@@ -28,6 +28,9 @@ fastapi
 uvicorn[standard]
 sse-starlette
 
+# Supabase
+supabase
+
 # Utilities
 python-dotenv==1.0.0
 
