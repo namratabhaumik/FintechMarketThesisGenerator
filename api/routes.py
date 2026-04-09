@@ -9,7 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sse_starlette.sse import EventSourceResponse
 
 from api.deps import get_container, get_job_manager
-from api.supabase_job_manager import SupabaseJobManager
+from core.interfaces.job_manager import IJobManager
 from api.schemas import (
     ArticleResponse,
     JobResponse,
@@ -67,7 +67,7 @@ def _job_to_response(job) -> JobResponse:
 
 # --- Background pipeline ---
 
-def _run_thesis_pipeline(job_id: str, container: ServiceContainer, jm: SupabaseJobManager):
+def _run_thesis_pipeline(job_id: str, container: ServiceContainer, jm: IJobManager):
     """Run the full thesis generation pipeline in a background thread.
 
     All state changes go through jm.update_status() / jm.update_job()
@@ -125,7 +125,7 @@ def create_thesis(
     request: ThesisRequest,
     background_tasks: BackgroundTasks,
     container: ServiceContainer = Depends(get_container),
-    jm: SupabaseJobManager = Depends(get_job_manager),
+    jm: IJobManager = Depends(get_job_manager),
 ):
     """Start a thesis generation job. Returns immediately with job_id."""
     job = jm.create_job(request.query)
@@ -134,7 +134,7 @@ def create_thesis(
 
 
 @router.get("/thesis/{job_id}", response_model=JobResponse)
-def get_thesis(job_id: str, jm: SupabaseJobManager = Depends(get_job_manager)):
+def get_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
     """Get current status and result of a thesis job."""
     job = jm.get_job(job_id)
     if not job:
@@ -145,7 +145,7 @@ def get_thesis(job_id: str, jm: SupabaseJobManager = Depends(get_job_manager)):
 @router.get("/thesis/{job_id}/stream")
 async def stream_thesis_progress(
     job_id: str,
-    jm: SupabaseJobManager = Depends(get_job_manager),
+    jm: IJobManager = Depends(get_job_manager),
 ):
     """SSE endpoint for real-time progress updates on a thesis job."""
     job = jm.get_job(job_id)
@@ -195,7 +195,7 @@ def refine_thesis(
     job_id: str,
     request: RefinementRequest,
     container: ServiceContainer = Depends(get_container),
-    jm: SupabaseJobManager = Depends(get_job_manager),
+    jm: IJobManager = Depends(get_job_manager),
 ):
     """Refine an existing thesis with user feedback."""
     job = jm.get_job(job_id)
@@ -254,7 +254,7 @@ def refine_thesis(
 
 
 @router.get("/jobs", response_model=List[JobResponse])
-def list_jobs(jm: SupabaseJobManager = Depends(get_job_manager)):
+def list_jobs(jm: IJobManager = Depends(get_job_manager)):
     """List all thesis generation jobs."""
     return [_job_to_response(j) for j in jm.list_jobs()]
 
