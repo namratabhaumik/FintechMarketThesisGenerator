@@ -6,7 +6,7 @@ Try it out here live: [Streamlit Cloud](https://namratabhaumik-fintechmarketthes
 
 ## Demo Video
 
-[![FinThesis Demo](https://img.youtube.com/vi/6TXiDPOqnj0/hqdefault.jpg)](https://youtu.be/6TXiDPOqnj0)
+[![FinThesis Demo](https://img.youtube.com/vi/73SnVdzeVrg/hqdefault.jpg)](https://youtu.be/73SnVdzeVrg)
 
 
 ## Features
