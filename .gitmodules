@@ -1,0 +1,3 @@
+[submodule "finthesis_internal"]
+	path = finthesis_internal
+	url = git@github.com:namratabhaumik/finthesis_internal.git
