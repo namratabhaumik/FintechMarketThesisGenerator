@@ -21,13 +21,20 @@ Each thesis includes:
 
 ## How it works
 
-- **Agentic refinement with LangGraph.** The refinement layer is an agent, not a pipeline re-run. It has access to `refine_thesis`, `structure_thesis`, and `score_opportunity` as tools and decides which to call. Tool calling uses `InjectedState` so the graph state is passed to tools cleanly.
-- **Hallucination detection on structured tool calls.** Every agent turn is validated against the actual tool calls in the message history, not the free-text output. If the agent invents a tool or a result, it is caught before the user sees it.
-- **Rule-based opportunity scoring, not LLM-generated.** The score, confidence, and recommendation come from a deterministic formula weighted by detected signals, themes, and risks. An investment recommendation black-boxed inside an LLM is not useful to an analyst; this one is auditable and human-interpretable.
-- **Dual-mode summarization.** Gemini (LLM) or a local keyword-scored extractive summarizer. The local mode was originally a workaround for the Gemini free tier; it now serves as a legitimate no-API fallback and a safety net when cost limits kick in.
-- **Langfuse observability.** Every agent run, tool call, and LLM call is traced so behavior is inspectable end-to-end, not just guessable from final output.
+**Ingestion → retrieval → generation:** RSS articles fetched, embedded via FastEmbed (ONNX), stored in FAISS, top-k chunks passed to Gemini for summarization and structuring.
 
-For detailed architecture and data flow, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+**Refinement agent (LangGraph):** After reading a thesis, the user picks from a fixed set of feedback reasons. A LangGraph agent reasons about which tool to call and rewrites only the part of the thesis that needs changing.
+
+- **`InjectedState` for tool context.** Tools need the current thesis, documents, and feedback history but the LLM only specifies a lightweight intent argument. `InjectedState` injects the full graph state into each tool at call time without exposing it to the LLM.
+- **Hallucination detection on message history.** Validates the structured `tool_calls` field on `AIMessage` objects against the registered tool registry. Invented tool names are caught in the trace before reaching the user.
+- **Execution trace in the UI.** Each tool invocation is logged to `execution_log` in graph state and rendered in the UI (tool name, status, refinement round). The agent's behavior is inspectable, not a black box.
+- **Fixed feedback reasons.** Each reason maps directly to a tool, keeping the agent's decision space narrow and its routing predictable.
+
+**Rule-based opportunity scoring.** Score (0–5), confidence, and recommendation come from a deterministic formula weighted by detected themes, risks, and signals.
+
+**Dual-mode summarization.** Gemini or a local keyword-scored extractive summarizer, a no-API fallback for when rate limits or cost constraints apply.
+
+**Langfuse observability.** Every graph run, tool call, and LLM call is traced end-to-end via a callback handler wired at the graph level.
 
 ## Try it locally
 
