@@ -36,36 +36,3 @@ Each thesis includes:
 
 **Langfuse observability.** Every graph run, tool call, and LLM call is traced end-to-end via a callback handler wired at the graph level.
 
-## Try it locally
-
-```bash
-git clone https://github.com/namratabhaumik/FintechMarketThesisGenerator.git
-cd FintechMarketThesisGenerator
-pip install -r requirements.txt
-```
-
-Create a `.env` file:
-
-```bash
-LLM_PROVIDER=gemini
-GOOGLE_API_KEY=your_gemini_api_key
-GEMINI_MODEL=gemini-2.5-flash-lite
-EMBEDDING_PROVIDER=fastembed
-EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
-```
-
-For no-API mode, set `LLM_PROVIDER=local` and omit the Gemini keys.
-
-Run it:
-
-```bash
-streamlit run app.py
-```
-
-## Stack
-
-Python, LangChain, LangGraph, FAISS, FastEmbed (ONNX), Gemini, Langfuse, Streamlit.
-
-## License
-
-MIT License - see LICENSE for details.
