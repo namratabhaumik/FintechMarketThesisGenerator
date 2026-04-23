@@ -22,6 +22,7 @@ jobs:
       with:
         app-id: ${{ secrets.FINTHESIS_APP_ID }}
         private-key: ${{ secrets.FINTHESIS_APP_PRIVATE_KEY }}
+        repositories: ${{ secrets.FINTHESIS_INTERNAL_REPO }}
 
     - name: Configure git to use token for private submodule
       run: |
