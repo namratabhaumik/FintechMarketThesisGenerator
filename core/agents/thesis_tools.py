@@ -8,7 +8,7 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
 from core.interfaces.thesis_structurer import IThesisStructurer
-from core.services.opportunity_scoring_service import OpportunityScoringService
+from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 from core.services.thesis_generator_service import ThesisGeneratorService
 
 logger = logging.getLogger(__name__)

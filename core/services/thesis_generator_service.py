@@ -8,7 +8,7 @@ from langchain_core.documents import Document
 from core.interfaces.llm import ILanguageModel
 from core.interfaces.thesis_structurer import IThesisStructurer
 from core.models.thesis import StructuredThesis
-from core.services.opportunity_scoring_service import OpportunityScoringService
+from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
 logger = logging.getLogger(__name__)
 
