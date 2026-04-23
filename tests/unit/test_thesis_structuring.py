@@ -2,8 +2,8 @@
 
 import pytest
 from core.services.thesis_structuring_service import ThesisStructuringService
-from core.implementations.keyword_scoring_strategy import KeywordCountScoringStrategy
-from core.services.category_mappings import ThemeMappings, RiskMappings, SignalMappings
+from finthesis_internal.keyword_scoring_strategy import KeywordCountScoringStrategy
+from finthesis_internal.category_mappings import ThemeMappings, RiskMappings, SignalMappings
 
 
 class TestThesisStructuringService:

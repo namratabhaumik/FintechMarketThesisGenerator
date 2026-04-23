@@ -4,4 +4,4 @@
 import subprocess
 import sys
 
-subprocess.run(["python", "-m", "pytest", "tests/unit/", "-q"], check=False)
+subprocess.run([sys.executable, "-m", "pytest", "tests/unit/", "-q"], check=False)

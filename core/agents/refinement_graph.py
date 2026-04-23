@@ -16,7 +16,7 @@ from core.agents.execution_tracker import ExecutionTracker  # noqa: F401 (kept f
 from core.agents.thesis_tools import create_thesis_tools
 from core.interfaces.thesis_structurer import IThesisStructurer
 from core.models.thesis import StructuredThesis
-from core.services.opportunity_scoring_service import OpportunityScoringService
+from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 from core.services.thesis_generator_service import ThesisGeneratorService
 
 logger = logging.getLogger(__name__)

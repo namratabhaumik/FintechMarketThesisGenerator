@@ -79,7 +79,7 @@ class TestThesisGeneratorService:
     def test_generate_thesis_structure(self, mock_llm, mock_scoring_strategy):
         """Test that thesis has correct structure."""
         from core.services.thesis_structuring_service import ThesisStructuringService
-        from core.services.opportunity_scoring_service import OpportunityScoringService
+        from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
         structurer = ThesisStructuringService(mock_scoring_strategy)
         scoring_service = OpportunityScoringService()
@@ -96,7 +96,7 @@ class TestThesisGeneratorService:
     def test_generate_thesis_with_mock_llm(self, mock_llm, mock_scoring_strategy):
         """Test thesis generation with mock LLM."""
         from core.services.thesis_structuring_service import ThesisStructuringService
-        from core.services.opportunity_scoring_service import OpportunityScoringService
+        from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
         structurer = ThesisStructuringService(mock_scoring_strategy)
         scoring_service = OpportunityScoringService()
@@ -111,7 +111,7 @@ class TestThesisGeneratorService:
     def test_generate_thesis_includes_opportunity_score(self, mock_llm, mock_scoring_strategy):
         """Test that thesis includes opportunity score and confidence."""
         from core.services.thesis_structuring_service import ThesisStructuringService
-        from core.services.opportunity_scoring_service import OpportunityScoringService
+        from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
         structurer = ThesisStructuringService(mock_scoring_strategy)
         scoring_service = OpportunityScoringService()
@@ -134,7 +134,7 @@ class TestThesisGeneratorService:
     def test_generate_thesis_recommendation_based_on_score(self, mock_llm, mock_scoring_strategy):
         """Test that recommendation matches score thresholds."""
         from core.services.thesis_structuring_service import ThesisStructuringService
-        from core.services.opportunity_scoring_service import OpportunityScoringService
+        from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
         structurer = ThesisStructuringService(mock_scoring_strategy)
         scoring_service = OpportunityScoringService()

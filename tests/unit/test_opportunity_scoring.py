@@ -1,7 +1,7 @@
 """Unit tests for opportunity scoring service."""
 
 import pytest
-from core.services.opportunity_scoring_service import OpportunityScoringService
+from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
 
 class TestOpportunityScoringService:

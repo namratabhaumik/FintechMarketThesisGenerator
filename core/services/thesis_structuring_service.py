@@ -3,7 +3,7 @@
 import logging
 from typing import Dict, List
 
-from core.services.category_mappings import ThemeMappings, RiskMappings, SignalMappings
+from finthesis_internal.category_mappings import ThemeMappings, RiskMappings, SignalMappings
 from core.interfaces.scoring_strategy import IScoringStrategy
 from core.interfaces.thesis_structurer import IThesisStructurer
 
