@@ -8,7 +8,7 @@ from core.implementations.article_sources.rss_source import RSSArticleSource
 from core.implementations.embeddings.fastembed_embeddings import (
     FastEmbedEmbeddingModel,
 )
-from core.implementations.keyword_scoring_strategy import KeywordCountScoringStrategy
+from finthesis_internal.keyword_scoring_strategy import KeywordCountScoringStrategy
 from core.implementations.llm.ai_gateway import AIGateway
 from core.implementations.llm.cache_manager import CacheManager
 from core.implementations.llm.cost_tracker import CostTracker
@@ -26,7 +26,7 @@ from core.interfaces.thesis_structurer import IThesisStructurer
 from core.interfaces.vectorstore import IVectorStore
 from core.services.approval_service import ApprovalService
 from core.services.ingestion_service import ArticleIngestionService
-from core.services.opportunity_scoring_service import OpportunityScoringService
+from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 from core.services.retrieval_service import DocumentRetrievalService
 from core.services.thesis_generator_service import ThesisGeneratorService
 from core.services.thesis_structuring_service import ThesisStructuringService

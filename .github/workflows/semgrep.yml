@@ -1,6 +1,9 @@
 name: Semgrep Scan
 
 on:
+  push:
+    branches: 
+      - master
   pull_request:
     branches:
       - master

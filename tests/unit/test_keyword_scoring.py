@@ -1,7 +1,7 @@
 """Unit tests for KeywordCountScoringStrategy."""
 
 import pytest
-from core.implementations.keyword_scoring_strategy import KeywordCountScoringStrategy
+from finthesis_internal.keyword_scoring_strategy import KeywordCountScoringStrategy
 
 
 @pytest.fixture
