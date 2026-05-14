@@ -2,9 +2,11 @@ name: CI with Private Submodule
 
 on:
   push:
-    branches: [ master, feat/* ]
+    branches: 
+      - master
   pull_request:
-    branches: [ master ]
+    branches: 
+      - master
 
 jobs:
   build-and-test:
