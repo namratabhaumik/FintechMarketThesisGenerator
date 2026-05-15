@@ -4,6 +4,8 @@ import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 
+import pandas as pd
+
 from core.models.cost_metric import CostMetric
 
 logger = logging.getLogger(__name__)
@@ -134,23 +136,22 @@ class CostTracker:
                 "by_provider": {},
             }
 
-        cache_hits = sum(1 for m in self._metrics if m.cache_hit)
-        avg_latency = sum(m.latency_ms for m in self._metrics) / len(self._metrics)
+        df = pd.DataFrame([m.to_dict() for m in self._metrics])
 
-        # Group by provider
-        by_provider = {}
-        for metric in self._metrics:
-            if metric.provider not in by_provider:
-                by_provider[metric.provider] = {
-                    "calls": 0,
-                    "cost": 0.0,
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                }
-            by_provider[metric.provider]["calls"] += 1
-            by_provider[metric.provider]["cost"] += metric.cost
-            by_provider[metric.provider]["input_tokens"] += metric.input_tokens
-            by_provider[metric.provider]["output_tokens"] += metric.output_tokens
+        cache_hits = int(df["cache_hit"].sum())
+        avg_latency = df["latency_ms"].mean()
+
+        by_provider = (
+            df.groupby("provider")
+            .agg(
+                calls=("cost", "count"),
+                cost=("cost", "sum"),
+                input_tokens=("input_tokens", "sum"),
+                output_tokens=("output_tokens", "sum"),
+            )
+            .round({"cost": 6})
+            .to_dict(orient="index")
+        )
 
         return {
             "total_calls": len(self._metrics),
