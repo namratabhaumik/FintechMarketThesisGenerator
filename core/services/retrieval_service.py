@@ -59,11 +59,15 @@ class DocumentRetrievalService:
             )
 
         logger.info(f"Retrieving {k} documents for query: {query}")
-        retriever = self._vectorstore_impl.as_retriever(
-            self._vectorstore_instance,
-            k=k
-        )
-        docs = retriever.invoke(query)
+        try:
+            retriever = self._vectorstore_impl.as_retriever(
+                self._vectorstore_instance,
+                k=k
+            )
+            docs = retriever.invoke(query)
+        except Exception as e:
+            logger.error(f"Retrieval failed for query '{query}': {e}")
+            raise
         logger.info(f"Retrieved {len(docs)} documents")
         return docs
 

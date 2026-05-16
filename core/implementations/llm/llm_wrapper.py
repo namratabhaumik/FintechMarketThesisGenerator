@@ -1,10 +1,16 @@
 """LLM wrapper with retry logic and fallback."""
 
 import logging
-import time
 from typing import List
 
 from langchain_core.documents import Document
+from tenacity import (
+    Retrying,
+    before_sleep_log,
+    retry_if_not_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from core.interfaces.llm import ILanguageModel
 
@@ -43,11 +49,21 @@ class LLMWrapper(ILanguageModel):
             f"max_retries={max_retries}"
         )
 
+    def _make_retrying(self, **kwargs) -> Retrying:
+        return Retrying(
+            stop=stop_after_attempt(self._max_retries + 1),
+            wait=wait_exponential(
+                multiplier=self._initial_delay_seconds,
+                min=self._initial_delay_seconds,
+                max=30,
+            ),
+            reraise=True,
+            before_sleep=before_sleep_log(logger, logging.WARNING),
+            **kwargs,
+        )
+
     def summarize(self, documents: List[Document]) -> str:
         """Summarize documents with retry logic and fallback.
-
-        Attempts to use primary LLM with exponential backoff retries.
-        If primary fails after all retries, falls back to secondary LLM.
 
         Args:
             documents: List of LangChain Document objects.
@@ -58,41 +74,24 @@ class LLMWrapper(ILanguageModel):
         logger.info(
             f"Attempting summarization with primary LLM ({self._primary_llm.get_model_name()})"
         )
-
-        delay = self._initial_delay_seconds
-        for attempt in range(self._max_retries + 1):
-            try:
-                logger.info(
-                    f"Attempt {attempt + 1}/{self._max_retries + 1} "
-                    f"with {self._primary_llm.get_model_name()}"
-                )
-                result = self._primary_llm.summarize(documents)
-                logger.info("Primary LLM summarization succeeded")
-                return result
-
-            except Exception as e:
-                logger.warning(
-                    f"Attempt {attempt + 1} failed: {e}. "
-                    f"Retries remaining: {self._max_retries - attempt}"
-                )
-
-                if attempt < self._max_retries:
-                    logger.info(f"Waiting {delay}s before retry...")
-                    time.sleep(delay)
-                    delay *= 2  # Exponential backoff
-
-        # All retries exhausted, use fallback
-        logger.warning(
-            f"Primary LLM ({self._primary_llm.get_model_name()}) exhausted. "
-            f"Falling back to {self._fallback_llm.get_model_name()}"
-        )
         try:
-            result = self._fallback_llm.summarize(documents)
-            logger.info("Fallback LLM summarization succeeded")
+            for attempt in self._make_retrying():
+                with attempt:
+                    result = self._primary_llm.summarize(documents)
+            logger.info("Primary LLM summarization succeeded")
             return result
-        except Exception as e:
-            logger.error(f"Fallback LLM also failed: {e}")
-            raise
+        except Exception:
+            logger.warning(
+                f"Primary LLM ({self._primary_llm.get_model_name()}) exhausted. "
+                f"Falling back to {self._fallback_llm.get_model_name()}"
+            )
+            try:
+                result = self._fallback_llm.summarize(documents)
+                logger.info("Fallback LLM summarization succeeded")
+                return result
+            except Exception as e:
+                logger.error(f"Fallback LLM also failed: {e}")
+                raise
 
     def get_model_name(self) -> str:
         """Return model identifier showing both primary and fallback."""
@@ -106,9 +105,7 @@ class LLMWrapper(ILanguageModel):
     ) -> str:
         """Refine thesis with retry logic and fallback.
 
-        Attempts to use primary LLM with exponential backoff retries.
-        If primary fails, falls back to secondary LLM.
-        Re-raises NotImplementedError immediately (no retry, no fallback).
+        NotImplementedError is re-raised immediately — no retry, no fallback.
 
         Args:
             documents: Source documents for context.
@@ -121,48 +118,32 @@ class LLMWrapper(ILanguageModel):
         logger.info(
             f"Attempting refinement with primary LLM ({self._primary_llm.get_model_name()})"
         )
-
-        delay = self._initial_delay_seconds
-        for attempt in range(self._max_retries + 1):
+        try:
+            for attempt in self._make_retrying(
+                retry=retry_if_not_exception_type(NotImplementedError)
+            ):
+                with attempt:
+                    result = self._primary_llm.refine(
+                        documents, current_thesis_text, feedback_items
+                    )
+            logger.info("Primary LLM refinement succeeded")
+            return result
+        except NotImplementedError:
+            logger.error(
+                f"{self._primary_llm.get_model_name()} does not support refinement"
+            )
+            raise
+        except Exception:
+            logger.warning(
+                f"Primary LLM ({self._primary_llm.get_model_name()}) exhausted. "
+                f"Falling back to {self._fallback_llm.get_model_name()}"
+            )
             try:
-                logger.info(
-                    f"Attempt {attempt + 1}/{self._max_retries + 1} "
-                    f"with {self._primary_llm.get_model_name()}"
-                )
-                result = self._primary_llm.refine(
+                result = self._fallback_llm.refine(
                     documents, current_thesis_text, feedback_items
                 )
-                logger.info("Primary LLM refinement succeeded")
+                logger.info("Fallback LLM refinement succeeded")
                 return result
-
-            except NotImplementedError:
-                logger.error(
-                    f"{self._primary_llm.get_model_name()} does not support refinement"
-                )
-                raise  # Do not retry or fall back on not-implemented
-
             except Exception as e:
-                logger.warning(
-                    f"Attempt {attempt + 1} failed: {e}. "
-                    f"Retries remaining: {self._max_retries - attempt}"
-                )
-
-                if attempt < self._max_retries:
-                    logger.info(f"Waiting {delay}s before retry...")
-                    time.sleep(delay)
-                    delay *= 2  # Exponential backoff
-
-        # All retries exhausted, use fallback
-        logger.warning(
-            f"Primary LLM ({self._primary_llm.get_model_name()}) exhausted. "
-            f"Falling back to {self._fallback_llm.get_model_name()}"
-        )
-        try:
-            result = self._fallback_llm.refine(
-                documents, current_thesis_text, feedback_items
-            )
-            logger.info("Fallback LLM refinement succeeded")
-            return result
-        except Exception as e:
-            logger.error(f"Fallback LLM also failed: {e}")
-            raise
+                logger.error(f"Fallback LLM also failed: {e}")
+                raise

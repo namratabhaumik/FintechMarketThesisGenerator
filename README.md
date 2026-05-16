@@ -4,8 +4,6 @@
 
 [![FinThesis Demo](https://img.youtube.com/vi/73SnVdzeVrg/hqdefault.jpg)](https://youtu.be/73SnVdzeVrg)
 
-Try it live: [Streamlit Cloud](https://namratabhaumik-fintechmarketthesisgenerator-app-qqdzns.streamlit.app/)
-
 ---
 
 ## What it does

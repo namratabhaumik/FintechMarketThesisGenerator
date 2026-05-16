@@ -92,7 +92,11 @@ def _make_planner_node(llm_with_tools):
         )
 
         messages = state.get("messages", []) + [HumanMessage(content=prompt)]
-        response = llm_with_tools.invoke(messages)
+        try:
+            response = llm_with_tools.invoke(messages)
+        except Exception as e:
+            logger.error(f"Planner LLM call failed: {e}")
+            raise
 
         if hasattr(response, "tool_calls") and response.tool_calls:
             tool_names = [tc["name"] for tc in response.tool_calls]

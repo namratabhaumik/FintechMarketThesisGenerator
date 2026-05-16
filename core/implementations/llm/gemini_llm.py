@@ -117,7 +117,11 @@ Please produce a revised thesis that:
 
 Refined Thesis:"""
 
-        logger.info("Refining thesis with Gemini based on user feedback")
-        result = self._llm.invoke([HumanMessage(content=prompt)])
-        logger.info("Thesis refinement complete")
-        return result.content
+        try:
+            logger.info("Refining thesis with Gemini based on user feedback")
+            result = self._llm.invoke([HumanMessage(content=prompt)])
+            logger.info("Thesis refinement complete")
+            return result.content
+        except Exception as e:
+            logger.error(f"Gemini refinement failed: {e}")
+            raise

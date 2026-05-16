@@ -50,3 +50,6 @@ black==23.12.1
 
 # Pre-commit hooks
 pre-commit==3.6.0
+
+# Data analysis
+pandas==2.3.3
