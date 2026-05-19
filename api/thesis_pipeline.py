@@ -55,7 +55,7 @@ class ThesisPipelineService:
             job_id, JobStatus.FETCHING_ARTICLES, "Fetching fintech news..."
         )
         ingestion = self._container.get_ingestion_service()
-        articles = ingestion.fetch_articles(query="fintech", limit=5)
+        articles = ingestion.fetch_articles(query="fintech", limit=20)
         if not articles:
             self._jm.update_status(job_id, JobStatus.FAILED, "No articles found")
             self._jm.update_job(job_id, error="No articles found from RSS feeds")
