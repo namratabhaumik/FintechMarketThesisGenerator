@@ -3,7 +3,7 @@
 import logging
 from typing import List
 
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 from core.interfaces.article_source import IArticleSource
 from core.models.article import Article

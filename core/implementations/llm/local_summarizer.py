@@ -4,7 +4,7 @@ import logging
 import re
 from typing import List
 
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 from config.settings import LLMConfig
 from core.interfaces.llm import ILanguageModel

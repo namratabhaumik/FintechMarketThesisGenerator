@@ -3,9 +3,9 @@
 import logging
 from typing import Any, List, Set
 
-from langchain.docstore.document import Document
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores.base import VectorStore
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.vectorstores import VectorStore
 from langchain_community.vectorstores import SupabaseVectorStore
 from supabase import Client
 

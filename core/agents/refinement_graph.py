@@ -58,13 +58,10 @@ def _create_langfuse_handler() -> Optional[object]:
         logger.info("Langfuse credentials not set — tracing disabled")
         return None
 
-    from langfuse.callback import CallbackHandler
+    from langfuse.langchain import CallbackHandler
 
-    handler = CallbackHandler(
-        secret_key=secret_key,
-        public_key=public_key,
-        host=host,
-    )
+    # v4+: credentials read from LANGFUSE_SECRET_KEY / LANGFUSE_HOST env vars automatically
+    handler = CallbackHandler(public_key=public_key)
     logger.info("Langfuse tracing enabled")
     return handler
 
