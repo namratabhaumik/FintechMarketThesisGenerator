@@ -42,7 +42,7 @@ container = ServiceContainer(config)
 
 job_manager = SupabaseJobManager(
     url=config.supabase.url,
-    anon_key=config.supabase.anon_key,
+    service_role_key=config.supabase.service_role_key,
 )
 
 init_dependencies(container, job_manager)

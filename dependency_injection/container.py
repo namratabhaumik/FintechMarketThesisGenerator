@@ -17,6 +17,7 @@ from core.implementations.llm.local_summarizer import LocalSummarizerModel
 from core.implementations.llm.llm_wrapper import LLMWrapper
 from core.implementations.scrapers.beautifulsoup_scraper import BeautifulSoupScraper
 from core.implementations.vectorstores.faiss_store import FAISSVectorStore
+from core.implementations.vectorstores.supabase_vector_store import SupabaseVectorStoreImpl
 from core.interfaces.article_source import IArticleSource
 from core.interfaces.embeddings import IEmbeddingModel
 from core.interfaces.llm import ILanguageModel
@@ -155,6 +156,22 @@ class ServiceContainer:
                 self._vectorstore = FAISSVectorStore(
                     self._config.vectorstore,
                     embedding_model
+                )
+            elif self._config.vectorstore.provider == "supabase":
+                if not self._config.supabase.enabled:
+                    raise ValueError(
+                        "VECTORSTORE_PROVIDER=supabase requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY"
+                    )
+                from supabase import create_client
+                embedding_model = self.get_embedding_model()
+                supabase_client = create_client(
+                    self._config.supabase.url,
+                    self._config.supabase.service_role_key,
+                )
+                self._vectorstore = SupabaseVectorStoreImpl(
+                    self._config.vectorstore,
+                    embedding_model,
+                    supabase_client,
                 )
             else:
                 raise ValueError(
