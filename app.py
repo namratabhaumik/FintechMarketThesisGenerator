@@ -381,7 +381,7 @@ if st.button("Generate Thesis"):
 
             # Step 1: Fetch articles
             with st.spinner("Fetching latest fintech news from RSS feeds..."):
-                articles = ingestion_service.fetch_articles(query="fintech", limit=5)
+                articles = ingestion_service.fetch_articles(query="fintech", limit=20)
 
                 if not articles:
                     st.warning("No articles found. Please try again later.")
