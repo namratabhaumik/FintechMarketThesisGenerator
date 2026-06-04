@@ -434,13 +434,13 @@ if st.button("Generate Thesis"):
 
 # Step 5: Display articles (outside button block so they persist across reruns)
 if "articles" in st.session_state:
-    st.subheader("Latest Fintech Articles")
     articles = st.session_state["articles"]
-    for article in articles:
-        if article.url:
-            st.markdown(f"• [{article.title}]({article.url})")
-        else:
-            st.markdown(f"• {article.title}")
+    with st.expander(f"Latest Fintech Articles"):
+        for article in articles:
+            if article.url:
+                st.markdown(f"• [{article.title}]({article.url})")
+            else:
+                st.markdown(f"• {article.title}")
 
 # Step 6: Display results (outside button block so toggle doesn't disappear)
 if "generated_thesis" in st.session_state:
