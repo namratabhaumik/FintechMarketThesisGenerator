@@ -43,6 +43,27 @@ EMBEDDING_PROVIDER_REGISTRY: Dict[str, Type[IEmbeddingModel]] = {
     "fastembed": FastEmbedEmbeddingModel,
 }
 
+
+def _build_faiss_store(app_config: "AppConfig", embedding_model) -> IVectorStore:
+    return FAISSVectorStore(app_config.vectorstore, embedding_model)
+
+
+def _build_supabase_store(app_config: "AppConfig", embedding_model) -> IVectorStore:
+    if not app_config.supabase.enabled:
+        raise ValueError(
+            "VECTORSTORE_PROVIDER=supabase requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY"
+        )
+    from supabase import create_client
+    client = create_client(app_config.supabase.url, app_config.supabase.service_role_key)
+    return SupabaseVectorStoreImpl(app_config.vectorstore, embedding_model, client)
+
+
+# To add a new vectorstore provider, add an entry here and a factory function above
+VECTORSTORE_PROVIDER_REGISTRY = {
+    "faiss": _build_faiss_store,
+    "supabase": _build_supabase_store,
+}
+
 logger = logging.getLogger(__name__)
 
 
@@ -149,34 +170,18 @@ class ServiceContainer:
             ValueError: If configured vectorstore provider is unknown.
         """
         if not self._vectorstore:
-            logger.info(f"Creating {self._config.vectorstore.provider} vectorstore")
+            provider = self._config.vectorstore.provider
+            factory = VECTORSTORE_PROVIDER_REGISTRY.get(provider)
 
-            if self._config.vectorstore.provider == "faiss":
-                embedding_model = self.get_embedding_model()
-                self._vectorstore = FAISSVectorStore(
-                    self._config.vectorstore,
-                    embedding_model
-                )
-            elif self._config.vectorstore.provider == "supabase":
-                if not self._config.supabase.enabled:
-                    raise ValueError(
-                        "VECTORSTORE_PROVIDER=supabase requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY"
-                    )
-                from supabase import create_client
-                embedding_model = self.get_embedding_model()
-                supabase_client = create_client(
-                    self._config.supabase.url,
-                    self._config.supabase.service_role_key,
-                )
-                self._vectorstore = SupabaseVectorStoreImpl(
-                    self._config.vectorstore,
-                    embedding_model,
-                    supabase_client,
-                )
-            else:
+            if not factory:
                 raise ValueError(
-                    f"Unknown vectorstore provider: {self._config.vectorstore.provider}"
+                    f"Unknown vectorstore provider: '{provider}'. "
+                    f"Supported: {list(VECTORSTORE_PROVIDER_REGISTRY.keys())}"
                 )
+
+            logger.info(f"Creating {provider} vectorstore")
+            embedding_model = self.get_embedding_model()
+            self._vectorstore = factory(self._config, embedding_model)
 
         return self._vectorstore
 
