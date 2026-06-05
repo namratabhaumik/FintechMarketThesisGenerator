@@ -4,9 +4,9 @@ import logging
 from typing import Any, List
 
 from langchain_community.vectorstores import FAISS
-from langchain.docstore.document import Document
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.vectorstores.base import VectorStore
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.vectorstores import VectorStore
 
 from config.settings import VectorStoreConfig
 from core.interfaces.embeddings import IEmbeddingModel

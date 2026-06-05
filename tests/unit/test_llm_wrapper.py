@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import Mock, patch
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 from core.implementations.llm.llm_wrapper import LLMWrapper
 from core.interfaces.llm import ILanguageModel

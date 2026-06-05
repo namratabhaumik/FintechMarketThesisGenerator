@@ -22,7 +22,7 @@ class TestSupabaseJobManager:
         """Create a SupabaseJobManager with mocked client."""
         with patch("api.supabase_job_manager.create_client", return_value=mock_client):
             from api.supabase_job_manager import SupabaseJobManager
-            return SupabaseJobManager(url="https://fake.supabase.co", anon_key="fake-key")
+            return SupabaseJobManager(url="https://fake.supabase.co", service_role_key="fake-key")
 
     def test_create_job(self, jm, mock_client):
         """Test creating a new job inserts a row and returns a proxy."""

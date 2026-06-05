@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import Mock
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 from config.settings import LLMConfig
 from core.implementations.llm.local_summarizer import LocalSummarizerModel

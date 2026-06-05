@@ -3,8 +3,8 @@
 from abc import ABC, abstractmethod
 from typing import Any, List
 
-from langchain.docstore.document import Document
-from langchain.vectorstores.base import VectorStore
+from langchain_core.documents import Document
+from langchain_core.vectorstores import VectorStore
 
 
 class IVectorStore(ABC):

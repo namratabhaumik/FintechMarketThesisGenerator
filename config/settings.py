@@ -65,7 +65,7 @@ class VectorStoreConfig:
 class SupabaseConfig:
     """Supabase connection configuration."""
     url: str = ""
-    anon_key: str = ""
+    service_role_key: str = ""
     enabled: bool = False
 
 
@@ -164,8 +164,8 @@ class AppConfig:
 
         # Supabase configuration (optional — falls back to in-memory if not set)
         supabase_url = os.getenv("SUPABASE_URL", "")
-        supabase_anon_key = os.getenv("SUPABASE_ANON_KEY", "")
-        supabase_enabled = bool(supabase_url and supabase_anon_key)
+        supabase_service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+        supabase_enabled = bool(supabase_url and supabase_service_role_key)
 
         # Load AI Gateway configuration
         ai_gateway_enabled = os.getenv("AI_GATEWAY_ENABLED", "true").lower() == "true"
@@ -190,7 +190,7 @@ class AppConfig:
             vectorstore=VectorStoreConfig(provider=vs_provider),
             supabase=SupabaseConfig(
                 url=supabase_url,
-                anon_key=supabase_anon_key,
+                service_role_key=supabase_service_role_key,
                 enabled=supabase_enabled,
             ),
             ai_gateway=AIGatewayConfig(

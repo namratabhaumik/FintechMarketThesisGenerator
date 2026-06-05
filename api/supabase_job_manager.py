@@ -29,8 +29,8 @@ TABLE = "jobs"
 class SupabaseJobManager(IJobManager):
     """Persistent job store backed by Supabase."""
 
-    def __init__(self, url: str, anon_key: str):
-        self._client: Client = create_client(url, anon_key)
+    def __init__(self, url: str, service_role_key: str):
+        self._client: Client = create_client(url, service_role_key)
         logger.info("SupabaseJobManager connected")
 
     def create_job(self, query: str):

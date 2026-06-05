@@ -1,7 +1,7 @@
 """Unit tests for service layer."""
 
 import pytest
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 from core.services.ingestion_service import ArticleIngestionService
 from core.services.retrieval_service import DocumentRetrievalService

@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime
 from unittest.mock import Mock, patch, MagicMock
-from langchain.docstore.document import Document
+from langchain_core.documents import Document
 
 from core.implementations.llm.cache_manager import CacheManager
 from core.implementations.llm.cost_tracker import CostTracker
