@@ -378,7 +378,6 @@ class ServiceContainer:
 
             self._refinement_graph, self._langfuse_handler = build_refinement_graph(
                 thesis_service=self.get_thesis_service(),
-                structuring_service=self.get_thesis_structurer(),
                 scoring_service=self.get_opportunity_scoring_service(),
                 gemini_api_key=self._config.llm.api_key,
                 model_name=self._config.llm.model_name,

@@ -7,7 +7,6 @@ from typing import Annotated
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from core.interfaces.thesis_structurer import IThesisStructurer
 from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 from core.services.thesis_generator_service import ThesisGeneratorService
 
@@ -16,7 +15,6 @@ logger = logging.getLogger(__name__)
 
 def create_thesis_tools(
     thesis_service: ThesisGeneratorService,
-    structuring_service: IThesisStructurer,
     scoring_service: OpportunityScoringService,
 ) -> list:
     """Create LangChain tools bound to services via closure.
@@ -26,7 +24,6 @@ def create_thesis_tools(
 
     Args:
         thesis_service: For LLM-based thesis refinement.
-        structuring_service: For keyword-based re-structuring.
         scoring_service: For rule-based re-scoring.
 
     Returns:
@@ -110,31 +107,4 @@ def create_thesis_tools(
             "key_risk_factors": result["key_risks"],
         })
 
-    @tool
-    def structure_thesis(
-        reason: str,
-        state: Annotated[dict, InjectedState],
-    ) -> str:
-        """Re-extract themes, risks, and investment signals from existing thesis text.
-
-        Use ONLY when the thesis structure needs reorganising without changing
-        the underlying content or score.
-
-        Args:
-            reason: Brief explanation of why re-structuring is needed.
-        """
-        current_thesis = state["current_thesis"]
-        raw_text = current_thesis.raw_output or ""
-
-        logger.info(f"Tool structure_thesis: reason='{reason}'")
-
-        result = structuring_service.structure_thesis(raw_text)
-
-        return json.dumps({
-            "tool": "structure_thesis",
-            "key_themes": result.get("key_themes", []),
-            "risks": result.get("risks", []),
-            "investment_signals": result.get("investment_signals", []),
-        })
-
-    return [refine_thesis, score_opportunity, structure_thesis]
+    return [refine_thesis, score_opportunity]

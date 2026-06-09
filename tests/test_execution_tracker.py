@@ -15,13 +15,12 @@ def test_execution_tracker():
     print("\n[TEST 1] Log Tool Execution")
     print("-" * 80)
     tracker.log_execution("refine_thesis", status="executed", details={"refinement_number": 1})
-    tracker.log_execution("structure_thesis", status="executed", details={"success": True})
     tracker.log_execution("score_opportunity", status="executed")
 
     executed = tracker.get_executed_tools()
     print(f"Tools that executed: {executed}")
-    print(f"Expected: ['refine_thesis', 'structure_thesis', 'score_opportunity']")
-    assert executed == ["refine_thesis", "structure_thesis", "score_opportunity"], "❌ FAIL"
+    print(f"Expected: ['refine_thesis', 'score_opportunity']")
+    assert executed == ["refine_thesis", "score_opportunity"], "❌ FAIL"
     print("✅ PASS")
 
     # Test 2: Check if tool executed
@@ -51,8 +50,8 @@ def test_execution_tracker():
     print("-" * 80)
     events = tracker.get_events()
     print(f"Total events logged: {len(events)}")
-    print(f"Expected: 4")
-    assert len(events) == 4, "❌ FAIL"
+    print(f"Expected: 3")
+    assert len(events) == 3, "❌ FAIL"
     print("✅ PASS")
 
     # Test 5: Serialize tracker
@@ -62,8 +61,8 @@ def test_execution_tracker():
     print(f"Total events: {state['total_events']}")
     print(f"Executed count: {state['executed_count']}")
     print(f"Failed count: {state['failed_count']}")
-    assert state["total_events"] == 4, "❌ FAIL"
-    assert state["executed_count"] == 3, "❌ FAIL"
+    assert state["total_events"] == 3, "❌ FAIL"
+    assert state["executed_count"] == 2, "❌ FAIL"
     assert state["failed_count"] == 1, "❌ FAIL"
     print("✅ PASS")
 

@@ -14,7 +14,6 @@ from langgraph.prebuilt import ToolNode
 
 from core.agents.execution_tracker import ExecutionTracker  # noqa: F401 (kept for compatibility)
 from core.agents.thesis_tools import create_thesis_tools
-from core.interfaces.thesis_structurer import IThesisStructurer
 from core.models.thesis import StructuredThesis
 from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 from core.services.thesis_generator_service import ThesisGeneratorService
@@ -84,8 +83,7 @@ def _make_planner_node(llm_with_tools):
             f"Tool selection guide:\n"
             f"- refine_thesis: content needs changing (missing trends, vague signals, "
             f"too many risks, too broad, weak evidence)\n"
-            f"- score_opportunity: ONLY if user explicitly says score is wrong\n"
-            f"- structure_thesis: ONLY if themes/risks/signals need reorganising"
+            f"- score_opportunity: ONLY if user explicitly says score is wrong"
         )
 
         messages = state.get("messages", []) + [HumanMessage(content=prompt)]
@@ -175,29 +173,6 @@ def _make_assemble_node(scoring_service: OpportunityScoringService):
                 key_risk_factors=result.get("key_risk_factors", current.key_risk_factors),
             )
 
-        elif tool_name == "structure_thesis":
-            # Update structure, re-score with new components
-            key_themes = result.get("key_themes", current.key_themes)
-            risks = result.get("risks", current.risks)
-            investment_signals = result.get("investment_signals", current.investment_signals)
-            score_result = scoring_service.score_opportunity(
-                key_themes=key_themes,
-                risks=risks,
-                investment_signals=investment_signals,
-                sources=current.sources,
-            )
-            new_thesis = StructuredThesis(
-                key_themes=key_themes,
-                risks=risks,
-                investment_signals=investment_signals,
-                sources=current.sources,
-                raw_output=current.raw_output,
-                opportunity_score=score_result["score"],
-                confidence_level=score_result["confidence_level"],
-                recommendation=score_result["recommendation"],
-                key_risk_factors=score_result["key_risks"],
-            )
-
         else:
             logger.warning(f"assemble_node: unknown tool '{tool_name}', keeping current thesis")
             new_thesis = current
@@ -251,7 +226,6 @@ def _route_after_planner(state: ThesisRefinementState) -> str:
 
 def build_refinement_graph(
     thesis_service: ThesisGeneratorService,
-    structuring_service: IThesisStructurer,
     scoring_service: OpportunityScoringService,
     gemini_api_key: str,
     model_name: str = "gemini-2.0-flash",
@@ -265,7 +239,6 @@ def build_refinement_graph(
 
     Args:
         thesis_service: For LLM-driven thesis rewriting.
-        structuring_service: For keyword-based re-structuring.
         scoring_service: For rule-based re-scoring.
         gemini_api_key: API key for the planner LLM.
         model_name: Gemini model to use for tool-call decisions.
@@ -273,7 +246,7 @@ def build_refinement_graph(
     Returns:
         Tuple of (compiled graph, langfuse callback handler or None).
     """
-    tools = create_thesis_tools(thesis_service, structuring_service, scoring_service)
+    tools = create_thesis_tools(thesis_service, scoring_service)
 
     planner_llm = ChatGoogleGenerativeAI(
         model=model_name,
