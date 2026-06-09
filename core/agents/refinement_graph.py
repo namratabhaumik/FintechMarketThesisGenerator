@@ -49,27 +49,18 @@ class ThesisRefinementState(TypedDict):
 
 def _create_langfuse_handler() -> Optional[object]:
     """Create a Langfuse callback handler if credentials are configured."""
-    secret_key = os.getenv("LANGFUSE_SECRET_KEY")
-    public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
-    host = (
-        os.getenv("LANGFUSE_HOST")
-        or os.getenv("LANGFUSE_BASE_URL")
-        or "https://cloud.langfuse.com"
-    )
-
-    if not secret_key or not public_key:
+    if not (os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")):
         logger.info("Langfuse credentials not set - tracing disabled")
         return None
 
     from langfuse import Langfuse
     from langfuse.langchain import CallbackHandler
 
-    # v4: CallbackHandler only binds to a global Langfuse client singleton; it does
-    # not create one. The client must be initialized explicitly or no trace is sent.
-    Langfuse(public_key=public_key, secret_key=secret_key, host=host)
-    handler = CallbackHandler(public_key=public_key)
+    # v4: the CallbackHandler only binds to a global Langfuse client singleton, so it
+    # must be initialized first. Langfuse() reads keys + LANGFUSE_BASE_URL from env.
+    Langfuse()
     logger.info("Langfuse tracing enabled")
-    return handler
+    return CallbackHandler()
 
 
 def _make_planner_node(llm_with_tools):
