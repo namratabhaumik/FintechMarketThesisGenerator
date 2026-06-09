@@ -11,14 +11,14 @@ dependencies = [
     "langchain-google-genai>=2.1.12",
     "langgraph==1.0.1",
     # Observability
-    "langfuse==2.60.0",
+    "langfuse>=4,<5",
     # Vector Store
     "faiss-cpu==1.12.0",
     # Embeddings
     "fastembed>=0.4.0",
     # Web Scraping
     "beautifulsoup4==4.12.3",
-    "requests==2.32.5",
+    "requests==2.34.2",
     "feedparser==6.0.12",
     # API
     "fastapi==0.135.2",

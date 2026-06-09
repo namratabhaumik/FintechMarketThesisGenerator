@@ -51,15 +51,22 @@ def _create_langfuse_handler() -> Optional[object]:
     """Create a Langfuse callback handler if credentials are configured."""
     secret_key = os.getenv("LANGFUSE_SECRET_KEY")
     public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
-    host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    host = (
+        os.getenv("LANGFUSE_HOST")
+        or os.getenv("LANGFUSE_BASE_URL")
+        or "https://cloud.langfuse.com"
+    )
 
     if not secret_key or not public_key:
-        logger.info("Langfuse credentials not set — tracing disabled")
+        logger.info("Langfuse credentials not set - tracing disabled")
         return None
 
+    from langfuse import Langfuse
     from langfuse.langchain import CallbackHandler
 
-    # v4+: credentials read from LANGFUSE_SECRET_KEY / LANGFUSE_HOST env vars automatically
+    # v4: CallbackHandler only binds to a global Langfuse client singleton; it does
+    # not create one. The client must be initialized explicitly or no trace is sent.
+    Langfuse(public_key=public_key, secret_key=secret_key, host=host)
     handler = CallbackHandler(public_key=public_key)
     logger.info("Langfuse tracing enabled")
     return handler
@@ -228,7 +235,7 @@ def build_refinement_graph(
     thesis_service: ThesisGeneratorService,
     scoring_service: OpportunityScoringService,
     gemini_api_key: str,
-    model_name: str = "gemini-2.0-flash",
+    model_name: str = "gemini-2.5-flash",
 ) -> object:
     """Build and compile the LangGraph refinement graph with real tool calling.
 
