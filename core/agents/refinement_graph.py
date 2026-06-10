@@ -102,78 +102,102 @@ def _make_planner_node(llm_with_tools):
     return planner_node
 
 
+def _resolve_components(tool_name: str, result: dict, current: StructuredThesis):
+    """Resolve thesis components for a recognized tool, or None if unknown.
+
+    refine_thesis takes new content from the tool result; score_opportunity
+    reuses the current content (it only triggers a re-score).
+
+    Returns:
+        Tuple (key_themes, risks, investment_signals, sources, raw_output),
+        or None when the tool name is not recognized.
+    """
+    if tool_name == "refine_thesis":
+        return (
+            result.get("key_themes", current.key_themes),
+            result.get("risks", current.risks),
+            result.get("investment_signals", current.investment_signals),
+            result.get("sources", current.sources),
+            result.get("raw_output", current.raw_output),
+        )
+    if tool_name == "score_opportunity":
+        return (
+            current.key_themes,
+            current.risks,
+            current.investment_signals,
+            current.sources,
+            current.raw_output,
+        )
+    return None
+
+
+def _score_and_build(scoring_service: OpportunityScoringService, components) -> StructuredThesis:
+    """Deterministically score components and assemble a StructuredThesis.
+
+    components is (key_themes, risks, investment_signals, sources, raw_output).
+    """
+    key_themes, risks, investment_signals, sources, raw_output = components
+    score = scoring_service.score_opportunity(
+        key_themes=key_themes,
+        risks=risks,
+        investment_signals=investment_signals,
+        sources=sources,
+    )
+    return StructuredThesis(
+        key_themes=key_themes,
+        risks=risks,
+        investment_signals=investment_signals,
+        sources=sources,
+        raw_output=raw_output,
+        opportunity_score=score["score"],
+        confidence_level=score["confidence_level"],
+        recommendation=score["recommendation"],
+        key_risk_factors=score["key_risks"],
+    )
+
+
 def _make_assemble_node(scoring_service: OpportunityScoringService):
     """Return an assemble node that rebuilds StructuredThesis from tool output."""
 
     def assemble_node(state: ThesisRefinementState) -> dict:
-        # Find the last ToolMessage
-        tool_messages = [m for m in state["messages"] if isinstance(m, ToolMessage)]
-
         current = state["current_thesis"]
         execution_log = list(state.get("execution_log", []))
         new_refinement_count = state["refinement_count"] + 1
 
+        def skip(tool_name: str, status: str) -> dict:
+            """Log a non-update and return state with the thesis unchanged."""
+            execution_log.append({
+                "tool_name": tool_name,
+                "status": status,
+                "refinement_number": new_refinement_count,
+            })
+            return {
+                "refinement_count": new_refinement_count,
+                "status": "refining",
+                "execution_log": execution_log,
+            }
+
+        tool_messages = [m for m in state["messages"] if isinstance(m, ToolMessage)]
         if not tool_messages:
             logger.warning("assemble_node: no ToolMessage found, keeping current thesis")
-            execution_log.append({
-                "tool_name": "no_tool",
-                "status": "skipped",
-                "refinement_number": new_refinement_count,
-            })
-            return {
-                "refinement_count": new_refinement_count,
-                "status": "refining",
-                "execution_log": execution_log,
-            }
+            return skip("no_tool", "skipped")
 
-        last_tool_msg = tool_messages[-1]
         try:
-            result = json.loads(last_tool_msg.content)
+            result = json.loads(tool_messages[-1].content)
         except (json.JSONDecodeError, TypeError):
-            logger.error(f"assemble_node: could not parse tool result as JSON: {last_tool_msg.content[:200]}")
-            execution_log.append({
-                "tool_name": "unknown",
-                "status": "parse_error",
-                "refinement_number": new_refinement_count,
-            })
-            return {
-                "refinement_count": new_refinement_count,
-                "status": "refining",
-                "execution_log": execution_log,
-            }
+            logger.error(
+                f"assemble_node: could not parse tool result as JSON: "
+                f"{tool_messages[-1].content[:200]}"
+            )
+            return skip("unknown", "parse_error")
 
         tool_name = result.get("tool", "unknown")
-
-        if tool_name == "refine_thesis":
-            new_thesis = StructuredThesis(
-                key_themes=result.get("key_themes", current.key_themes),
-                risks=result.get("risks", current.risks),
-                investment_signals=result.get("investment_signals", current.investment_signals),
-                sources=result.get("sources", current.sources),
-                raw_output=result.get("raw_output", current.raw_output),
-                opportunity_score=result.get("opportunity_score", current.opportunity_score),
-                confidence_level=result.get("confidence_level", current.confidence_level),
-                recommendation=result.get("recommendation", current.recommendation),
-                key_risk_factors=result.get("key_risk_factors", current.key_risk_factors),
-            )
-
-        elif tool_name == "score_opportunity":
-            # Keep content, update score fields only
-            new_thesis = StructuredThesis(
-                key_themes=current.key_themes,
-                risks=current.risks,
-                investment_signals=current.investment_signals,
-                sources=current.sources,
-                raw_output=current.raw_output,
-                opportunity_score=result.get("opportunity_score", current.opportunity_score),
-                confidence_level=result.get("confidence_level", current.confidence_level),
-                recommendation=result.get("recommendation", current.recommendation),
-                key_risk_factors=result.get("key_risk_factors", current.key_risk_factors),
-            )
-
-        else:
+        components = _resolve_components(tool_name, result, current)
+        if components is None:
             logger.warning(f"assemble_node: unknown tool '{tool_name}', keeping current thesis")
-            new_thesis = current
+            return skip(tool_name, "skipped")
+
+        new_thesis = _score_and_build(scoring_service, components)
 
         execution_log.append({
             "tool_name": tool_name,

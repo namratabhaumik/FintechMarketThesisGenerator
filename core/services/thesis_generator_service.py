@@ -105,8 +105,10 @@ class ThesisGeneratorService:
     ) -> StructuredThesis:
         """Refine an existing thesis based on user feedback.
 
-        Calls LLM with feedback-aware prompt, then runs same structuring
-        and scoring pipeline as generate_thesis.
+        Calls the LLM for a feedback-aware rewrite, then runs the same
+        structuring as generate_thesis; assemble_node owns the single 
+        deterministic scoring step, keeping the scoring service the 
+        sole authority for scores.
 
         Args:
             topic: Original market topic for analysis.
@@ -136,28 +138,11 @@ class ThesisGeneratorService:
         logger.info("Step 3: Extracting sources from documents...")
         sources = [doc.metadata["url"] for doc in documents if doc.metadata.get("url")]
 
-        # Step 4: Score opportunity (same as generate_thesis)
-        logger.info("Step 4: Scoring refined opportunity...")
-        key_themes = result.get("key_themes", [])
-        risks = result.get("risks", [])
-        investment_signals = result.get("investment_signals", [])
-
-        score_result = self._scoring_service.score_opportunity(
-            key_themes=key_themes,
-            risks=risks,
-            investment_signals=investment_signals,
-            sources=sources
-        )
-
-        logger.info("Successfully refined thesis with updated scoring")
+        logger.info("Successfully refined thesis content (scoring handled downstream)")
         return StructuredThesis(
-            key_themes=key_themes,
-            risks=risks,
-            investment_signals=investment_signals,
+            key_themes=result.get("key_themes", []),
+            risks=result.get("risks", []),
+            investment_signals=result.get("investment_signals", []),
             sources=sources,
             raw_output=refined_summary,
-            opportunity_score=score_result["score"],
-            confidence_level=score_result["confidence_level"],
-            recommendation=score_result["recommendation"],
-            key_risk_factors=score_result["key_risks"]
         )
