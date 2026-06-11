@@ -80,7 +80,8 @@ class ThesisGeneratorService:
             key_themes=key_themes,
             risks=risks,
             investment_signals=investment_signals,
-            sources=sources
+            sources=sources,
+            raw_text=summary
         )
 
         logger.info("Successfully generated structured thesis with scoring")

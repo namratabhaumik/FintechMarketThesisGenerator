@@ -135,6 +135,7 @@ def _score_and_build(scoring_service: OpportunityScoringService, components) -> 
         risks=risks,
         investment_signals=investment_signals,
         sources=sources,
+        raw_text=raw_output,
     )
     return StructuredThesis(
         key_themes=key_themes,

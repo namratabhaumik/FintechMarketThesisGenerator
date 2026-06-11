@@ -337,7 +337,9 @@ class ServiceContainer:
         """
         if not self._opportunity_scoring_service:
             logger.info("Creating OpportunityScoringService")
-            self._opportunity_scoring_service = OpportunityScoringService()
+            self._opportunity_scoring_service = OpportunityScoringService(
+                scoring_strategy=self.get_scoring_strategy()
+            )
         return self._opportunity_scoring_service
 
     def get_thesis_service(self) -> ThesisGeneratorService:
