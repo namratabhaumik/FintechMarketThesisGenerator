@@ -5,7 +5,6 @@ from typing import Dict
 # Available tools in the refinement system
 AVAILABLE_TOOLS: Dict[str, str] = {
     "refine_thesis": "Refine the investment thesis based on user feedback and source documents",
-    "score_opportunity": "Score the investment opportunity on a scale and provide recommendation",
 }
 
 

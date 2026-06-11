@@ -7,7 +7,6 @@ from typing import Annotated
 from langchain_core.tools import tool
 from langgraph.prebuilt import InjectedState
 
-from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 from core.services.thesis_generator_service import ThesisGeneratorService
 
 logger = logging.getLogger(__name__)
@@ -15,7 +14,6 @@ logger = logging.getLogger(__name__)
 
 def create_thesis_tools(
     thesis_service: ThesisGeneratorService,
-    scoring_service: OpportunityScoringService,
 ) -> list:
     """Create LangChain tools bound to services via closure.
 
@@ -24,7 +22,6 @@ def create_thesis_tools(
 
     Args:
         thesis_service: For LLM-based thesis refinement.
-        scoring_service: For rule-based re-scoring.
 
     Returns:
         List of LangChain tool functions ready for binding to an LLM.
@@ -71,36 +68,4 @@ def create_thesis_tools(
             "raw_output": refined.raw_output,
         })
 
-    @tool
-    def score_opportunity(
-        reason: str,
-        state: Annotated[dict, InjectedState],
-    ) -> str:
-        """Re-calculate the investment opportunity score and recommendation.
-
-        Use ONLY when the score or recommendation needs updating without
-        changing the thesis content — e.g. user says score seems too low.
-
-        Args:
-            reason: Brief explanation of why rescoring is needed.
-        """
-        current_thesis = state["current_thesis"]
-
-        logger.info(f"Tool score_opportunity: reason='{reason}'")
-
-        result = scoring_service.score_opportunity(
-            key_themes=current_thesis.key_themes,
-            risks=current_thesis.risks,
-            investment_signals=current_thesis.investment_signals,
-            sources=current_thesis.sources,
-        )
-
-        return json.dumps({
-            "tool": "score_opportunity",
-            "opportunity_score": result["score"],
-            "confidence_level": result["confidence_level"],
-            "recommendation": result["recommendation"],
-            "key_risk_factors": result["key_risks"],
-        })
-
-    return [refine_thesis, score_opportunity]
+    return [refine_thesis]

@@ -79,9 +79,10 @@ def _make_planner_node(llm_with_tools):
             f"RECOMMENDATION: {state['current_thesis'].recommendation}\n\n"
             f"USER FEEDBACK:\n{feedback_str}\n\n"
             f"Tool selection guide:\n"
-            f"- refine_thesis: content needs changing (missing trends, vague signals, "
-            f"too many risks, too broad, weak evidence)\n"
-            f"- score_opportunity: ONLY if user explicitly says score is wrong"
+            f"- refine_thesis: rewrite the thesis to address the feedback - missing "
+            f"trends, vague signals, too many risks, too broad, weak evidence, or a "
+            f"score the user disputes (strengthen signals / trim weak risks). The "
+            f"opportunity score is recomputed automatically from the revised content."
         )
 
         messages = state.get("messages", []) + [HumanMessage(content=prompt)]
@@ -105,8 +106,8 @@ def _make_planner_node(llm_with_tools):
 def _resolve_components(tool_name: str, result: dict, current: StructuredThesis):
     """Resolve thesis components for a recognized tool, or None if unknown.
 
-    refine_thesis takes new content from the tool result; score_opportunity
-    reuses the current content (it only triggers a re-score).
+    refine_thesis takes its new content from the tool result; scoring itself
+    is handled downstream by _score_and_build.
 
     Returns:
         Tuple (key_themes, risks, investment_signals, sources, raw_output),
@@ -119,14 +120,6 @@ def _resolve_components(tool_name: str, result: dict, current: StructuredThesis)
             result.get("investment_signals", current.investment_signals),
             result.get("sources", current.sources),
             result.get("raw_output", current.raw_output),
-        )
-    if tool_name == "score_opportunity":
-        return (
-            current.key_themes,
-            current.risks,
-            current.investment_signals,
-            current.sources,
-            current.raw_output,
         )
     return None
 
@@ -268,7 +261,7 @@ def build_refinement_graph(
     Returns:
         Tuple of (compiled graph, langfuse callback handler or None).
     """
-    tools = create_thesis_tools(thesis_service, scoring_service)
+    tools = create_thesis_tools(thesis_service)
 
     planner_llm = ChatGoogleGenerativeAI(
         model=model_name,
