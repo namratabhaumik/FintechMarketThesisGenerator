@@ -8,7 +8,7 @@ interface that route handlers expect.
 
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from supabase import Client, create_client
 

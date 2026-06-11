@@ -39,8 +39,7 @@ dev = [
     "mypy==1.7.1",
     "types-requests==2.32.4.20260107",
     "types-beautifulsoup4==4.12.0.20250516",
-    "ruff==0.1.7",
-    "black==23.12.1",
+    "ruff==0.15.17",
     "pre-commit==3.6.0",
 ]
 
@@ -63,7 +62,4 @@ ignore_missing_imports = true
 [tool.ruff]
 line-length = 88
 target-version = "py314"
-
-[tool.black]
-line-length = 88
-target-version = ["py314"]
+exclude = ["finthesis_internal"]

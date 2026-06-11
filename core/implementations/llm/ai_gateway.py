@@ -9,8 +9,7 @@ from langchain_core.documents import Document
 from core.interfaces.llm import ILanguageModel
 from core.implementations.llm.cache_manager import CacheManager
 from core.implementations.llm.cost_tracker import CostTracker
-from core.implementations.llm.routing_strategy import get_strategy, RoutingStrategy
-from core.models.cache_entry import CacheEntry
+from core.implementations.llm.routing_strategy import get_strategy
 from config.settings import AIGatewayConfig
 
 logger = logging.getLogger(__name__)
@@ -239,7 +238,6 @@ class AIGateway(ILanguageModel):
             Refined thesis text.
         """
         start_time = time.time()
-        docs_text = self._get_documents_text(documents)
         topic = "fintech"  # Default topic
 
         # Generate cache key from thesis + feedback

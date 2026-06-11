@@ -18,7 +18,7 @@ def test_execution_tracker():
 
     executed = tracker.get_executed_tools()
     print(f"Tools that executed: {executed}")
-    print(f"Expected: ['refine_thesis']")
+    print("Expected: ['refine_thesis']")
     assert executed == ["refine_thesis"], "❌ FAIL"
     print("✅ PASS")
 
@@ -40,7 +40,7 @@ def test_execution_tracker():
     )
     failed = tracker.get_failed_tools()
     print(f"Failed tools: {failed}")
-    print(f"Expected: ['invalid_tool']")
+    print("Expected: ['invalid_tool']")
     assert failed == ["invalid_tool"], "❌ FAIL"
     print("✅ PASS")
 
@@ -49,7 +49,7 @@ def test_execution_tracker():
     print("-" * 80)
     events = tracker.get_events()
     print(f"Total events logged: {len(events)}")
-    print(f"Expected: 2")
+    print("Expected: 2")
     assert len(events) == 2, "❌ FAIL"
     print("✅ PASS")
 

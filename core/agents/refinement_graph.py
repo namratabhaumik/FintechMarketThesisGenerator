@@ -8,7 +8,7 @@ from typing import Annotated, Any, Dict, List, Optional, TypedDict
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
@@ -191,6 +191,8 @@ def _make_assemble_node(scoring_service: OpportunityScoringService):
             logger.warning(f"assemble_node: unknown tool '{tool_name}', keeping current thesis")
             return skip(tool_name, "skipped")
 
+        # Deterministic re-score of the refined content - the score may move up OR down
+        # (e.g. if the rewrite surfaces more risk language), since it reflects content.
         new_thesis = _score_and_build(scoring_service, components)
 
         execution_log.append({

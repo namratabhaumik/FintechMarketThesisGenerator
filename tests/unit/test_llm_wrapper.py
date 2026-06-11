@@ -52,8 +52,8 @@ class TestLLMWrapperSuccess:
         assert mock_primary_llm.summarize.call_count == 1
         assert mock_fallback_llm.summarize.call_count == 0
 
-    def test_model_name_includes_both_llms(self, mock_primary_llm, mock_fallback_llm):
-        """get_model_name shows both primary and fallback."""
+    def test_model_name_returns_primary_only(self, mock_primary_llm, mock_fallback_llm):
+        """get_model_name returns the primary (billable) model name only."""
         wrapper = LLMWrapper(
             primary_llm=mock_primary_llm,
             fallback_llm=mock_fallback_llm
@@ -61,7 +61,7 @@ class TestLLMWrapperSuccess:
 
         model_name = wrapper.get_model_name()
         assert "primary-llm" in model_name
-        assert "fallback-llm" in model_name
+        assert "fallback-llm" not in model_name
 
 
 class TestLLMWrapperFallback:

@@ -1,6 +1,5 @@
 """Service for managing human approval of opportunity scoring recommendations."""
 
-import json
 import logging
 from datetime import datetime
 from typing import Dict, Literal

@@ -82,7 +82,7 @@ class TestServiceContainer:
         """Test that container initializes with None (loads from env)."""
         with patch("dependency_injection.container.AppConfig.from_env") as mock_from_env:
             mock_from_env.return_value = Mock(spec=AppConfig)
-            container = ServiceContainer(None)
+            ServiceContainer(None)
             mock_from_env.assert_called_once()
 
     def test_container_stores_config(self, mock_config):
@@ -185,7 +185,6 @@ class TestServiceContainer:
 
     def test_get_article_source_method_exists(self, mock_config):
         """Test that get_article_source method exists and returns IArticleSource."""
-        from core.interfaces.article_source import IArticleSource
 
         container = ServiceContainer(mock_config)
         assert hasattr(container, "get_article_source")
@@ -199,7 +198,6 @@ class TestServiceContainer:
 
     def test_get_thesis_service_creates_thesis_generator_service(self, mock_config):
         """Test that get_thesis_service returns ThesisGeneratorService."""
-        from core.services.thesis_generator_service import ThesisGeneratorService
 
         container = ServiceContainer(mock_config)
         assert hasattr(container, "get_thesis_service")

@@ -1,6 +1,5 @@
 """Unit tests for text_utils.clean_article_text."""
 
-import pytest
 from core.utils.text_utils import clean_article_text
 
 

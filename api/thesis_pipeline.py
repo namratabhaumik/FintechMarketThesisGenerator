@@ -32,7 +32,7 @@ class ThesisPipelineService:
             if not articles:
                 return
 
-            documents = self._build_vectorstore(job_id, articles)
+            self._build_vectorstore(job_id, articles)
             docs = self._retrieve_docs(job_id, job.query)
             if not docs:
                 return

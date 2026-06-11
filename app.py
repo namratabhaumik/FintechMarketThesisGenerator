@@ -435,7 +435,7 @@ if st.button("Generate Thesis"):
 # Step 5: Display articles (outside button block so they persist across reruns)
 if "articles" in st.session_state:
     articles = st.session_state["articles"]
-    with st.expander(f"Latest Fintech Articles"):
+    with st.expander("Latest Fintech Articles"):
         for article in articles:
             if article.url:
                 st.markdown(f"• [{article.title}]({article.url})")

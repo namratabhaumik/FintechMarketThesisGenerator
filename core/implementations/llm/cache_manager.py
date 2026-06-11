@@ -2,8 +2,7 @@
 
 import hashlib
 import logging
-from typing import Optional, Dict, List
-from datetime import datetime
+from typing import Optional, Dict
 
 from core.models.cache_entry import CacheEntry
 
