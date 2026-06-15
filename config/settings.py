@@ -31,6 +31,23 @@ class RSSFeedConfig:
 
 
 @dataclass
+class ClassifierConfig:
+    """Fintech relevance classifier configuration.
+
+    `provider` selects the backend: "ollama" (local) or "huggingface" (hosted).
+    `model` is the chat model to run, so each user can pick one that
+    fits their hardware; from_env resolves a provider-appropriate default.
+    `api_key` is the HF token (huggingface only); `base_url` is the Ollama
+    server (ollama only).
+    """
+    provider: str = "ollama"
+    model: str = ""
+    api_key: str = ""
+    base_url: str = "http://localhost:11434"
+    timeout: int = 30
+
+
+@dataclass
 class ScraperConfig:
     """Web scraper configuration."""
     timeout: int = 10
@@ -89,15 +106,26 @@ class AppConfig:
     llm: LLMConfig
     vectorstore: VectorStoreConfig = field(default_factory=VectorStoreConfig)
     scraper: ScraperConfig = field(default_factory=ScraperConfig)
+    classifier: ClassifierConfig = field(default_factory=ClassifierConfig)
     supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
     ai_gateway: AIGatewayConfig = field(default_factory=AIGatewayConfig)
 
     rss_feeds: List[RSSFeedConfig] = field(default_factory=lambda: [
         RSSFeedConfig(
-            name="TechCrunch Fintech",
+            name="TechCrunch",
+            url="https://techcrunch.com/feed/",
+            enabled=True
+        ),
+        RSSFeedConfig(
+            name="TechCrunch Fintech (category)",
             url="https://techcrunch.com/category/fintech/feed/",
             enabled=True
-        )
+        ),
+        RSSFeedConfig(
+            name="TechCrunch Fintech (tag)",
+            url="https://techcrunch.com/tag/fintech/feed/",
+            enabled=True
+        ),
     ])
 
     @classmethod
@@ -154,6 +182,21 @@ class AppConfig:
                 else:
                     missing.append(model_env)
 
+        # Fintech relevance classifier — always on. Default provider is local
+        # Ollama (no token); HF_TOKEN is required only for the huggingface provider.
+        classifier_provider = os.getenv("CLASSIFIER_PROVIDER", "ollama").lower()
+        hf_token = os.getenv("HF_TOKEN", "")
+        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        # Default model differs by backend (Ollama tag vs HF repo id).
+        default_model = (
+            "Qwen/Qwen2.5-7B-Instruct"
+            if classifier_provider == "huggingface"
+            else "qwen2.5:7b"
+        )
+        classifier_model = os.getenv("CLASSIFIER_MODEL", default_model)
+        if classifier_provider == "huggingface" and not hf_token:
+            missing.append("HF_TOKEN")
+
         if missing:
             raise EnvironmentError(
                 f"Missing required environment variables: {', '.join(missing)}. "
@@ -186,6 +229,12 @@ class AppConfig:
             embedding=EmbeddingConfig(
                 provider=embed_provider,
                 model_name=embed_model,
+            ),
+            classifier=ClassifierConfig(
+                provider=classifier_provider,
+                model=classifier_model,
+                api_key=hf_token,
+                base_url=ollama_base_url,
             ),
             vectorstore=VectorStoreConfig(provider=vs_provider),
             supabase=SupabaseConfig(

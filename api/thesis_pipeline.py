@@ -8,6 +8,7 @@ its result through IJobManager so progress is visible in real time.
 import logging
 
 from api.schemas import JobStatus
+from core.exceptions import NoArticlesFetchedError, NoRelevantArticlesError
 from core.interfaces.job_manager import IJobManager
 from dependency_injection.container import ServiceContainer
 
@@ -55,10 +56,17 @@ class ThesisPipelineService:
             job_id, JobStatus.FETCHING_ARTICLES, "Fetching fintech news..."
         )
         ingestion = self._container.get_ingestion_service()
-        articles = ingestion.fetch_articles(query="fintech", limit=20)
-        if not articles:
+        try:
+            articles = ingestion.fetch_articles(query="fintech", limit=20)
+        except NoRelevantArticlesError as e:
+            self._jm.update_status(
+                job_id, JobStatus.FAILED, "No fintech articles matched"
+            )
+            self._jm.update_job(job_id, error=str(e))
+            return None
+        except NoArticlesFetchedError as e:
             self._jm.update_status(job_id, JobStatus.FAILED, "No articles found")
-            self._jm.update_job(job_id, error="No articles found from RSS feeds")
+            self._jm.update_job(job_id, error=str(e))
             return None
         self._jm.update_job(job_id, articles=articles)
         return articles

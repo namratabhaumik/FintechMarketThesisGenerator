@@ -19,7 +19,16 @@ class TestAppConfigFromEnv:
             "GOOGLE_API_KEY": os.getenv("GOOGLE_API_KEY"),
             "GEMINI_MODEL": os.getenv("GEMINI_MODEL"),
             "VECTORSTORE_PROVIDER": os.getenv("VECTORSTORE_PROVIDER"),
+            "HF_TOKEN": os.getenv("HF_TOKEN"),
+            "CLASSIFIER_PROVIDER": os.getenv("CLASSIFIER_PROVIDER"),
+            "CLASSIFIER_MODEL": os.getenv("CLASSIFIER_MODEL"),
+            "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL"),
         }
+        # Default classifier provider is "ollama", which needs no token. Tests
+        # that exercise the huggingface provider set CLASSIFIER_PROVIDER/HF_TOKEN.
+        os.environ.pop("CLASSIFIER_PROVIDER", None)
+        os.environ.pop("CLASSIFIER_MODEL", None)
+        os.environ.pop("HF_TOKEN", None)
         yield
         # Restore original values
         for key, value in original.items():
@@ -148,6 +157,79 @@ class TestAppConfigFromEnv:
             AppConfig.from_env()
 
         assert "GEMINI_MODEL" in str(exc_info.value)
+
+    def test_missing_hf_token_for_huggingface_provider(self):
+        """HF_TOKEN is required only when CLASSIFIER_PROVIDER=huggingface."""
+        os.environ["LLM_PROVIDER"] = "gemini"
+        os.environ["GEMINI_MODEL"] = "gemini-2.0-flash"
+        os.environ["GOOGLE_API_KEY"] = "test_key"
+        os.environ["EMBEDDING_PROVIDER"] = "huggingface"
+        os.environ["EMBEDDING_MODEL"] = "all-MiniLM-L6-v2"
+        os.environ["CLASSIFIER_PROVIDER"] = "huggingface"
+        os.environ.pop("HF_TOKEN", None)
+
+        with pytest.raises(EnvironmentError) as exc_info:
+            AppConfig.from_env()
+
+        assert "HF_TOKEN" in str(exc_info.value)
+
+    def test_classifier_defaults_to_ollama_without_token(self):
+        """Default classifier provider is ollama and needs no HF token."""
+        os.environ["LLM_PROVIDER"] = "gemini"
+        os.environ["GEMINI_MODEL"] = "gemini-2.0-flash"
+        os.environ["GOOGLE_API_KEY"] = "test_key"
+        os.environ["EMBEDDING_PROVIDER"] = "huggingface"
+        os.environ["EMBEDDING_MODEL"] = "all-MiniLM-L6-v2"
+        os.environ.pop("CLASSIFIER_PROVIDER", None)
+        os.environ.pop("HF_TOKEN", None)
+
+        config = AppConfig.from_env()
+
+        assert config.classifier.provider == "ollama"
+        assert config.classifier.base_url == "http://localhost:11434"
+        assert config.classifier.model == "qwen2.5:7b"
+
+    def test_classifier_model_default_for_huggingface(self):
+        """The huggingface provider defaults to the Qwen 7B HF repo id."""
+        os.environ["LLM_PROVIDER"] = "gemini"
+        os.environ["GEMINI_MODEL"] = "gemini-2.0-flash"
+        os.environ["GOOGLE_API_KEY"] = "test_key"
+        os.environ["EMBEDDING_PROVIDER"] = "huggingface"
+        os.environ["EMBEDDING_MODEL"] = "all-MiniLM-L6-v2"
+        os.environ["CLASSIFIER_PROVIDER"] = "huggingface"
+        os.environ["HF_TOKEN"] = "hf_x"
+
+        config = AppConfig.from_env()
+
+        assert config.classifier.model == "Qwen/Qwen2.5-7B-Instruct"
+
+    def test_classifier_model_override(self):
+        """CLASSIFIER_MODEL overrides the per-provider default."""
+        os.environ["LLM_PROVIDER"] = "gemini"
+        os.environ["GEMINI_MODEL"] = "gemini-2.0-flash"
+        os.environ["GOOGLE_API_KEY"] = "test_key"
+        os.environ["EMBEDDING_PROVIDER"] = "huggingface"
+        os.environ["EMBEDDING_MODEL"] = "all-MiniLM-L6-v2"
+        os.environ["CLASSIFIER_MODEL"] = "llama3.2:3b"
+
+        config = AppConfig.from_env()
+
+        assert config.classifier.model == "llama3.2:3b"
+
+    def test_hf_token_loaded_into_classifier_config(self):
+        """Test that HF_TOKEN is loaded into the classifier config."""
+        os.environ["LLM_PROVIDER"] = "gemini"
+        os.environ["GEMINI_MODEL"] = "gemini-2.0-flash"
+        os.environ["GOOGLE_API_KEY"] = "test_key"
+        os.environ["EMBEDDING_PROVIDER"] = "huggingface"
+        os.environ["EMBEDDING_MODEL"] = "all-MiniLM-L6-v2"
+        os.environ["CLASSIFIER_PROVIDER"] = "huggingface"
+        os.environ["HF_TOKEN"] = "hf_secret_123"
+
+        config = AppConfig.from_env()
+
+        assert config.classifier.provider == "huggingface"
+        assert config.classifier.api_key == "hf_secret_123"
 
     def test_multiple_missing_vars_in_error_message(self):
         """Test that all missing vars are listed in error message."""

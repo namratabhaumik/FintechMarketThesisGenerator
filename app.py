@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from config.settings import AppConfig
 from core.agents.hallucination_detector import HallucinationDetector
+from core.exceptions import NoArticlesFetchedError, NoRelevantArticlesError
 from core.models.thesis import StructuredThesis
 from core.utils.logging import setup_logging
 from dependency_injection.container import ServiceContainer
@@ -381,10 +382,19 @@ if st.button("Generate Thesis"):
 
             # Step 1: Fetch articles
             with st.spinner("Fetching latest fintech news from RSS feeds..."):
-                articles = ingestion_service.fetch_articles(query="fintech", limit=20)
-
-                if not articles:
-                    st.warning("No articles found. Please try again later.")
+                try:
+                    articles = ingestion_service.fetch_articles(query="fintech", limit=20)
+                except NoRelevantArticlesError:
+                    st.warning(
+                        "No fintech articles matched in the latest feed. "
+                        "Please try again later."
+                    )
+                    st.stop()
+                except NoArticlesFetchedError:
+                    st.warning(
+                        "No articles found (feed empty or unreachable). "
+                        "Please try again later."
+                    )
                     st.stop()
 
                 # Store articles in session state for display outside button block
