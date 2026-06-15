@@ -5,6 +5,10 @@ from typing import Dict, Optional, Type
 
 from config.settings import AppConfig
 from core.implementations.article_sources.rss_source import RSSArticleSource
+from core.implementations.classifiers.huggingface_classifier import (
+    HuggingFaceFintechClassifier,
+)
+from core.implementations.classifiers.ollama_classifier import OllamaFintechClassifier
 from core.implementations.embeddings.fastembed_embeddings import (
     FastEmbedEmbeddingModel,
 )
@@ -21,6 +25,7 @@ from core.implementations.vectorstores.supabase_vector_store import SupabaseVect
 from core.interfaces.article_source import IArticleSource
 from core.interfaces.embeddings import IEmbeddingModel
 from core.interfaces.llm import ILanguageModel
+from core.interfaces.relevance_classifier import IRelevanceClassifier
 from core.interfaces.scraper import IWebScraper
 from core.interfaces.scoring_strategy import IScoringStrategy
 from core.interfaces.thesis_structurer import IThesisStructurer
@@ -41,6 +46,12 @@ LLM_PROVIDER_REGISTRY: Dict[str, Type[ILanguageModel]] = {
 # To add a new embedding provider, see README.md
 EMBEDDING_PROVIDER_REGISTRY: Dict[str, Type[IEmbeddingModel]] = {
     "fastembed": FastEmbedEmbeddingModel,
+}
+
+# Fintech relevance classifier backends (model configurable via CLASSIFIER_MODEL)
+CLASSIFIER_PROVIDER_REGISTRY: Dict[str, Type[IRelevanceClassifier]] = {
+    "ollama": OllamaFintechClassifier,
+    "huggingface": HuggingFaceFintechClassifier,
 }
 
 
@@ -84,6 +95,7 @@ class ServiceContainer:
 
         # Lazy-loaded interface implementations (singletons)
         self._scraper: Optional[IWebScraper] = None
+        self._relevance_classifier: Optional[IRelevanceClassifier] = None
         self._article_source: Optional[IArticleSource] = None
         self._embedding_model: Optional[IEmbeddingModel] = None
         self._vectorstore: Optional[IVectorStore] = None
@@ -121,6 +133,29 @@ class ServiceContainer:
             self._scraper = BeautifulSoupScraper(self._config.scraper)
         return self._scraper
 
+    def get_relevance_classifier(self) -> IRelevanceClassifier:
+        """Get or create the fintech relevance classifier.
+
+        Returns:
+            IRelevanceClassifier implementation based on configuration.
+
+        Raises:
+            ValueError: If the configured classifier provider is unknown.
+        """
+        if not self._relevance_classifier:
+            provider = self._config.classifier.provider
+            classifier_class = CLASSIFIER_PROVIDER_REGISTRY.get(provider)
+
+            if not classifier_class:
+                raise ValueError(
+                    f"Unknown classifier provider: '{provider}'. "
+                    f"Supported: {list(CLASSIFIER_PROVIDER_REGISTRY.keys())}"
+                )
+
+            logger.info(f"Creating {provider} classifier ({classifier_class.__name__})")
+            self._relevance_classifier = classifier_class(self._config.classifier)
+        return self._relevance_classifier
+
     def get_article_source(self) -> IArticleSource:
         """Get or create article source implementation.
 
@@ -132,7 +167,8 @@ class ServiceContainer:
             scraper = self.get_scraper()
             self._article_source = RSSArticleSource(
                 feeds=self._config.rss_feeds,
-                scraper=scraper
+                scraper=scraper,
+                classifier=self.get_relevance_classifier(),
             )
         return self._article_source
 

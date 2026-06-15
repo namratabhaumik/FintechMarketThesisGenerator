@@ -16,6 +16,7 @@ dependencies = [
     "faiss-cpu==1.12.0",
     # Embeddings
     "fastembed>=0.4.0",
+    "huggingface_hub==1.15.0",
     # Web Scraping
     "beautifulsoup4==4.12.3",
     "requests==2.34.2",
