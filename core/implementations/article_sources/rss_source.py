@@ -1,6 +1,7 @@
 """RSS feed article source implementation."""
 
 import logging
+from datetime import datetime, timezone
 from typing import List, Optional
 from urllib.parse import urlparse
 
@@ -131,8 +132,12 @@ class RSSArticleSource(IArticleSource):
             logger.info(f"Collected {added} new entries from {feed_config.name}")
         return entries
 
-    def _build_article(self, entry, url: str, text: str) -> Article:
+    def _build_article(self, entry, url: str, text: str) -> Optional[Article]:
         title = entry.get("title", "Untitled")
+        published_at = self._parse_published(entry)
+        if published_at is None:
+            logger.warning(f"Skipping article without a <pubDate>: {url}")
+            return None
         try:
             text = clean_article_text(text)
             return Article(
@@ -140,9 +145,28 @@ class RSSArticleSource(IArticleSource):
                 text=text[:4000],
                 source=urlparse(url).netloc,
                 url=url,
+                published_at=published_at,
             )
         except ValueError as e:
             logger.warning(f"Invalid article skipped: {e}")
+            return None
+
+    @staticmethod
+    def _parse_published(entry) -> Optional[datetime]:
+        """Extract the feed entry's <pubDate> as a UTC datetime.
+
+        feedparser pre-parses <pubDate> into `published_parsed` (a
+        time.struct_time in UTC). Returns None when it is absent or unparseable
+        so the caller skips the entry rather than placing it on the time axis
+        with a fabricated date.
+        """
+        parsed = entry.get("published_parsed")
+        if not parsed:
+            return None
+        try:
+            year, month, day, hour, minute, second = parsed[:6]
+            return datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
+        except (TypeError, ValueError):
             return None
 
     def get_source_name(self) -> str:

@@ -1,6 +1,7 @@
 """Article data models."""
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
 
 
@@ -10,6 +11,7 @@ class Article:
     title: str
     text: str
     source: str
+    published_at: datetime
     url: Optional[str] = None
 
     def __post_init__(self):
@@ -20,3 +22,5 @@ class Article:
             raise ValueError("Article text cannot be empty")
         if not self.source or not self.source.strip():
             raise ValueError("Article source cannot be empty")
+        if not isinstance(self.published_at, datetime):
+            raise ValueError("Article published_at must be a datetime")

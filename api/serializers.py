@@ -6,6 +6,7 @@ stay focused on storage and attribute mapping.
 """
 
 from dataclasses import asdict
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from langchain_core.documents import Document
@@ -23,10 +24,23 @@ def rehydrate_thesis(raw: Any) -> Optional[StructuredThesis]:
 
 
 def rehydrate_articles(raw: Any) -> List[Article]:
-    """Convert stored JSON dicts to Article objects."""
+    """Convert stored JSON dicts to Article objects.
+
+    `published_at` is stored as an ISO 8601 string and parsed back into a
+    datetime, since Article requires a real datetime on that field.
+    """
     if not raw:
         return []
-    return [Article(**a) for a in raw if isinstance(a, dict)]
+    articles = []
+    for a in raw:
+        if not isinstance(a, dict):
+            continue
+        data = dict(a)
+        published = data.get("published_at")
+        if isinstance(published, str):
+            data["published_at"] = datetime.fromisoformat(published)
+        articles.append(Article(**data))
+    return articles
 
 
 def rehydrate_docs(raw: Any) -> list:
@@ -50,8 +64,18 @@ def serialise_thesis(thesis: StructuredThesis) -> dict:
 
 
 def serialise_articles(articles: List[Article]) -> list:
-    """Convert Article objects to JSON-safe dicts."""
-    return [asdict(a) for a in articles]
+    """Convert Article objects to JSON-safe dicts.
+
+    `published_at` is a datetime, which is not JSON-serialisable, so it is
+    emitted as an ISO 8601 string.
+    """
+    result = []
+    for a in articles:
+        data = asdict(a)
+        if isinstance(data.get("published_at"), datetime):
+            data["published_at"] = data["published_at"].isoformat()
+        result.append(data)
+    return result
 
 
 def serialise_docs(docs: list) -> list:

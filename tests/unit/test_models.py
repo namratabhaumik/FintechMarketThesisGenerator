@@ -1,8 +1,12 @@
 """Unit tests for Article and StructuredThesis data models."""
 
+from datetime import datetime, timezone
+
 import pytest
 from core.models.article import Article
 from core.models.thesis import StructuredThesis
+
+PUB = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
 class TestArticle:
@@ -11,19 +15,20 @@ class TestArticle:
     # === Valid Creation ===
 
     def test_valid_article_creation(self):
-        article = Article(title="Test", text="Some content here.", source="example.com")
+        article = Article(title="Test", text="Some content here.", source="example.com", published_at=PUB)
         assert article.title == "Test"
         assert article.text == "Some content here."
         assert article.source == "example.com"
+        assert article.published_at == PUB
 
     def test_article_url_defaults_to_none(self):
-        article = Article(title="Test", text="Some content.", source="example.com")
+        article = Article(title="Test", text="Some content.", source="example.com", published_at=PUB)
         assert article.url is None
 
     def test_article_with_url(self):
         article = Article(
             title="Test", text="Content.", source="example.com",
-            url="https://example.com/article"
+            url="https://example.com/article", published_at=PUB
         )
         assert article.url == "https://example.com/article"
 
@@ -31,31 +36,41 @@ class TestArticle:
 
     def test_empty_title_raises(self):
         with pytest.raises(ValueError, match="title"):
-            Article(title="", text="Content.", source="example.com")
+            Article(title="", text="Content.", source="example.com", published_at=PUB)
 
     def test_whitespace_only_title_raises(self):
         with pytest.raises(ValueError, match="title"):
-            Article(title="   ", text="Content.", source="example.com")
+            Article(title="   ", text="Content.", source="example.com", published_at=PUB)
 
     # === Validation: text ===
 
     def test_empty_text_raises(self):
         with pytest.raises(ValueError, match="text"):
-            Article(title="Title", text="", source="example.com")
+            Article(title="Title", text="", source="example.com", published_at=PUB)
 
     def test_whitespace_only_text_raises(self):
         with pytest.raises(ValueError, match="text"):
-            Article(title="Title", text="   ", source="example.com")
+            Article(title="Title", text="   ", source="example.com", published_at=PUB)
 
     # === Validation: source ===
 
     def test_empty_source_raises(self):
         with pytest.raises(ValueError, match="source"):
-            Article(title="Title", text="Content.", source="")
+            Article(title="Title", text="Content.", source="", published_at=PUB)
 
     def test_whitespace_only_source_raises(self):
         with pytest.raises(ValueError, match="source"):
-            Article(title="Title", text="Content.", source="   ")
+            Article(title="Title", text="Content.", source="   ", published_at=PUB)
+
+    # === Validation: published_at ===
+
+    def test_missing_published_at_raises(self):
+        with pytest.raises(TypeError):
+            Article(title="Title", text="Content.", source="example.com")
+
+    def test_non_datetime_published_at_raises(self):
+        with pytest.raises(ValueError, match="published_at"):
+            Article(title="Title", text="Content.", source="example.com", published_at="2026-01-01")
 
 
 class TestStructuredThesis:
