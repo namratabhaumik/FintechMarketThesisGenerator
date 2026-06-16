@@ -27,6 +27,14 @@ class IArticleRepository(ABC):
         pass
 
     @abstractmethod
+    def fetch_all(self) -> List[RawArticle]:
+        """Return all stored articles, most recently published first.
+
+        The Silver layer reads these to enrich them (classify, scrape, embed).
+        """
+        pass
+
+    @abstractmethod
     def count(self) -> int:
         """Return the total number of articles in the store."""
         pass

@@ -45,7 +45,9 @@ class TestArticleIngestionService:
         assert "title" in doc.metadata
         assert "source" in doc.metadata
         assert "url" in doc.metadata
+        assert "published_at" in doc.metadata
         assert doc.metadata["title"] == "Test Article 1"
+        assert doc.metadata["published_at"] == "2026-01-01T00:00:00+00:00"
 
 
 class TestDocumentRetrievalService:

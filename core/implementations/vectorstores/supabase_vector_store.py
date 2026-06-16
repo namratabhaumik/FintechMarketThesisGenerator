@@ -34,10 +34,10 @@ class SupabaseVectorStoreImpl(IVectorStore):
         self._client = client
 
     def build(self, documents: List[Document]) -> VectorStore:
-        existing_urls = self._fetch_existing_urls()
+        existing = self._fetch_existing_urls()
         new_docs = [
             d for d in documents
-            if d.metadata.get("url", "") not in existing_urls
+            if d.metadata.get("url", "") not in existing
         ]
 
         if new_docs:
@@ -72,6 +72,7 @@ class SupabaseVectorStoreImpl(IVectorStore):
         return vectorstore.as_retriever(search_kwargs={"k": k})
 
     def _fetch_existing_urls(self) -> Set[str]:
+        """Return the article URLs already embedded, for internal build dedup."""
         try:
             resp = self._client.table(TABLE).select("metadata").execute()
             return {

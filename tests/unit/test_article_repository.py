@@ -23,6 +23,7 @@ class _FakeTable:
         self._store = store
         self._op = None
         self._payload = None
+        self._count = None
 
     def upsert(self, rows, on_conflict=None, ignore_duplicates=False):
         # Emulate UNIQUE(url) + ignore_duplicates: only never-seen URLs insert.
@@ -34,12 +35,18 @@ class _FakeTable:
 
     def select(self, *args, count=None):
         self._op = "select"
+        self._count = count
+        return self
+
+    def order(self, column, desc=False):
         return self
 
     def execute(self):
         if self._op == "upsert":
             return _FakeResp(data=self._payload)
-        return _FakeResp(count=len(self._store))
+        if self._count is not None:
+            return _FakeResp(count=len(self._store))
+        return _FakeResp(data=list(self._store.values()))
 
 
 class _FakeClient:
@@ -75,3 +82,14 @@ def test_save_empty_is_noop():
     repo = SupabaseArticleRepository(_FakeClient())
     assert repo.save([]) == 0
     assert repo.count() == 0
+
+
+def test_fetch_all_round_trips_to_raw_articles():
+    repo = SupabaseArticleRepository(_FakeClient())
+    repo.save([_raw("https://x/1", title="A"), _raw("https://x/2", title="B")])
+
+    out = repo.fetch_all()
+
+    assert {a.url for a in out} == {"https://x/1", "https://x/2"}
+    assert all(isinstance(a.published_at, datetime) for a in out)
+    assert all(a.published_at == PUB for a in out)

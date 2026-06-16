@@ -1,6 +1,7 @@
 """Supabase-backed raw article store"""
 
 import logging
+from datetime import datetime
 from typing import List
 
 from postgrest.types import CountMethod
@@ -41,6 +42,15 @@ class SupabaseArticleRepository(IArticleRepository):
         )
         return inserted
 
+    def fetch_all(self) -> List[RawArticle]:
+        resp = (
+            self._client.table(TABLE)
+            .select("*")
+            .order("published_at", desc=True)
+            .execute()
+        )
+        return [self._to_raw_article(row) for row in (resp.data or [])]
+
     def count(self) -> int:
         resp = (
             self._client.table(TABLE)
@@ -48,6 +58,16 @@ class SupabaseArticleRepository(IArticleRepository):
             .execute()
         )
         return resp.count or 0
+
+    def _to_raw_article(self, row: dict) -> RawArticle:
+        return RawArticle(
+            title=row["title"],
+            url=row["url"],
+            published_at=datetime.fromisoformat(row["published_at"]),
+            summary=row.get("summary", ""),
+            source=row.get("source", ""),
+            feed_name=row.get("feed_name", ""),
+        )
 
     def _to_row(self, article: RawArticle) -> dict:
         return {

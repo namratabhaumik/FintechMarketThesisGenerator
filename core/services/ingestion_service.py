@@ -11,6 +11,24 @@ from core.models.article import Article
 logger = logging.getLogger(__name__)
 
 
+def article_to_document(article: Article) -> Document:
+    """Convert an Article to a LangChain Document.
+
+    Shared by the request-time pipeline and the Silver layer so both produce
+    identical metadata. `published_at` is included as an ISO string so the
+    retrieval layer can filter/rank documents on the time axis.
+    """
+    return Document(
+        page_content=f"{article.title}\n\n{article.text}",
+        metadata={
+            "source": article.source,
+            "title": article.title,
+            "url": article.url or "",
+            "published_at": article.published_at.isoformat(),
+        },
+    )
+
+
 class ArticleIngestionService:
     """Service for ingesting articles.
 
@@ -73,18 +91,6 @@ class ArticleIngestionService:
         Returns:
             List of LangChain Document objects.
         """
-        docs = []
-
-        for article in articles:
-            doc = Document(
-                page_content=f"{article.title}\n\n{article.text}",
-                metadata={
-                    "source": article.source,
-                    "title": article.title,
-                    "url": article.url or ""
-                }
-            )
-            docs.append(doc)
-
+        docs = [article_to_document(article) for article in articles]
         logger.info(f"Converted {len(docs)} articles to documents")
         return docs

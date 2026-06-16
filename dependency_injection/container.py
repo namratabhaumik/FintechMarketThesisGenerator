@@ -23,10 +23,14 @@ from core.implementations.scrapers.beautifulsoup_scraper import BeautifulSoupScr
 from core.implementations.repositories.supabase_article_repository import (
     SupabaseArticleRepository,
 )
+from core.implementations.repositories.supabase_silver_repository import (
+    SupabaseSilverRepository,
+)
 from core.implementations.vectorstores.faiss_store import FAISSVectorStore
 from core.implementations.vectorstores.supabase_vector_store import SupabaseVectorStoreImpl
 from core.interfaces.article_repository import IArticleRepository
 from core.interfaces.article_source import IArticleSource
+from core.interfaces.silver_repository import ISilverRepository
 from core.interfaces.embeddings import IEmbeddingModel
 from core.interfaces.llm import ILanguageModel
 from core.interfaces.relevance_classifier import IRelevanceClassifier
@@ -36,6 +40,7 @@ from core.interfaces.thesis_structurer import IThesisStructurer
 from core.interfaces.vectorstore import IVectorStore
 from core.services.approval_service import ApprovalService
 from core.services.ingestion_service import ArticleIngestionService
+from core.services.silver_service import SilverService
 from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 from core.services.retrieval_service import DocumentRetrievalService
 from core.services.thesis_generator_service import ThesisGeneratorService
@@ -104,6 +109,7 @@ class ServiceContainer:
         self._embedding_model: Optional[IEmbeddingModel] = None
         self._vectorstore: Optional[IVectorStore] = None
         self._article_repository: Optional[IArticleRepository] = None
+        self._silver_repository: Optional[ISilverRepository] = None
         self._llm: Optional[ILanguageModel] = None
         self._scoring_strategy: Optional[IScoringStrategy] = None
         self._thesis_structurer: Optional[IThesisStructurer] = None
@@ -114,6 +120,7 @@ class ServiceContainer:
 
         # Services
         self._ingestion_service: Optional[ArticleIngestionService] = None
+        self._silver_service: Optional[SilverService] = None
         self._retrieval_service: Optional[DocumentRetrievalService] = None
         self._approval_service: Optional[ApprovalService] = None
         self._opportunity_scoring_service: Optional[OpportunityScoringService] = None
@@ -250,6 +257,30 @@ class ServiceContainer:
             self._article_repository = SupabaseArticleRepository(client)
         return self._article_repository
 
+    def get_silver_repository(self) -> ISilverRepository:
+        """Get or create the Silver-layer verdict repository.
+
+        Returns:
+            ISilverRepository backed by Supabase.
+
+        Raises:
+            ValueError: If Supabase is not configured.
+        """
+        if not self._silver_repository:
+            if not self._config.supabase.enabled:
+                raise ValueError(
+                    "The Silver verdict repository requires SUPABASE_URL and "
+                    "SUPABASE_SERVICE_ROLE_KEY"
+                )
+            from supabase import create_client
+
+            logger.info("Creating SupabaseSilverRepository (Silver verdicts)")
+            client = create_client(
+                self._config.supabase.url, self._config.supabase.service_role_key
+            )
+            self._silver_repository = SupabaseSilverRepository(client)
+        return self._silver_repository
+
     def get_cache_manager(self) -> CacheManager:
         """Get or create cache manager for AI Gateway.
 
@@ -370,6 +401,32 @@ class ServiceContainer:
             article_source = self.get_article_source()
             self._ingestion_service = ArticleIngestionService(article_source)
         return self._ingestion_service
+
+    def get_silver_service(self) -> SilverService:
+        """Get or create the Silver service.
+
+        Reads Bronze, classifies + scrapes, and embeds into the persistent
+        vector store. Requires the Supabase pgvector store (it needs
+        cross-run persistence and existing_urls()).
+
+        Raises:
+            ValueError: If the vectorstore provider is not "supabase".
+        """
+        if not self._silver_service:
+            if self._config.vectorstore.provider != "supabase":
+                raise ValueError(
+                    "Silver requires VECTORSTORE_PROVIDER=supabase "
+                    "(a persistent corpus); in-memory FAISS cannot back it."
+                )
+            logger.info("Creating SilverService")
+            self._silver_service = SilverService(
+                repository=self.get_article_repository(),
+                silver_repository=self.get_silver_repository(),
+                classifier=self.get_relevance_classifier(),
+                scraper=self.get_scraper(),
+                vectorstore=self.get_vectorstore(),
+            )
+        return self._silver_service
 
     def get_retrieval_service(self) -> DocumentRetrievalService:
         """Get or create document retrieval service.
