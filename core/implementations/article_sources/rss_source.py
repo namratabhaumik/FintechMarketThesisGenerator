@@ -13,6 +13,7 @@ from core.interfaces.article_source import IArticleSource
 from core.interfaces.relevance_classifier import IRelevanceClassifier
 from core.interfaces.scraper import IWebScraper
 from core.models.article import Article
+from core.models.raw_article import RawArticle
 from core.utils.text_utils import clean_article_text
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,36 @@ class RSSArticleSource(IArticleSource):
         logger.info(f"Fetched {len(articles)} articles from RSS feeds")
         return articles
 
+    def collect_raw(self, limit: int) -> List[RawArticle]:
+        """Collect feed entries.
+
+        Unlike fetch_articles, this does NOT classify or scrape: it lands the
+        raw feed entry (title, summary, link, <pubDate>, feed name) so the
+        corpus accumulates cheaply.
+        """
+        entries = self._collect_entries(limit)
+        raw_articles = []
+        for entry in entries:
+            url = entry.get("link", "")
+            published_at = self._parse_published(entry)
+            if not url or published_at is None:
+                continue
+            try:
+                raw_articles.append(
+                    RawArticle(
+                        title=entry.get("title", "Untitled"),
+                        url=url,
+                        published_at=published_at,
+                        summary=entry.get("description", ""),
+                        source=urlparse(url).netloc,
+                        feed_name=entry.get("_feed_name", ""),
+                    )
+                )
+            except ValueError as e:
+                logger.warning(f"Invalid raw article skipped: {e}")
+        logger.info(f"Collected {len(raw_articles)} raw articles for Bronze")
+        return raw_articles
+
     def _collect_entries(self, limit: int) -> list:
         """Parse all enabled feeds and return their entries, deduped by link.
 
@@ -127,6 +158,9 @@ class RSSArticleSource(IArticleSource):
                     continue
                 if link:
                     seen_links.add(link)
+                # Stash provenance so collect_raw can record which feed an
+                # entry came from (fetch_articles ignores this key).
+                entry["_feed_name"] = feed_config.name
                 entries.append(entry)
                 added += 1
             logger.info(f"Collected {added} new entries from {feed_config.name}")

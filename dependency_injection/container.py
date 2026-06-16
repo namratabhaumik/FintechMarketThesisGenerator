@@ -20,8 +20,12 @@ from core.implementations.llm.gemini_llm import GeminiLanguageModel
 from core.implementations.llm.local_summarizer import LocalSummarizerModel
 from core.implementations.llm.llm_wrapper import LLMWrapper
 from core.implementations.scrapers.beautifulsoup_scraper import BeautifulSoupScraper
+from core.implementations.repositories.supabase_article_repository import (
+    SupabaseArticleRepository,
+)
 from core.implementations.vectorstores.faiss_store import FAISSVectorStore
 from core.implementations.vectorstores.supabase_vector_store import SupabaseVectorStoreImpl
+from core.interfaces.article_repository import IArticleRepository
 from core.interfaces.article_source import IArticleSource
 from core.interfaces.embeddings import IEmbeddingModel
 from core.interfaces.llm import ILanguageModel
@@ -99,6 +103,7 @@ class ServiceContainer:
         self._article_source: Optional[IArticleSource] = None
         self._embedding_model: Optional[IEmbeddingModel] = None
         self._vectorstore: Optional[IVectorStore] = None
+        self._article_repository: Optional[IArticleRepository] = None
         self._llm: Optional[ILanguageModel] = None
         self._scoring_strategy: Optional[IScoringStrategy] = None
         self._thesis_structurer: Optional[IThesisStructurer] = None
@@ -220,6 +225,30 @@ class ServiceContainer:
             self._vectorstore = factory(self._config, embedding_model)
 
         return self._vectorstore
+
+    def get_article_repository(self) -> IArticleRepository:
+        """Get or create the Bronze-layer raw article repository.
+
+        Returns:
+            IArticleRepository backed by Supabase.
+
+        Raises:
+            ValueError: If Supabase is not configured.
+        """
+        if not self._article_repository:
+            if not self._config.supabase.enabled:
+                raise ValueError(
+                    "The Bronze article repository requires SUPABASE_URL and "
+                    "SUPABASE_SERVICE_ROLE_KEY"
+                )
+            from supabase import create_client
+
+            logger.info("Creating SupabaseArticleRepository (Bronze)")
+            client = create_client(
+                self._config.supabase.url, self._config.supabase.service_role_key
+            )
+            self._article_repository = SupabaseArticleRepository(client)
+        return self._article_repository
 
     def get_cache_manager(self) -> CacheManager:
         """Get or create cache manager for AI Gateway.

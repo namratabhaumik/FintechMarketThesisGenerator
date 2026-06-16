@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 from core.models.article import Article
+from core.models.raw_article import RawArticle
 from core.models.thesis import StructuredThesis
 
 PUB = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -71,6 +72,29 @@ class TestArticle:
     def test_non_datetime_published_at_raises(self):
         with pytest.raises(ValueError, match="published_at"):
             Article(title="Title", text="Content.", source="example.com", published_at="2026-01-01")
+
+
+class TestRawArticle:
+    """Tests for RawArticle (Bronze) validation and defaults."""
+
+    def test_valid_creation_with_defaults(self):
+        raw = RawArticle(title="T", url="https://x/1", published_at=PUB)
+        assert raw.url == "https://x/1"
+        assert raw.summary == ""
+        assert raw.source == ""
+        assert raw.feed_name == ""
+
+    def test_empty_title_raises(self):
+        with pytest.raises(ValueError, match="title"):
+            RawArticle(title="  ", url="https://x/1", published_at=PUB)
+
+    def test_empty_url_raises(self):
+        with pytest.raises(ValueError, match="url"):
+            RawArticle(title="T", url="", published_at=PUB)
+
+    def test_non_datetime_published_at_raises(self):
+        with pytest.raises(ValueError, match="published_at"):
+            RawArticle(title="T", url="https://x/1", published_at="2026-01-01")
 
 
 class TestStructuredThesis:

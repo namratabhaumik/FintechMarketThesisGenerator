@@ -149,6 +149,42 @@ def test_entry_without_pubdate_is_skipped(monkeypatch):
         source.fetch_articles("fintech", limit=10)
 
 
+def test_collect_raw_lands_entries_verbatim(monkeypatch):
+    """collect_raw keeps every dated entry (no classification) with provenance."""
+    _patch_feed(
+        monkeypatch,
+        [
+            {"title": "A fintech bank", "description": "banking", "link": "https://x/1", "published_parsed": PUB_PARSED},
+            {"title": "A space launch", "description": "space", "link": "https://x/2", "published_parsed": PUB_PARSED},
+        ],
+    )
+    source = RSSArticleSource([_feed_config(name="TechCrunch")], scraper=None, classifier=None)
+
+    raw = source.collect_raw(limit=10)
+
+    assert [r.title for r in raw] == ["A fintech bank", "A space launch"]
+    assert raw[0].summary == "banking"
+    assert raw[0].source == "x"  # netloc of https://x/1
+    assert raw[0].feed_name == "TechCrunch"
+    assert raw[0].published_at.year == 2026
+
+
+def test_collect_raw_skips_dateless_entries(monkeypatch):
+    """An entry without <pubDate> has no time-axis slot and is dropped."""
+    _patch_feed(
+        monkeypatch,
+        [
+            {"title": "no date", "description": "d", "link": "https://x/1"},
+            {"title": "has date", "description": "d", "link": "https://x/2", "published_parsed": PUB_PARSED},
+        ],
+    )
+    source = RSSArticleSource([_feed_config()], scraper=None, classifier=None)
+
+    raw = source.collect_raw(limit=10)
+
+    assert [r.title for r in raw] == ["has date"]
+
+
 def test_all_non_fintech_raises_no_relevant(monkeypatch):
     """When the classifier rejects every entry, NoRelevantArticlesError is raised."""
     _patch_feed(
