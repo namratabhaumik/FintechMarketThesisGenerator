@@ -8,11 +8,17 @@ import logging
 from typing import Dict, List
 
 from core.interfaces.article_repository import IArticleRepository
+from core.interfaces.quarantine_repository import IQuarantineRepository
 from core.interfaces.relevance_classifier import IRelevanceClassifier
 from core.interfaces.scoring_strategy import IScoringStrategy
 from core.interfaces.scraper import IWebScraper
 from core.interfaces.silver_repository import ISilverRepository
 from core.models.article import Article
+from core.models.quarantine_record import (
+    INVALID_ARTICLE,
+    SCRAPE_FAILED,
+    QuarantineRecord,
+)
 from core.models.silver_record import SilverVerdict
 from core.services.ingestion_service import article_to_document
 from core.utils.text_utils import clean_article_text
@@ -35,6 +41,7 @@ class SilverService:
         self,
         repository: IArticleRepository,
         silver_repository: ISilverRepository,
+        quarantine_repository: IQuarantineRepository,
         classifier: IRelevanceClassifier,
         scraper: IWebScraper,
         scoring_strategy: IScoringStrategy,
@@ -43,6 +50,7 @@ class SilverService:
     ):
         self._repository = repository
         self._silver_repository = silver_repository
+        self._quarantine_repository = quarantine_repository
         self._classifier = classifier
         self._scraper = scraper
         self._scoring_strategy = scoring_strategy
@@ -56,33 +64,57 @@ class SilverService:
             The number of articles newly embedded this run.
         """
         raw_articles = self._repository.fetch_all()
-        processed = self._silver_repository.processed_urls()
-        pending = [r for r in raw_articles if r.url not in processed]
+        # Skip articles already decided on (a verdict) or parked in quarantine,
+        # so neither is reprocessed.
+        skip = self._silver_repository.processed_urls() | self._quarantine_repository.quarantined_urls()
+        pending = [r for r in raw_articles if r.url not in skip]
         logger.info(
             f"Silver: {len(pending)} new of {len(raw_articles)} Bronze articles "
-            f"({len(processed)} already processed)"
+            f"({len(skip)} already processed or quarantined)"
         )
 
         documents = []
         verdicts = []
+        quarantined = []
         for raw in pending:
             relevant = self._classifier.is_relevant(raw.title, raw.summary)
             if not relevant:
                 verdicts.append(SilverVerdict(url=raw.url, fintech_relevant=False))
                 continue
-            text = self._scraper.scrape(raw.url) or raw.summary or "No content available"
+
+            scraped = self._scraper.scrape(raw.url)
+            if not scraped:
+                # Full text unavailable. Quarantine for replay rather than
+                # embedding the thin RSS summary or retrying every run.
+                quarantined.append(
+                    QuarantineRecord(
+                        url=raw.url,
+                        reason=SCRAPE_FAILED,
+                        detail="scraper returned no text",
+                        title=raw.title,
+                    )
+                )
+                continue
+
             try:
                 article = Article(
                     title=raw.title,
-                    text=clean_article_text(text)[:4000],
+                    text=clean_article_text(scraped)[:4000],
                     source=raw.source,
                     url=raw.url,
                     published_at=raw.published_at,
                 )
             except ValueError as e:
-                # No verdict recorded, so a later run retries this article.
-                logger.warning(f"Skipping invalid article {raw.url}: {e}")
+                quarantined.append(
+                    QuarantineRecord(
+                        url=raw.url,
+                        reason=INVALID_ARTICLE,
+                        detail=str(e),
+                        title=raw.title,
+                    )
+                )
                 continue
+
             documents.append(article_to_document(article))
             verdicts.append(
                 SilverVerdict(
@@ -105,10 +137,12 @@ class SilverService:
             logger.info("No new fintech articles to send")
 
         self._silver_repository.record(verdicts)
+        self._quarantine_repository.add(quarantined)
 
         fintech = len(documents)
         logger.info(
-            f"Silver: {fintech} fintech of {len(pending)} new articles processed"
+            f"Silver: {fintech} fintech of {len(pending)} new articles processed; "
+            f"{len(quarantined)} quarantined"
         )
         return fintech
 

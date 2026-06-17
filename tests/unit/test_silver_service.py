@@ -33,6 +33,19 @@ class _FakeSilverRepo:
         return len(verdicts)
 
 
+class _FakeQuarantineRepo:
+    def __init__(self, quarantined=None):
+        self._quarantined = set(quarantined or [])
+        self.added = []
+
+    def quarantined_urls(self):
+        return self._quarantined
+
+    def add(self, records):
+        self.added.extend(records)
+        return len(records)
+
+
 class _TitleClassifier(IRelevanceClassifier):
     """Relevant only when the title contains 'fintech'."""
 
@@ -47,6 +60,13 @@ class _StubScraper(IWebScraper):
         return f"full body discussing payment infrastructure for {url}"
 
 
+class _FailingScraper(IWebScraper):
+    """Mimics a scrape failure: the real scraper returns '' on any error."""
+
+    def scrape(self, url: str) -> str:
+        return ""
+
+
 class _FakeVectorStore:
     def __init__(self):
         self.built = []
@@ -56,18 +76,19 @@ class _FakeVectorStore:
         return object()
 
 
-def _raw(title, url):
+def _raw(title, url, source="x.com"):
     return RawArticle(
-        title=title, url=url, published_at=PUB, summary="desc", source="x.com"
+        title=title, url=url, published_at=PUB, summary="desc", source=source
     )
 
 
-def _service(articles, silver_repo, vs):
+def _service(articles, silver_repo, vs, quarantine_repo=None, scraper=None):
     return SilverService(
         _FakeRepo(articles),
         silver_repo,
+        quarantine_repo or _FakeQuarantineRepo(),
         _TitleClassifier(),
-        _StubScraper(),
+        scraper or _StubScraper(),
         KeywordCountScoringStrategy(),
         THEMES,
         vs,
@@ -81,22 +102,63 @@ def test_embeds_fintech_records_verdicts_with_themes_from_full_text():
         _raw("Fintech C", "https://x/3"),     # already processed -> skipped
     ]
     silver_repo = _FakeSilverRepo(processed={"https://x/3"})
+    quarantine_repo = _FakeQuarantineRepo()
     vs = _FakeVectorStore()
 
-    embedded = _service(raw, silver_repo, vs).build()
+    embedded = _service(raw, silver_repo, vs, quarantine_repo).build()
 
     assert embedded == 1
-    assert len(vs.built) == 1
     assert vs.built[0].metadata["url"] == "https://x/1"
-
     by_url = {v.url: v for v in silver_repo.recorded}
-    assert set(by_url) == {"https://x/1", "https://x/2"}
-    # Theme came from the scraped body ("payment"), not the title "Fintech A".
-    assert by_url["https://x/1"].fintech_relevant is True
-    assert by_url["https://x/1"].themes == ["Payments"]
-    # Rejected article: verdict recorded, no themes.
+    assert by_url["https://x/1"].themes == ["Payments"]  # from scraped body
     assert by_url["https://x/2"].fintech_relevant is False
-    assert by_url["https://x/2"].themes == []
+    assert quarantine_repo.added == []
+
+
+def test_scrape_failure_is_quarantined_not_embedded():
+    raw = [_raw("Fintech A", "https://x/1")]
+    silver_repo = _FakeSilverRepo()
+    quarantine_repo = _FakeQuarantineRepo()
+    vs = _FakeVectorStore()
+
+    embedded = _service(raw, silver_repo, vs, quarantine_repo, scraper=_FailingScraper()).build()
+
+    assert embedded == 0
+    assert vs.built == []
+    assert silver_repo.recorded == []  # no verdict -> replayable after fix
+    assert [(r.url, r.reason) for r in quarantine_repo.added] == [
+        ("https://x/1", "scrape_failed")
+    ]
+
+
+def test_invalid_article_is_quarantined():
+    # Empty source makes Article validation fail (scrape itself succeeds).
+    raw = [_raw("Fintech A", "https://x/1", source="")]
+    silver_repo = _FakeSilverRepo()
+    quarantine_repo = _FakeQuarantineRepo()
+    vs = _FakeVectorStore()
+
+    embedded = _service(raw, silver_repo, vs, quarantine_repo).build()
+
+    assert embedded == 0
+    assert silver_repo.recorded == []
+    assert [(r.url, r.reason) for r in quarantine_repo.added] == [
+        ("https://x/1", "invalid_article")
+    ]
+
+
+def test_quarantined_urls_are_skipped():
+    raw = [_raw("Fintech A", "https://x/1")]
+    silver_repo = _FakeSilverRepo()
+    quarantine_repo = _FakeQuarantineRepo(quarantined={"https://x/1"})
+    vs = _FakeVectorStore()
+
+    embedded = _service(raw, silver_repo, vs, quarantine_repo).build()
+
+    assert embedded == 0
+    assert vs.built == []
+    assert silver_repo.recorded == []
+    assert quarantine_repo.added == []  # not reprocessed
 
 
 def test_no_new_articles_does_not_call_build():

@@ -23,6 +23,9 @@ from core.implementations.scrapers.beautifulsoup_scraper import BeautifulSoupScr
 from core.implementations.repositories.supabase_article_repository import (
     SupabaseArticleRepository,
 )
+from core.implementations.repositories.supabase_quarantine_repository import (
+    SupabaseQuarantineRepository,
+)
 from core.implementations.repositories.supabase_silver_repository import (
     SupabaseSilverRepository,
 )
@@ -36,6 +39,7 @@ from core.implementations.vectorstores.faiss_store import FAISSVectorStore
 from core.implementations.vectorstores.supabase_vector_store import SupabaseVectorStoreImpl
 from core.interfaces.article_repository import IArticleRepository
 from core.interfaces.article_source import IArticleSource
+from core.interfaces.quarantine_repository import IQuarantineRepository
 from core.interfaces.silver_repository import ISilverRepository
 from core.interfaces.trend_repository import ITrendRepository
 from core.interfaces.untagged_repository import IUntaggedRepository
@@ -120,6 +124,7 @@ class ServiceContainer:
         self._vectorstore: Optional[IVectorStore] = None
         self._article_repository: Optional[IArticleRepository] = None
         self._silver_repository: Optional[ISilverRepository] = None
+        self._quarantine_repository: Optional[IQuarantineRepository] = None
         self._trend_repository: Optional[ITrendRepository] = None
         self._untagged_repository: Optional[IUntaggedRepository] = None
         self._llm: Optional[ILanguageModel] = None
@@ -293,6 +298,30 @@ class ServiceContainer:
             )
             self._silver_repository = SupabaseSilverRepository(client)
         return self._silver_repository
+
+    def get_quarantine_repository(self) -> IQuarantineRepository:
+        """Get or create the Silver dead-letter / quarantine repository.
+
+        Returns:
+            IQuarantineRepository backed by Supabase.
+
+        Raises:
+            ValueError: If Supabase is not configured.
+        """
+        if not self._quarantine_repository:
+            if not self._config.supabase.enabled:
+                raise ValueError(
+                    "The quarantine repository requires SUPABASE_URL and "
+                    "SUPABASE_SERVICE_ROLE_KEY"
+                )
+            from supabase import create_client
+
+            logger.info("Creating SupabaseQuarantineRepository (Silver dead-letter)")
+            client = create_client(
+                self._config.supabase.url, self._config.supabase.service_role_key
+            )
+            self._quarantine_repository = SupabaseQuarantineRepository(client)
+        return self._quarantine_repository
 
     def get_trend_repository(self) -> ITrendRepository:
         """Get or create the Gold-layer trend metrics repository.
@@ -483,6 +512,7 @@ class ServiceContainer:
             self._silver_service = SilverService(
                 repository=self.get_article_repository(),
                 silver_repository=self.get_silver_repository(),
+                quarantine_repository=self.get_quarantine_repository(),
                 classifier=self.get_relevance_classifier(),
                 scraper=self.get_scraper(),
                 scoring_strategy=self.get_scoring_strategy(),
