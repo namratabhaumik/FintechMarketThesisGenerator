@@ -1,7 +1,7 @@
 """Abstract interface for the Silver verdict store"""
 
 from abc import ABC, abstractmethod
-from typing import List, Set
+from typing import Dict, List, Set
 
 from core.models.silver_record import SilverVerdict
 
@@ -18,6 +18,16 @@ class ISilverRepository(ABC):
     @abstractmethod
     def processed_urls(self) -> Set[str]:
         """Return the set of URLs already processed (any verdict)."""
+        pass
+
+    @abstractmethod
+    def fintech_themes(self) -> Dict[str, List[str]]:
+        """Return {url: themes} for fintech-relevant articles (accepted subset).
+
+        Themes were assigned on the full scraped text at Silver time. The Gold
+        layer aggregates trends directly from them. An accepted article that
+        matched no theme maps to an empty list.
+        """
         pass
 
     @abstractmethod

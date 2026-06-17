@@ -26,11 +26,19 @@ from core.implementations.repositories.supabase_article_repository import (
 from core.implementations.repositories.supabase_silver_repository import (
     SupabaseSilverRepository,
 )
+from core.implementations.repositories.supabase_trend_repository import (
+    SupabaseTrendRepository,
+)
+from core.implementations.repositories.supabase_untagged_repository import (
+    SupabaseUntaggedRepository,
+)
 from core.implementations.vectorstores.faiss_store import FAISSVectorStore
 from core.implementations.vectorstores.supabase_vector_store import SupabaseVectorStoreImpl
 from core.interfaces.article_repository import IArticleRepository
 from core.interfaces.article_source import IArticleSource
 from core.interfaces.silver_repository import ISilverRepository
+from core.interfaces.trend_repository import ITrendRepository
+from core.interfaces.untagged_repository import IUntaggedRepository
 from core.interfaces.embeddings import IEmbeddingModel
 from core.interfaces.llm import ILanguageModel
 from core.interfaces.relevance_classifier import IRelevanceClassifier
@@ -39,8 +47,10 @@ from core.interfaces.scoring_strategy import IScoringStrategy
 from core.interfaces.thesis_structurer import IThesisStructurer
 from core.interfaces.vectorstore import IVectorStore
 from core.services.approval_service import ApprovalService
+from core.services.gold_service import GoldService
 from core.services.ingestion_service import ArticleIngestionService
 from core.services.silver_service import SilverService
+from finthesis_internal.category_mappings import ThemeMappings
 from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 from core.services.retrieval_service import DocumentRetrievalService
 from core.services.thesis_generator_service import ThesisGeneratorService
@@ -110,6 +120,8 @@ class ServiceContainer:
         self._vectorstore: Optional[IVectorStore] = None
         self._article_repository: Optional[IArticleRepository] = None
         self._silver_repository: Optional[ISilverRepository] = None
+        self._trend_repository: Optional[ITrendRepository] = None
+        self._untagged_repository: Optional[IUntaggedRepository] = None
         self._llm: Optional[ILanguageModel] = None
         self._scoring_strategy: Optional[IScoringStrategy] = None
         self._thesis_structurer: Optional[IThesisStructurer] = None
@@ -121,6 +133,7 @@ class ServiceContainer:
         # Services
         self._ingestion_service: Optional[ArticleIngestionService] = None
         self._silver_service: Optional[SilverService] = None
+        self._gold_service: Optional[GoldService] = None
         self._retrieval_service: Optional[DocumentRetrievalService] = None
         self._approval_service: Optional[ApprovalService] = None
         self._opportunity_scoring_service: Optional[OpportunityScoringService] = None
@@ -281,6 +294,54 @@ class ServiceContainer:
             self._silver_repository = SupabaseSilverRepository(client)
         return self._silver_repository
 
+    def get_trend_repository(self) -> ITrendRepository:
+        """Get or create the Gold-layer trend metrics repository.
+
+        Returns:
+            ITrendRepository backed by Supabase.
+
+        Raises:
+            ValueError: If Supabase is not configured.
+        """
+        if not self._trend_repository:
+            if not self._config.supabase.enabled:
+                raise ValueError(
+                    "The Gold trend repository requires SUPABASE_URL and "
+                    "SUPABASE_SERVICE_ROLE_KEY"
+                )
+            from supabase import create_client
+
+            logger.info("Creating SupabaseTrendRepository (Gold trends)")
+            client = create_client(
+                self._config.supabase.url, self._config.supabase.service_role_key
+            )
+            self._trend_repository = SupabaseTrendRepository(client)
+        return self._trend_repository
+
+    def get_untagged_repository(self) -> IUntaggedRepository:
+        """Get or create the untagged-article capture repository (Gold side-table).
+
+        Returns:
+            IUntaggedRepository backed by Supabase.
+
+        Raises:
+            ValueError: If Supabase is not configured.
+        """
+        if not self._untagged_repository:
+            if not self._config.supabase.enabled:
+                raise ValueError(
+                    "The untagged-article repository requires SUPABASE_URL and "
+                    "SUPABASE_SERVICE_ROLE_KEY"
+                )
+            from supabase import create_client
+
+            logger.info("Creating SupabaseUntaggedRepository (untagged capture)")
+            client = create_client(
+                self._config.supabase.url, self._config.supabase.service_role_key
+            )
+            self._untagged_repository = SupabaseUntaggedRepository(client)
+        return self._untagged_repository
+
     def get_cache_manager(self) -> CacheManager:
         """Get or create cache manager for AI Gateway.
 
@@ -424,9 +485,35 @@ class ServiceContainer:
                 silver_repository=self.get_silver_repository(),
                 classifier=self.get_relevance_classifier(),
                 scraper=self.get_scraper(),
+                scoring_strategy=self.get_scoring_strategy(),
+                theme_categories=ThemeMappings.get_mapping().categories,
                 vectorstore=self.get_vectorstore(),
             )
         return self._silver_service
+
+    def get_gold_service(self) -> GoldService:
+        """Get or create the Gold aggregation service.
+
+        Aggregates the fintech corpus into per-theme weekly trend metrics.
+        Requires Supabase (Bronze, Silver and trend stores).
+
+        Raises:
+            ValueError: If Supabase is not configured.
+        """
+        if not self._gold_service:
+            if not self._config.supabase.enabled:
+                raise ValueError(
+                    "Gold aggregation requires Supabase (SUPABASE_URL and "
+                    "SUPABASE_SERVICE_ROLE_KEY)"
+                )
+            logger.info("Creating GoldService")
+            self._gold_service = GoldService(
+                article_repository=self.get_article_repository(),
+                silver_repository=self.get_silver_repository(),
+                trend_repository=self.get_trend_repository(),
+                untagged_repository=self.get_untagged_repository(),
+            )
+        return self._gold_service
 
     def get_retrieval_service(self) -> DocumentRetrievalService:
         """Get or create document retrieval service.

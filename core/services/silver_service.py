@@ -5,9 +5,11 @@ on exactly once (a verdict is recorded), so later runs never re-classify it.
 """
 
 import logging
+from typing import Dict, List
 
 from core.interfaces.article_repository import IArticleRepository
 from core.interfaces.relevance_classifier import IRelevanceClassifier
+from core.interfaces.scoring_strategy import IScoringStrategy
 from core.interfaces.scraper import IWebScraper
 from core.interfaces.silver_repository import ISilverRepository
 from core.models.article import Article
@@ -24,7 +26,9 @@ class SilverService:
     Bronze articles are processed exactly once: each gets a verdict recorded in
     the Silver store (fintech-relevant or not), so later runs skip them and
     never re-run classification. Only fintech-relevant articles are scraped and
-    embedded. The vectorstore must be the persistent Supabase pgvector store.
+    embedded; their themes are assigned here on the full scraped text and stored
+    on the verdict, so the Gold layer aggregates them without re-deriving from
+    the thinner Bronze text. The vectorstore must be the Supabase pgvector store.
     """
 
     def __init__(
@@ -33,12 +37,16 @@ class SilverService:
         silver_repository: ISilverRepository,
         classifier: IRelevanceClassifier,
         scraper: IWebScraper,
+        scoring_strategy: IScoringStrategy,
+        theme_categories: Dict[str, List[str]],
         vectorstore,
     ):
         self._repository = repository
         self._silver_repository = silver_repository
         self._classifier = classifier
         self._scraper = scraper
+        self._scoring_strategy = scoring_strategy
+        self._theme_categories = theme_categories
         self._vectorstore = vectorstore
 
     def build(self) -> int:
@@ -76,7 +84,13 @@ class SilverService:
                 logger.warning(f"Skipping invalid article {raw.url}: {e}")
                 continue
             documents.append(article_to_document(article))
-            verdicts.append(SilverVerdict(url=raw.url, fintech_relevant=True))
+            verdicts.append(
+                SilverVerdict(
+                    url=raw.url,
+                    fintech_relevant=True,
+                    themes=self._themes_for(article),
+                )
+            )
 
         # Embed first; record verdicts only after embedding succeeds, so a failed
         # embed run retries rather than marking articles as done. The vector
@@ -97,3 +111,9 @@ class SilverService:
             f"Silver: {fintech} fintech of {len(pending)} new articles processed"
         )
         return fintech
+
+    def _themes_for(self, article: Article) -> List[str]:
+        """Themes whose keywords appear in the article's title + full text."""
+        text = f"{article.title} {article.text}".lower()
+        scores = self._scoring_strategy.score(text, self._theme_categories)
+        return [theme for theme, count in scores.items() if count > 0]

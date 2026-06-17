@@ -1,7 +1,7 @@
 """Supabase-backed Silver verdict store"""
 
 import logging
-from typing import List, Set
+from typing import Dict, List, Set
 
 from supabase import Client
 
@@ -28,9 +28,24 @@ class SupabaseSilverRepository(ISilverRepository):
         rows: list = resp.data or []
         return {row["url"] for row in rows}
 
+    def fintech_themes(self) -> Dict[str, List[str]]:
+        resp = (
+            self._client.table(TABLE)
+            .select("url, themes")
+            .eq("fintech_relevant", True)
+            .execute()
+        )
+        rows: list = resp.data or []
+        return {row["url"]: (row.get("themes") or []) for row in rows}
+
     def record(self, verdicts: List[SilverVerdict]) -> int:
         rows = [
-            {"url": v.url, "fintech_relevant": v.fintech_relevant} for v in verdicts
+            {
+                "url": v.url,
+                "fintech_relevant": v.fintech_relevant,
+                "themes": v.themes,
+            }
+            for v in verdicts
         ]
         if not rows:
             return 0

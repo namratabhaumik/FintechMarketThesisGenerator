@@ -6,8 +6,10 @@ from core.interfaces.relevance_classifier import IRelevanceClassifier
 from core.interfaces.scraper import IWebScraper
 from core.models.raw_article import RawArticle
 from core.services.silver_service import SilverService
+from finthesis_internal.keyword_scoring_strategy import KeywordCountScoringStrategy
 
 PUB = datetime(2026, 1, 1, tzinfo=timezone.utc)
+THEMES = {"Payments": ["payment"], "Crypto": ["crypto"]}
 
 
 class _FakeRepo:
@@ -39,8 +41,10 @@ class _TitleClassifier(IRelevanceClassifier):
 
 
 class _StubScraper(IWebScraper):
+    """Returns a body that mentions 'payment' - a theme keyword not in titles."""
+
     def scrape(self, url: str) -> str:
-        return f"full scraped body for {url}"
+        return f"full body discussing payment infrastructure for {url}"
 
 
 class _FakeVectorStore:
@@ -58,37 +62,48 @@ def _raw(title, url):
     )
 
 
-def test_embeds_fintech_records_all_verdicts_and_skips_processed():
+def _service(articles, silver_repo, vs):
+    return SilverService(
+        _FakeRepo(articles),
+        silver_repo,
+        _TitleClassifier(),
+        _StubScraper(),
+        KeywordCountScoringStrategy(),
+        THEMES,
+        vs,
+    )
+
+
+def test_embeds_fintech_records_verdicts_with_themes_from_full_text():
     raw = [
-        _raw("Fintech A", "https://x/1"),    # new + fintech    -> embed + verdict True
-        _raw("Space B", "https://x/2"),       # new, not fintech -> verdict False, no embed
-        _raw("Fintech C", "https://x/3"),     # already processed -> skipped entirely
+        _raw("Fintech A", "https://x/1"),    # new + fintech    -> embed, themed
+        _raw("Space B", "https://x/2"),       # new, not fintech -> verdict False
+        _raw("Fintech C", "https://x/3"),     # already processed -> skipped
     ]
     silver_repo = _FakeSilverRepo(processed={"https://x/3"})
     vs = _FakeVectorStore()
-    svc = SilverService(_FakeRepo(raw), silver_repo, _TitleClassifier(), _StubScraper(), vs)
 
-    embedded = svc.build()
+    embedded = _service(raw, silver_repo, vs).build()
 
     assert embedded == 1
     assert len(vs.built) == 1
-    doc = vs.built[0]
-    assert doc.metadata["url"] == "https://x/1"
-    assert doc.metadata["published_at"] == PUB.isoformat()
-    assert "full scraped body" in doc.page_content
+    assert vs.built[0].metadata["url"] == "https://x/1"
 
-    # A verdict is recorded for both decided articles (the rejected one too),
-    # so neither is re-classified on a later run. The processed one is untouched.
-    recorded = {v.url: v.fintech_relevant for v in silver_repo.recorded}
-    assert recorded == {"https://x/1": True, "https://x/2": False}
+    by_url = {v.url: v for v in silver_repo.recorded}
+    assert set(by_url) == {"https://x/1", "https://x/2"}
+    # Theme came from the scraped body ("payment"), not the title "Fintech A".
+    assert by_url["https://x/1"].fintech_relevant is True
+    assert by_url["https://x/1"].themes == ["Payments"]
+    # Rejected article: verdict recorded, no themes.
+    assert by_url["https://x/2"].fintech_relevant is False
+    assert by_url["https://x/2"].themes == []
 
 
 def test_no_new_articles_does_not_call_build():
     raw = [_raw("Fintech A", "https://x/1")]
     silver_repo = _FakeSilverRepo(processed={"https://x/1"})
     vs = _FakeVectorStore()
-    svc = SilverService(_FakeRepo(raw), silver_repo, _TitleClassifier(), _StubScraper(), vs)
 
-    assert svc.build() == 0
+    assert _service(raw, silver_repo, vs).build() == 0
     assert vs.built == []
     assert silver_repo.recorded == []

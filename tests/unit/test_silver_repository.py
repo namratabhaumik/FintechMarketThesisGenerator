@@ -1,4 +1,4 @@
-"""Unit tests for the Silver SupabaseSilverRepository"""
+"""Unit tests for the Silver SupabaseSilverRepository (verdict dedup)."""
 
 from core.implementations.repositories.supabase_silver_repository import (
     SupabaseSilverRepository,
@@ -13,9 +13,10 @@ class _FakeResp:
 
 class _FakeTable:
     def __init__(self, store: dict):
-        self._store = store
+        self._store = store  # url -> full row dict
         self._op = None
         self._payload = None
+        self._filter = None
 
     def upsert(self, rows, on_conflict=None, ignore_duplicates=False):
         new = [r for r in rows if r["url"] not in self._store]
@@ -28,10 +29,18 @@ class _FakeTable:
         self._op = "select"
         return self
 
+    def eq(self, column, value):
+        self._filter = (column, value)
+        return self
+
     def execute(self):
         if self._op == "upsert":
             return _FakeResp(data=self._payload)
-        return _FakeResp(data=[{"url": u} for u in self._store])
+        rows = list(self._store.values())
+        if self._filter:
+            col, val = self._filter
+            rows = [r for r in rows if r.get(col) == val]
+        return _FakeResp(data=rows)
 
 
 class _FakeClient:
@@ -54,11 +63,26 @@ def test_record_and_processed_urls():
     assert repo.processed_urls() == {"https://x/1", "https://x/2"}
 
 
+def test_fintech_themes_returns_themes_for_relevant_only():
+    repo = SupabaseSilverRepository(_FakeClient())
+    repo.record(
+        [
+            SilverVerdict(url="https://x/1", fintech_relevant=True, themes=["Payments"]),
+            SilverVerdict(url="https://x/2", fintech_relevant=False),
+            SilverVerdict(url="https://x/3", fintech_relevant=True, themes=["Crypto", "Payments"]),
+        ]
+    )
+    assert repo.fintech_themes() == {
+        "https://x/1": ["Payments"],
+        "https://x/3": ["Crypto", "Payments"],
+    }
+    assert repo.processed_urls() == {"https://x/1", "https://x/2", "https://x/3"}
+
+
 def test_record_dedupes_by_url():
     repo = SupabaseSilverRepository(_FakeClient())
     repo.record([SilverVerdict(url="https://x/1", fintech_relevant=True)])
 
-    # Re-recording an existing URL adds nothing.
     again = repo.record(
         [
             SilverVerdict(url="https://x/1", fintech_relevant=True),
