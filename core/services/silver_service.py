@@ -7,6 +7,7 @@ on exactly once (a verdict is recorded), so later runs never re-classify it.
 import logging
 from typing import Dict, List
 
+from core.interfaces.article_content_repository import IArticleContentRepository
 from core.interfaces.article_repository import IArticleRepository
 from core.interfaces.quarantine_repository import IQuarantineRepository
 from core.interfaces.relevance_classifier import IRelevanceClassifier
@@ -25,6 +26,9 @@ from core.utils.text_utils import clean_article_text
 
 logger = logging.getLogger(__name__)
 
+# Upper bound on stored article text (~2000 words).
+MAX_ARTICLE_CHARS = 12_000
+
 
 class SilverService:
     """Builds the embedded corpus (Silver) from the raw store (Bronze).
@@ -41,6 +45,7 @@ class SilverService:
         self,
         repository: IArticleRepository,
         silver_repository: ISilverRepository,
+        content_repository: IArticleContentRepository,
         quarantine_repository: IQuarantineRepository,
         classifier: IRelevanceClassifier,
         scraper: IWebScraper,
@@ -50,6 +55,7 @@ class SilverService:
     ):
         self._repository = repository
         self._silver_repository = silver_repository
+        self._content_repository = content_repository
         self._quarantine_repository = quarantine_repository
         self._classifier = classifier
         self._scraper = scraper
@@ -68,6 +74,9 @@ class SilverService:
         # so neither is reprocessed.
         skip = self._silver_repository.processed_urls() | self._quarantine_repository.quarantined_urls()
         pending = [r for r in raw_articles if r.url not in skip]
+        # Validated text already persisted (e.g. a prior run scraped it but
+        # failed to embed). Reuse it so the scrape happens once per URL.
+        persisted = {a.url: a for a in self._content_repository.fetch_all()}
         logger.info(
             f"Silver: {len(pending)} new of {len(raw_articles)} Bronze articles "
             f"({len(skip)} already processed or quarantined)"
@@ -75,45 +84,20 @@ class SilverService:
 
         documents = []
         verdicts = []
-        quarantined = []
+        quarantined: list = []
+        new_content = []
         for raw in pending:
             relevant = self._classifier.is_relevant(raw.title, raw.summary)
             if not relevant:
                 verdicts.append(SilverVerdict(url=raw.url, fintech_relevant=False))
                 continue
 
-            scraped = self._scraper.scrape(raw.url)
-            if not scraped:
-                # Full text unavailable. Quarantine for replay rather than
-                # embedding the thin RSS summary or retrying every run.
-                quarantined.append(
-                    QuarantineRecord(
-                        url=raw.url,
-                        reason=SCRAPE_FAILED,
-                        detail="scraper returned no text",
-                        title=raw.title,
-                    )
-                )
-                continue
-
-            try:
-                article = Article(
-                    title=raw.title,
-                    text=clean_article_text(scraped)[:4000],
-                    source=raw.source,
-                    url=raw.url,
-                    published_at=raw.published_at,
-                )
-            except ValueError as e:
-                quarantined.append(
-                    QuarantineRecord(
-                        url=raw.url,
-                        reason=INVALID_ARTICLE,
-                        detail=str(e),
-                        title=raw.title,
-                    )
-                )
-                continue
+            article = persisted.get(raw.url)
+            if article is None:
+                article = self._enrich(raw, quarantined)
+                if article is None:
+                    continue  # scrape failed or invalid -> quarantined
+                new_content.append(article)
 
             documents.append(article_to_document(article))
             verdicts.append(
@@ -124,9 +108,11 @@ class SilverService:
                 )
             )
 
-        # Embed first; record verdicts only after embedding succeeds, so a failed
-        # embed run retries rather than marking articles as done. The vector
-        # store dedups by URL internally and logs how many it actually adds.
+        # Persist the validated text BEFORE embedding, so a failed embed run can
+        # replay from it without re-scraping. Then embed; record verdicts only
+        # after embedding succeeds (failed embed -> no verdict -> retried, now
+        # cheaply, from persisted text). The vector store dedups by URL.
+        self._content_repository.save(new_content)
         if documents:
             logger.info(
                 f"Sending {len(documents)} fintech articles to the vector store "
@@ -142,9 +128,47 @@ class SilverService:
         fintech = len(documents)
         logger.info(
             f"Silver: {fintech} fintech of {len(pending)} new articles processed; "
-            f"{len(quarantined)} quarantined"
+            f"{len(new_content)} newly scraped, {len(quarantined)} quarantined"
         )
         return fintech
+
+    def _enrich(self, raw, quarantined: list):
+        """Scrape and validate a raw article into an Article.
+
+        Appends a QuarantineRecord and returns None on scrape failure or
+        validation failure.
+        """
+        scraped = self._scraper.scrape(raw.url)
+        if not scraped:
+            # Full text unavailable. Quarantine for replay rather than embedding
+            # the thin RSS summary or retrying every run.
+            quarantined.append(
+                QuarantineRecord(
+                    url=raw.url,
+                    reason=SCRAPE_FAILED,
+                    detail="scraper returned no text",
+                    title=raw.title,
+                )
+            )
+            return None
+        try:
+            return Article(
+                title=raw.title,
+                text=clean_article_text(scraped)[:MAX_ARTICLE_CHARS],
+                source=raw.source,
+                url=raw.url,
+                published_at=raw.published_at,
+            )
+        except ValueError as e:
+            quarantined.append(
+                QuarantineRecord(
+                    url=raw.url,
+                    reason=INVALID_ARTICLE,
+                    detail=str(e),
+                    title=raw.title,
+                )
+            )
+            return None
 
     def _themes_for(self, article: Article) -> List[str]:
         """Themes whose keywords appear in the article's title + full text."""
