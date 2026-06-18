@@ -72,14 +72,18 @@ class SupabaseVectorStoreImpl(IVectorStore):
         return vectorstore.as_retriever(search_kwargs={"k": k})
 
     def _fetch_existing_urls(self) -> Set[str]:
-        """Return the article URLs already embedded, for internal build dedup."""
+        """Return the article URLs already embedded, for internal build dedup.
+
+        Raises on read failure instead of returning an empty set: a silent empty
+        set would make build() treat every document as new and re-insert chunks,
+        duplicating embeddings. 
+        """
         try:
             resp = self._client.table(TABLE).select("metadata").execute()
-            return {
-                row["metadata"].get("url", "")
-                for row in resp.data
-                if row.get("metadata")
-            }
         except Exception as e:
-            logger.warning(f"Could not fetch existing URLs from Supabase: {e}")
-            return set()
+            raise RuntimeError(f"Failed to read existing URLs from Supabase: {e}") from e
+        return {
+            row["metadata"].get("url", "")
+            for row in resp.data
+            if row.get("metadata")
+        }

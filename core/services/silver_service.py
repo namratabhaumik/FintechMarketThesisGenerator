@@ -5,7 +5,7 @@ on exactly once (a verdict is recorded), so later runs never re-classify it.
 """
 
 import logging
-from typing import Dict, List
+from typing import Dict, List, NamedTuple
 
 from core.interfaces.article_content_repository import IArticleContentRepository
 from core.interfaces.article_repository import IArticleRepository
@@ -14,6 +14,7 @@ from core.interfaces.relevance_classifier import IRelevanceClassifier
 from core.interfaces.scoring_strategy import IScoringStrategy
 from core.interfaces.scraper import IWebScraper
 from core.interfaces.silver_repository import ISilverRepository
+from core.interfaces.vectorstore import IVectorStore
 from core.models.article import Article
 from core.models.quarantine_record import (
     INVALID_ARTICLE,
@@ -28,6 +29,18 @@ logger = logging.getLogger(__name__)
 
 # Upper bound on stored article text (~2000 words).
 MAX_ARTICLE_CHARS = 12_000
+
+
+class _Batch(NamedTuple):
+    """Work collected from the articles.
+
+    The fields are accumulator lists appended to during collection.
+    """
+
+    documents: list
+    verdicts: list
+    quarantined: list
+    new_content: list
 
 
 class SilverService:
@@ -51,7 +64,7 @@ class SilverService:
         scraper: IWebScraper,
         scoring_strategy: IScoringStrategy,
         theme_categories: Dict[str, List[str]],
-        vectorstore,
+        vectorstore: IVectorStore,
     ):
         self._repository = repository
         self._silver_repository = silver_repository
@@ -82,19 +95,24 @@ class SilverService:
             f"({len(skip)} already processed or quarantined)"
         )
 
-        documents = []
-        verdicts = []
-        quarantined: list = []
-        new_content = []
+        batch = self._collect(pending, persisted)
+        return self._commit(batch, total_pending=len(pending))
+
+    def _collect(self, pending, persisted) -> _Batch:
+        """Classify, enrich and theme each pending article into a _Batch.
+
+        Three classifier cases: errored (no answer -> skip, stays pending for a
+        later run), said NO (frozen rejected verdict), or said YES (enrich +
+        embed). Scrape/validation failures are quarantined inside _enrich.
+        """
+        batch = _Batch(documents=[], verdicts=[], quarantined=[], new_content=[])
         for raw in pending:
-            # Three cases: the classifier errored (no answer), said NO, or said
-            # YES. Only a real answer becomes a (frozen) verdict.
             try:
                 relevant = self._classifier.is_relevant(raw.title, raw.summary)
             except Exception as e:
                 # Could not classify (e.g. model/token/network error). Record
-                # nothing so the row stays pending; a later run of this script
-                # picks it up once the classifier is healthy.
+                # nothing so the row stays pending; a later run picks it up once
+                # the classifier is healthy.
                 logger.warning(
                     f"Classification failed for {raw.url}, left pending for a "
                     f"later run: {e}"
@@ -102,48 +120,53 @@ class SilverService:
                 continue
 
             if not relevant:  # real NO -> frozen rejected verdict
-                verdicts.append(SilverVerdict(url=raw.url, fintech_relevant=False))
+                batch.verdicts.append(SilverVerdict(url=raw.url, fintech_relevant=False))
                 continue
 
             # real YES -> enrich + embed
             article = persisted.get(raw.url)
             if article is None:
-                article = self._enrich(raw, quarantined)
+                article = self._enrich(raw, batch.quarantined)
                 if article is None:
                     continue  # scrape failed or invalid -> quarantined
-                new_content.append(article)
+                batch.new_content.append(article)
 
-            documents.append(article_to_document(article))
-            verdicts.append(
+            batch.documents.append(article_to_document(article))
+            batch.verdicts.append(
                 SilverVerdict(
                     url=raw.url,
                     fintech_relevant=True,
                     themes=self._themes_for(article),
                 )
             )
+        return batch
 
-        # Persist the validated text BEFORE embedding, so if embedding fails the
-        # next run can re-embed from it without re-scraping. Embed, then record
-        # verdicts only after embedding succeeds (failed embed -> no verdict ->
-        # a later run re-attempts it, cheaply, from persisted text). The vector
-        # store dedups by URL.
-        self._content_repository.save(new_content)
-        if documents:
+    def _commit(self, batch: _Batch, total_pending: int) -> int:
+        """Persist a collected batch; return the count of fintech articles.
+
+        Order matters: persist the validated text BEFORE embedding, so if
+        embedding fails the next run can re-embed from it without re-scraping.
+        Record verdicts only AFTER embedding succeeds (failed embed -> no verdict
+        -> a later run re-attempts it, cheaply, from persisted text). The vector
+        store dedups by URL.
+        """
+        self._content_repository.save(batch.new_content)
+        if batch.documents:
             logger.info(
-                f"Sending {len(documents)} fintech articles to the vector store "
-                "(already-embedded ones are skipped there)"
+                f"Sending {len(batch.documents)} fintech articles to the vector "
+                "store (already-embedded ones are skipped there)"
             )
-            self._vectorstore.build(documents)
+            self._vectorstore.build(batch.documents)
         else:
             logger.info("No new fintech articles to send")
 
-        self._silver_repository.record(verdicts)
-        self._quarantine_repository.add(quarantined)
+        self._silver_repository.record(batch.verdicts)
+        self._quarantine_repository.add(batch.quarantined)
 
-        fintech = len(documents)
+        fintech = len(batch.documents)
         logger.info(
-            f"Silver: {fintech} fintech of {len(pending)} new articles processed; "
-            f"{len(new_content)} newly scraped, {len(quarantined)} quarantined"
+            f"Silver: {fintech} fintech of {total_pending} new articles processed; "
+            f"{len(batch.new_content)} newly scraped, {len(batch.quarantined)} quarantined"
         )
         return fintech
 

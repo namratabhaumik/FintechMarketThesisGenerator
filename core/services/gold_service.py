@@ -42,6 +42,9 @@ class GoldService:
             The number of (week, theme) metric rows written.
         """
         themes_by_url = self._silver_repository.fintech_themes()
+        # In-memory filter: pull all Bronze rows and keep the fintech URLs. Fine
+        # at this scale. If volume ever makes the full fetch hurt, push this join 
+        # into a DB view, not a growing .in_() list.
         articles = [
             a for a in self._article_repository.fetch_all() if a.url in themes_by_url
         ]
