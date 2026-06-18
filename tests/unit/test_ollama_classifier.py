@@ -2,6 +2,8 @@
 
 from unittest.mock import Mock
 
+import pytest
+
 from config.settings import ClassifierConfig
 from core.implementations.classifiers.base_chat_classifier import SYSTEM_PROMPT
 from core.implementations.classifiers.ollama_classifier import OllamaFintechClassifier
@@ -67,8 +69,10 @@ def test_base_url_trailing_slash_is_normalized(monkeypatch):
     assert url == "http://localhost:11434/v1/chat/completions"
 
 
-def test_fails_open_when_ollama_unreachable(monkeypatch):
-    """If Ollama is down, the entry is kept (returns True), not dropped."""
+def test_raises_when_ollama_unreachable(monkeypatch):
+    """If Ollama is down the error propagates; Silver skips and retries 
+    rather than freezing a guessed verdict."""
     _patch_post(monkeypatch, exc=ConnectionError("connection refused"))
     classifier = OllamaFintechClassifier(ClassifierConfig(provider="ollama", model="qwen2.5:7b"))
-    assert classifier.is_relevant("anything", "anything") is True
+    with pytest.raises(ConnectionError):
+        classifier.is_relevant("anything", "anything")

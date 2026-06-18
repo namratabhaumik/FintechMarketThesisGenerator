@@ -87,11 +87,25 @@ class SilverService:
         quarantined: list = []
         new_content = []
         for raw in pending:
-            relevant = self._classifier.is_relevant(raw.title, raw.summary)
-            if not relevant:
+            # Three cases: the classifier errored (no answer), said NO, or said
+            # YES. Only a real answer becomes a (frozen) verdict.
+            try:
+                relevant = self._classifier.is_relevant(raw.title, raw.summary)
+            except Exception as e:
+                # Could not classify (e.g. model/token/network error). Record
+                # nothing so the row stays pending; a later run of this script
+                # picks it up once the classifier is healthy.
+                logger.warning(
+                    f"Classification failed for {raw.url}, left pending for a "
+                    f"later run: {e}"
+                )
+                continue
+
+            if not relevant:  # real NO -> frozen rejected verdict
                 verdicts.append(SilverVerdict(url=raw.url, fintech_relevant=False))
                 continue
 
+            # real YES -> enrich + embed
             article = persisted.get(raw.url)
             if article is None:
                 article = self._enrich(raw, quarantined)
@@ -108,10 +122,11 @@ class SilverService:
                 )
             )
 
-        # Persist the validated text BEFORE embedding, so a failed embed run can
-        # replay from it without re-scraping. Then embed; record verdicts only
-        # after embedding succeeds (failed embed -> no verdict -> retried, now
-        # cheaply, from persisted text). The vector store dedups by URL.
+        # Persist the validated text BEFORE embedding, so if embedding fails the
+        # next run can re-embed from it without re-scraping. Embed, then record
+        # verdicts only after embedding succeeds (failed embed -> no verdict ->
+        # a later run re-attempts it, cheaply, from persisted text). The vector
+        # store dedups by URL.
         self._content_repository.save(new_content)
         if documents:
             logger.info(

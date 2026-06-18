@@ -67,6 +67,13 @@ class _TitleClassifier(IRelevanceClassifier):
         return "fintech" in title.lower()
 
 
+class _BoomClassifier(IRelevanceClassifier):
+    """Mimics a classifier that cannot answer (e.g. model/token error)."""
+
+    def is_relevant(self, title: str, description: str) -> bool:
+        raise RuntimeError("classifier unavailable")
+
+
 class _StubScraper(IWebScraper):
     """Returns a body that mentions 'payment' - a theme keyword not in titles."""
 
@@ -103,13 +110,13 @@ def _raw(title, url, source="x.com"):
     )
 
 
-def _service(articles, silver_repo, vs, quarantine_repo=None, scraper=None, content_repo=None):
+def _service(articles, silver_repo, vs, quarantine_repo=None, scraper=None, content_repo=None, classifier=None):
     return SilverService(
         _FakeRepo(articles),
         silver_repo,
         content_repo or _FakeContentRepo(),
         quarantine_repo or _FakeQuarantineRepo(),
-        _TitleClassifier(),
+        classifier or _TitleClassifier(),
         scraper or _StubScraper(),
         KeywordCountScoringStrategy(),
         THEMES,
@@ -209,6 +216,25 @@ def test_quarantined_urls_are_skipped():
     assert embedded == 0
     assert vs.built == []
     assert quarantine_repo.added == []  # not reprocessed
+
+
+def test_classifier_error_skips_without_verdict():
+    raw = [_raw("Fintech A", "https://x/1")]
+    silver_repo = _FakeSilverRepo()
+    quarantine_repo = _FakeQuarantineRepo()
+    content_repo = _FakeContentRepo()
+    vs = _FakeVectorStore()
+
+    embedded = _service(
+        raw, silver_repo, vs, quarantine_repo,
+        content_repo=content_repo, classifier=_BoomClassifier(),
+    ).build()
+
+    assert embedded == 0
+    assert silver_repo.recorded == []
+    assert quarantine_repo.added == []
+    assert vs.built == []
+    assert content_repo.saved == []
 
 
 def test_no_new_articles_does_not_call_build():

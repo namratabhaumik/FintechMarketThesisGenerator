@@ -3,6 +3,8 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
 from config.settings import ClassifierConfig
 from core.implementations.classifiers.base_chat_classifier import SYSTEM_PROMPT
 from core.implementations.classifiers.huggingface_classifier import (
@@ -66,8 +68,8 @@ def test_answer_is_case_and_whitespace_insensitive(monkeypatch):
     assert classifier.is_relevant("Robinhood", "trading app") is True
 
 
-def test_fails_open_on_api_error(monkeypatch):
-    """On any API error the entry is kept (returns True), not dropped."""
+def test_raises_on_api_error(monkeypatch):
+    """On any API error the error propagates (no fail-open); the caller decides."""
     fake_client = Mock()
     fake_client.chat_completion.side_effect = RuntimeError("HF down")
     monkeypatch.setattr(
@@ -76,4 +78,5 @@ def test_fails_open_on_api_error(monkeypatch):
     )
     classifier = HuggingFaceFintechClassifier(ClassifierConfig(api_key="t", model="m"))
 
-    assert classifier.is_relevant("anything", "anything") is True
+    with pytest.raises(RuntimeError):
+        classifier.is_relevant("anything", "anything")
