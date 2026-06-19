@@ -19,6 +19,7 @@ from core.interfaces.silver_repository import ISilverRepository
 from core.interfaces.trend_repository import ITrendRepository
 from core.interfaces.untagged_repository import IUntaggedRepository
 from core.models.trend_metric import TrendMetric
+from core.utils.data_quality import check_gold
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +73,11 @@ class GoldService:
             TrendMetric(week_start=week, theme=theme, article_count=count)
             for (week, theme), count in sorted(buckets.items())
         ]
+        check_gold(
+            fintech_verdicts=len(themes_by_url),
+            fintech_with_content=fintech,
+            metrics=metrics,
+        )
         self._trend_repository.upsert(metrics)
         self._untagged_repository.save(untagged)
         logger.info(

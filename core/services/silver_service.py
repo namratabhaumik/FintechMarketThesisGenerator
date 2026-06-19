@@ -23,6 +23,7 @@ from core.models.quarantine_record import (
 )
 from core.models.silver_record import SilverVerdict
 from core.services.ingestion_service import article_to_document
+from core.utils.data_quality import check_silver
 from core.utils.text_utils import clean_article_text
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,7 @@ class _Batch(NamedTuple):
     verdicts: list
     quarantined: list
     new_content: list
+    errored: list
 
 
 class SilverService:
@@ -105,7 +107,9 @@ class SilverService:
         later run), said NO (frozen rejected verdict), or said YES (enrich +
         embed). Scrape/validation failures are quarantined inside _enrich.
         """
-        batch = _Batch(documents=[], verdicts=[], quarantined=[], new_content=[])
+        batch = _Batch(
+            documents=[], verdicts=[], quarantined=[], new_content=[], errored=[]
+        )
         for raw in pending:
             try:
                 relevant = self._classifier.is_relevant(raw.title, raw.summary)
@@ -117,6 +121,7 @@ class SilverService:
                     f"Classification failed for {raw.url}, left pending for a "
                     f"later run: {e}"
                 )
+                batch.errored.append(raw.url)
                 continue
 
             if not relevant:  # real NO -> frozen rejected verdict
@@ -162,6 +167,13 @@ class SilverService:
 
         self._silver_repository.record(batch.verdicts)
         self._quarantine_repository.add(batch.quarantined)
+
+        check_silver(
+            pending=total_pending,
+            recorded=len(batch.verdicts),
+            quarantined=len(batch.quarantined),
+            errored=len(batch.errored),
+        )
 
         fintech = len(batch.documents)
         logger.info(

@@ -14,6 +14,7 @@ from core.interfaces.relevance_classifier import IRelevanceClassifier
 from core.interfaces.scraper import IWebScraper
 from core.models.article import Article
 from core.models.raw_article import RawArticle
+from core.utils.data_quality import check_ingestion
 from core.utils.text_utils import clean_article_text
 
 logger = logging.getLogger(__name__)
@@ -111,7 +112,7 @@ class RSSArticleSource(IArticleSource):
                 )
             except ValueError as e:
                 logger.warning(f"Invalid raw article skipped: {e}")
-        logger.info(f"Collected {len(raw_articles)} raw articles for Bronze")
+        check_ingestion(seen=len(entries), landed=len(raw_articles))
         return raw_articles
 
     def _collect_entries(self, limit: int) -> list:
