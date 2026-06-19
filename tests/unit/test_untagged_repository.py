@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from core.implementations.repositories.supabase_untagged_repository import (
     SupabaseUntaggedRepository,
 )
-from core.models.raw_article import RawArticle
+from core.models.article import Article
 
 PUB = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
@@ -40,7 +40,7 @@ class _FakeClient:
 
 
 def _raw(url):
-    return RawArticle(title="T", url=url, published_at=PUB, summary="s", source="x.com")
+    return Article(title="T", text="body", url=url, published_at=PUB, source="x.com")
 
 
 def test_save_records_and_dedupes():
