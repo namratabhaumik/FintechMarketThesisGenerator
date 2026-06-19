@@ -7,22 +7,35 @@ from core.models.article import Article
 
 
 class IArticleContentRepository(ABC):
-    """Stores the validated, non-aggregated article record per URL.
+    """Silver layer: store of full, validated article text (article_content).
 
-    This is the durable source the embedding step transforms from, so embedding
-    is replayable without re-scraping. Deduped by URL.
+    Silver scrapes full text --> text passes validation --> save it here
+    (one row per URL) --> embedding step later reads from here, NOT the web.
+
+    This is a durable copy of the text, so embedding is replayable.
+    If embedding fails or the model changes --> re-embed from this store --> no
+    need to scrape the web again. Each URL is stored only once (deduped by URL).
     """
 
     @abstractmethod
     def save(self, articles: List[Article]) -> int:
-        """Persist validated articles, skipping any URL already stored.
+        """Save validated articles, ignoring any URL already stored.
+
+        for each article --> if its URL is new, store it --> if its URL is
+        already here, skip it.
+
+        Args:
+            articles: Articles whose full text passed validation.
 
         Returns:
-            The number of articles newly stored.
+            How many articles were newly stored (skipped duplicates not counted).
         """
         pass
 
     @abstractmethod
     def fetch_all(self) -> List[Article]:
-        """Return all stored validated articles."""
+        """Return every validated article in the store.
+
+        The embedding step calls this to get the text it needs to embed.
+        """
         pass

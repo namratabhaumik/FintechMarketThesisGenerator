@@ -29,19 +29,27 @@ class BeautifulSoupScraper(IWebScraper):
             url: URL to scrape.
 
         Returns:
-            Extracted text content from the URL.
+            Extracted text content from the URL, or "" if anything fails.
+
+        fetch the page --> parse HTML --> strip noise --> narrow to
+        the article body --> collect text blocks --> join with newlines.
         """
         try:
+            # Fetch the page. A custom User-Agent avoids bot blocks; the timeout
+            # keeps one slow site from stalling the whole run.
             resp = requests.get(
                 url,
                 timeout=self._config.timeout,
                 headers={"User-Agent": self._config.user_agent}
             )
+            # Turn any 4xx/5xx HTTP status into an exception (caught below).
             resp.raise_for_status()
 
+            # Parse the raw HTML into a navigable tree we can query and prune.
             soup = BeautifulSoup(resp.text, "html.parser")
 
-            # Remove unwanted elements
+            # Remove unwanted elements: scripts, styling, and page chrome (nav,
+            # header, footer, sidebars) are not article body --> delete them.
             for tag in soup(["script", "style", "nav", "header", "footer", "aside"]):
                 tag.decompose()
 
@@ -61,6 +69,8 @@ class BeautifulSoupScraper(IWebScraper):
             # *document* order, which on TechCrunch is the broad <main> wrapper
             # enclosing all that chrome. Iterating preserves priority so the
             # tight post-content container wins. Fall back to the whole document.
+            # root: the subtree we will read text from. Start at the whole
+            # document, then try to narrow it to the tightest article container.
             root: Tag = soup
             for selector in (
                 "div.wp-block-post-content",
@@ -68,6 +78,9 @@ class BeautifulSoupScraper(IWebScraper):
                 "article",
                 "main",
             ):
+                # First selector that matches wins (most-specific first) -->
+                # narrow root to it and stop --> if none match, root stays the
+                # whole document.
                 match = soup.select_one(selector)
                 if match:
                     root = match
@@ -77,6 +90,10 @@ class BeautifulSoupScraper(IWebScraper):
             # items, and blockquotes are part of the article too. Keep the
             # length threshold low so short-but-real sentences (e.g. ledes)
             # aren't dropped.
+            # blocks: the cleaned text of each body element inside root. We walk
+            # paragraphs, subheadings, list items, and quotes (all article
+            # content) and keep each element's trimmed text, dropping anything
+            # 1 char or shorter (stray markup, bullets).
             blocks = [
                 el.get_text(strip=True)
                 for el in root.find_all(["p", "h2", "h3", "li", "blockquote"])
@@ -92,5 +109,7 @@ class BeautifulSoupScraper(IWebScraper):
             return text
 
         except Exception as e:
+            # Any failure (network error, bad status, parse issue) --> log and
+            # return "" so the caller can fall back to the RSS description.
             logger.warning(f"Failed to scrape {url}: {e}")
             return ""

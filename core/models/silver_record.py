@@ -16,10 +16,13 @@ class SilverVerdict:
     theme); the Gold layer aggregates trends from them.
     """
 
-    url: str
-    fintech_relevant: bool
+    url: str            # The Bronze article this verdict is about; the dedup key.
+    fintech_relevant: bool  # True = accepted (scraped/embedded); False = rejected.
+    # Fintech themes matched on the full text. Empty when rejected, or when
+    # accepted but matching no theme. Gold rolls these up into weekly trends.
     themes: List[str] = field(default_factory=list)
 
     def __post_init__(self):
+        # The URL is the identity of the verdict, so it must be present.
         if not self.url or not self.url.strip():
             raise ValueError("SilverVerdict url cannot be empty")

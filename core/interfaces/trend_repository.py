@@ -7,18 +7,24 @@ from core.models.trend_metric import TrendMetric
 
 
 class ITrendRepository(ABC):
-    """Stores per-theme weekly trend metrics (the Gold layer).
+    """Gold layer: the aggregated metrics store (per-theme, per-week counts).
 
-    Metrics are recomputed from Silver each run, so writes overwrite the count
-    for an existing (week, theme) rather than accumulating.
+    This is the end of the pipeline. Each run --> Gold counts up the Silver
+    verdicts by theme and week --> writes those counts here for the app to read.
+
+    Counts are recomputed from scratch each run, so a write for a given
+    (week, theme) overwrites the old count rather than adding to it. That keeps
+    the numbers correct even if the same run executes more than once.
     """
 
     @abstractmethod
     def upsert(self, metrics: List[TrendMetric]) -> int:
-        """Insert or overwrite metrics, keyed by (week_start, theme).
+        """Insert new rows or overwrite existing ones, keyed by (week_start, theme).
+
+        "Upsert" = update if the (week, theme) row already exists, else insert.
 
         Returns:
-            The number of metric rows written.
+            How many metric rows were written.
         """
         pass
 

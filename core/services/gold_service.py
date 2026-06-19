@@ -44,7 +44,14 @@ class GoldService:
 
         Returns:
             The number of (week, theme) metric rows written.
+
+        read accepted-article themes from Silver --> walk all stored
+        article content --> for each article, add 1 to every (week, theme) tally
+        --> turn tallies into TrendMetric rows --> save metrics + untagged.
         """
+        # URL --> its themes, for fintech-accepted articles only (Silver's
+        # verdict view of "what is relevant and what it is about"). A URL missing
+        # here was rejected or not yet decided, so Gold ignores it.
         themes_by_url = self._silver_repository.fintech_themes()
         # Single in-memory pass over the Silver content store (already just the
         # accepted subset), joined to the verdict themes by URL. No Bronze read:

@@ -13,11 +13,13 @@ class TrendMetric:
     toward more than one theme).
     """
 
-    week_start: date
-    theme: str
-    article_count: int
+    week_start: date    # Monday of the publish week; the time bucket.
+    theme: str          # The fintech theme this count is for.
+    article_count: int  # How many fintech articles that week matched the theme.
 
     def __post_init__(self):
+        # A metric with no theme is meaningless, and a coverage count can never
+        # be negative - guard both so a malformed metric never reaches Gold.
         if not self.theme or not self.theme.strip():
             raise ValueError("TrendMetric theme cannot be empty")
         if self.article_count < 0:

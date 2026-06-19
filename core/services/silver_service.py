@@ -35,14 +35,18 @@ MAX_ARTICLE_CHARS = 12_000
 class _Batch(NamedTuple):
     """Work collected from the articles.
 
-    The fields are accumulator lists appended to during collection.
+    The fields are accumulator lists appended to during collection: _collect
+    fills them as it walks the pending articles, and _commit then persists each
+    list to its store. Keeping them separate lets _commit write in the right
+    order (content before vectors before verdicts) and lets the data-quality
+    gate reconcile the counts.
     """
 
-    documents: list
-    verdicts: list
-    quarantined: list
-    new_content: list
-    errored: list
+    documents: list      # LangChain Documents for the accepted articles, to embed.
+    verdicts: list       # One SilverVerdict per decided article (accepted or rejected).
+    quarantined: list    # QuarantineRecords for scrape/validation failures.
+    new_content: list    # Newly scraped Articles to persist to article_content.
+    errored: list        # URLs whose classification threw; left pending for a retry.
 
 
 class SilverService:
@@ -84,13 +88,15 @@ class SilverService:
         Returns:
             The number of articles newly embedded this run.
         """
+        # raw_articles: the whole Bronze corpus (every URL ever landed).
         raw_articles = self._repository.fetch_all()
-        # Skip articles already decided on (a verdict) or parked in quarantine,
-        # so neither is reprocessed.
+        # skip: the set of URLs already handled - either decided on (a verdict)
+        # or parked in quarantine - unioned so neither group is reprocessed.
         skip = self._silver_repository.processed_urls() | self._quarantine_repository.quarantined_urls()
+        # pending: only the Bronze articles this run still needs to decide on.
         pending = [r for r in raw_articles if r.url not in skip]
-        # Validated text already persisted (e.g. a prior run scraped it but
-        # failed to embed). Reuse it so the scrape happens once per URL.
+        # persisted: {url -> Article} of full text already scraped on a prior run
+        # that then failed to embed. Reusing it means a URL is scraped just once.
         persisted = {a.url: a for a in self._content_repository.fetch_all()}
         logger.info(
             f"Silver: {len(pending)} new of {len(raw_articles)} Bronze articles "

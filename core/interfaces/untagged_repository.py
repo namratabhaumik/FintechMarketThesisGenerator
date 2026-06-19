@@ -7,19 +7,26 @@ from core.models.article import Article
 
 
 class IUntaggedRepository(ABC):
-    """Stores fintech articles that matched no theme during Gold aggregation.
+    """Gold layer side-table: fintech articles that matched no theme.
 
-    A capture log for taxonomy gaps, not an input to any trend computation.
-    Deduped by URL so repeated Gold runs do not pile up duplicates. Fed Silver
-    `Article` records (the full-text source themes are matched against), so the
-    capture reflects exactly what failed to tag.
+    During Gold aggregation --> an accepted fintech article matches none of the
+    known themes --> a copy is logged here instead of being thrown away.
+
+    This is a diagnostic capture log for taxonomy gaps (articles the theme list
+    failed to cover); it is NOT used in any trend count. It is fed the Silver
+    `Article` records (the full text that themes are matched against), so the log
+    reflects exactly what failed to tag. Deduped by URL so repeated Gold runs do
+    not pile up duplicates.
     """
 
     @abstractmethod
     def save(self, articles: List[Article]) -> int:
-        """Persist untagged articles, skipping any already recorded.
+        """Log untagged articles, skipping any URL already recorded.
+
+        for each article --> if its URL is new, record it --> otherwise
+        skip it.
 
         Returns:
-            The number of articles newly recorded.
+            How many articles were newly recorded.
         """
         pass

@@ -7,28 +7,35 @@ from core.models.raw_article import RawArticle
 
 
 class IArticleRepository(ABC):
-    """Durable, append-only store of raw feed entries.
+    """Bronze layer: the raw landing zone for RSS feed entries (articles_raw).
 
-    Feed entries accumulate over time keyed by their publish date, so 
-    later stages (Silver scrape + embed, Gold trend aggregation) have 
-    a growing historical corpus instead of a single live snapshot.
+    This is where the pipeline starts. RSS feeds are read --> each entry is
+    saved here exactly as it arrived, with no cleaning. The store is append-only
+    and grows over time (keyed by publish date), so it becomes a historical
+    corpus rather than just the latest snapshot of the feeds.
+
+    Everything downstream reads from here: Silver pulls these raw entries to
+    classify/scrape/embed them, and Gold later aggregates the results.
     """
 
     @abstractmethod
     def save(self, articles: List[RawArticle]) -> int:
-        """Append articles, skipping any already stored (deduped by URL).
+        """Add raw entries, skipping any already stored (deduped by URL).
+
+        for each entry --> if its URL is new, append it --> if the URL was
+        seen in an earlier run, skip it so the same article is not stored twice.
 
         Args:
-            articles: Raw feed entries to persist.
+            articles: Raw feed entries to persist verbatim.
 
         Returns:
-            The number of articles newly inserted (duplicates are not counted).
+            How many entries were newly inserted (duplicates are not counted).
         """
         pass
 
     @abstractmethod
     def fetch_all(self) -> List[RawArticle]:
-        """Return all stored articles, most recently published first.
+        """Return all stored raw articles, newest published first.
 
         The Silver layer reads these to enrich them (classify, scrape, embed).
         """
@@ -36,5 +43,5 @@ class IArticleRepository(ABC):
 
     @abstractmethod
     def count(self) -> int:
-        """Return the total number of articles in the store."""
+        """Return how many raw articles are in the store in total."""
         pass

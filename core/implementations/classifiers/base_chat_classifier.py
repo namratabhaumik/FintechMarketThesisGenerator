@@ -13,6 +13,8 @@ from core.interfaces.relevance_classifier import IRelevanceClassifier
 
 logger = logging.getLogger(__name__)
 
+# The instruction we send to the chat model. It pins down what counts as
+# fintech and demands a one-word YES/NO answer.
 SYSTEM_PROMPT = (
     "You are a strict financial technology (fintech) classifier. Fintech includes "
     "digital payments, crypto, banking infrastructure, trading apps, insurtech, and "
@@ -30,12 +32,21 @@ class BaseChatClassifier(IRelevanceClassifier):
         """Return True if the title/description is classified as fintech.
 
         Returns the model's real answer: YES -> True, anything else -> False.
+
+        build a system+user chat prompt --> ask the backend --> normalize
+        the reply --> True only if it starts with "YES".
         """
+        # Two-part chat prompt: the system rules, then the article's title and
+        # description as the user turn for the model to judge.
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": f"Title: {title}\nDescription: {description}"},
         ]
+        # Ask the backend, then normalize: None --> "", trim whitespace,
+        # uppercase, so the YES/NO check is robust to spacing and case.
         answer = (self._chat(messages) or "").strip().upper()
+        # Treat only a leading "YES" as fintech. Anything else (including a
+        # failed/empty reply) --> not relevant.
         is_fintech = answer.startswith("YES")
         logger.debug(f"Classifier '{title[:60]}' -> {answer!r} ({is_fintech})")
         return is_fintech

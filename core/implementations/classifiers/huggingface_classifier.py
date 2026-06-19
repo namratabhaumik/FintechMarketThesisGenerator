@@ -17,6 +17,7 @@ class HuggingFaceFintechClassifier(BaseChatClassifier):
 
     def __init__(self, config: ClassifierConfig):
         """Initialize with classifier configuration (model, HF token, timeout)."""
+        # One reusable client pointed at the chosen hosted model on Hugging Face.
         self._client = InferenceClient(
             model=config.model,
             token=config.api_key,
@@ -24,9 +25,12 @@ class HuggingFaceFintechClassifier(BaseChatClassifier):
         )
 
     def _chat(self, messages: List[dict]) -> str:
+        # Send the YES/NO prompt to the model. max_tokens=3 is enough for a
+        # one-word reply, and temperature=0.0 makes the answer deterministic.
         completion = self._client.chat_completion(
             messages=messages,
             max_tokens=3,
             temperature=0.0,
         )
+        # Hand the raw reply text back to the base class to parse into YES/NO.
         return completion.choices[0].message.content

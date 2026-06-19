@@ -64,6 +64,10 @@ from core.services.retrieval_service import DocumentRetrievalService
 from core.services.thesis_generator_service import ThesisGeneratorService
 from core.services.thesis_structuring_service import ThesisStructuringService
 
+# These registries map a config string (e.g. LLM_PROVIDER=gemini) to the class
+# that implements it. get_llm/get_embedding_model/get_relevance_classifier look
+# up the configured name here, so swapping a backend is a config change, not a
+# code change.
 # To add a new LLM provider, see README.md
 LLM_PROVIDER_REGISTRY: Dict[str, Type[ILanguageModel]] = {
     "gemini": GeminiLanguageModel,
@@ -82,11 +86,15 @@ CLASSIFIER_PROVIDER_REGISTRY: Dict[str, Type[IRelevanceClassifier]] = {
 }
 
 
+# Vector stores need more than a class name to build (one wants a live Supabase
+# client), so the registry maps to factory functions instead of bare classes.
+# FAISS is in-memory and needs nothing extra; Supabase is the persistent store.
 def _build_faiss_store(app_config: "AppConfig", embedding_model) -> IVectorStore:
     return FAISSVectorStore(app_config.vectorstore, embedding_model)
 
 
 def _build_supabase_store(app_config: "AppConfig", embedding_model) -> IVectorStore:
+    # Persistent pgvector store --> needs Supabase creds, so refuse early if missing.
     if not app_config.supabase.enabled:
         raise ValueError(
             "VECTORSTORE_PROVIDER=supabase requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY"
@@ -110,6 +118,20 @@ class ServiceContainer:
 
     Follows Dependency Inversion Principle: All dependencies flow through abstractions.
     Implements lazy loading of singletons for efficiency.
+
+    How every get_* method works (the lazy-accessor pattern):
+        call get_x() --> is the cached private field empty?
+            --> yes: build the object once --> store it in the field --> return it
+            --> no: just return the already-built field (same singleton every time)
+    A get_* that needs other parts simply calls their get_* accessors, so the
+    whole wiring graph builds itself on demand from the leaves up. Nothing is
+    constructed until something actually asks for it.
+
+    Where the pieces sit in the data flow:
+        Bronze (raw landing) --> article source + Bronze article repository
+        --> Silver (refine: classify/scrape/embed + verdict/content/quarantine)
+        --> Gold (aggregate: per-theme weekly trends + untagged side-table)
+        --> LLM / scoring / retrieval / thesis / agent layers consume the corpus
     """
 
     def __init__(self, config: Optional[AppConfig] = None):
@@ -160,6 +182,10 @@ class ServiceContainer:
     def get_scraper(self) -> IWebScraper:
         """Get or create web scraper implementation.
 
+        Builds the HTML fetcher (BeautifulSoupScraper) that pulls full article
+        text from a URL. Leaf component, depends only on config. Used by the
+        Bronze article source and by Silver scraping.
+
         Returns:
             IWebScraper implementation (BeautifulSoupScraper).
         """
@@ -170,6 +196,11 @@ class ServiceContainer:
 
     def get_relevance_classifier(self) -> IRelevanceClassifier:
         """Get or create the fintech relevance classifier.
+
+        Builds the model that decides "is this article fintech-relevant?"
+        (ollama or huggingface, chosen by CLASSIFIER_PROVIDER). Leaf component,
+        depends only on config. Used in Bronze (gate at the source) and again in
+        Silver (the per-article verdict).
 
         Returns:
             IRelevanceClassifier implementation based on configuration.
@@ -194,6 +225,11 @@ class ServiceContainer:
     def get_article_source(self) -> IArticleSource:
         """Get or create article source implementation.
 
+        Builds the Bronze entry point: reads the configured RSS feeds and yields
+        candidate articles. Wires in get_scraper (to fetch text) and
+        get_relevance_classifier (to gate by relevance). This is where raw data
+        first enters the pipeline.
+
         Returns:
             IArticleSource implementation (RSSArticleSource).
         """
@@ -209,6 +245,10 @@ class ServiceContainer:
 
     def get_embedding_model(self) -> IEmbeddingModel:
         """Get or create embedding model implementation.
+
+        Builds the model that turns article text into vectors (fastembed by
+        default). Leaf component, depends only on config. Feeds the vector store,
+        which Silver writes to and retrieval reads from.
 
         Returns:
             IEmbeddingModel implementation based on configuration.
@@ -233,6 +273,11 @@ class ServiceContainer:
 
     def get_vectorstore(self) -> IVectorStore:
         """Get or create vectorstore implementation.
+
+        Builds the searchable store of embedded articles (faiss in-memory or
+        supabase persistent, chosen by VECTORSTORE_PROVIDER). Wires in
+        get_embedding_model. Silver writes embeddings here; retrieval queries it.
+        Note: Silver itself requires the supabase variant (see get_silver_service).
 
         Returns:
             IVectorStore implementation based on configuration.
@@ -259,6 +304,11 @@ class ServiceContainer:
     def get_article_repository(self) -> IArticleRepository:
         """Get or create the Bronze-layer raw article repository.
 
+        Stores the raw landed articles (the Bronze table). Builds its own
+        Supabase client from config. Pattern for every repository below:
+        Supabase enabled? --> yes: make client --> wrap in the repo --> cache it
+        --> no: raise ValueError (these stores have no in-memory fallback).
+
         Returns:
             IArticleRepository backed by Supabase.
 
@@ -282,6 +332,9 @@ class ServiceContainer:
 
     def get_silver_repository(self) -> ISilverRepository:
         """Get or create the Silver-layer verdict repository.
+
+        Stores the per-article verdict (kept / rejected, theme, score) produced
+        during Silver refinement. Supabase-backed; same gating as Bronze above.
 
         Returns:
             ISilverRepository backed by Supabase.
@@ -307,6 +360,10 @@ class ServiceContainer:
     def get_content_repository(self) -> IArticleContentRepository:
         """Get or create the validated article-content repository (Silver record).
 
+        Stores the cleaned, scraped article body that passed Silver checks (the
+        text that later gets embedded and aggregated). Supabase-backed; same
+        gating as above.
+
         Returns:
             IArticleContentRepository backed by Supabase.
 
@@ -330,6 +387,10 @@ class ServiceContainer:
 
     def get_quarantine_repository(self) -> IQuarantineRepository:
         """Get or create the Silver dead-letter / quarantine repository.
+
+        Stores articles that failed Silver processing (scrape error, bad data)
+        so they are parked rather than lost - a dead-letter bin. Supabase-backed;
+        same gating as above.
 
         Returns:
             IQuarantineRepository backed by Supabase.
@@ -355,6 +416,9 @@ class ServiceContainer:
     def get_trend_repository(self) -> ITrendRepository:
         """Get or create the Gold-layer trend metrics repository.
 
+        Stores the final Gold output: per-theme weekly trend metrics that the
+        aggregation step writes. Supabase-backed; same gating as above.
+
         Returns:
             ITrendRepository backed by Supabase.
 
@@ -378,6 +442,10 @@ class ServiceContainer:
 
     def get_untagged_repository(self) -> IUntaggedRepository:
         """Get or create the untagged-article capture repository (Gold side-table).
+
+        Stores Gold articles that matched no theme - a side-table so they are
+        counted/visible instead of silently dropped during aggregation.
+        Supabase-backed; same gating as above.
 
         Returns:
             IUntaggedRepository backed by Supabase.
@@ -403,6 +471,9 @@ class ServiceContainer:
     def get_cache_manager(self) -> CacheManager:
         """Get or create cache manager for AI Gateway.
 
+        Builds the response cache (TTL from config) the AI Gateway uses to avoid
+        repeating identical LLM calls. Only wired in when the gateway is enabled.
+
         Returns:
             CacheManager instance.
         """
@@ -416,6 +487,9 @@ class ServiceContainer:
     def get_cost_tracker(self) -> CostTracker:
         """Get or create cost tracker for AI Gateway.
 
+        Builds the token/cost accountant the AI Gateway uses to tally LLM spend.
+        Leaf component. Only wired in when the gateway is enabled.
+
         Returns:
             CostTracker instance.
         """
@@ -426,6 +500,15 @@ class ServiceContainer:
 
     def get_llm(self) -> ILanguageModel:
         """Get or create LLM implementation.
+
+        Builds the text-generation model used to write theses, then layers on
+        resilience and cost controls:
+            pick provider from registry --> build primary model
+            --> provider is gemini? wrap it in LLMWrapper with a Local fallback
+                (so a Gemini outage degrades instead of failing)
+            --> AI Gateway enabled? wrap again in AIGateway (cache + cost tracker)
+            --> otherwise return the bare model
+        Top-level component consumed by the thesis service and the agent graph.
 
         For Gemini: Wraps with fallback to Local using LLMWrapper for resilience.
         For Local: Returns directly without wrapper.
@@ -484,6 +567,10 @@ class ServiceContainer:
     def get_scoring_strategy(self) -> IScoringStrategy:
         """Get or create scoring strategy implementation.
 
+        Builds the keyword-count scorer that ranks how strongly text matches a
+        theme. Leaf component, no dependencies. Reused by Silver, the thesis
+        structurer, and opportunity scoring.
+
         Returns:
             IScoringStrategy implementation (KeywordCountScoringStrategy).
         """
@@ -494,6 +581,10 @@ class ServiceContainer:
 
     def get_thesis_structurer(self) -> IThesisStructurer:
         """Get or create thesis structurer implementation.
+
+        Builds the component that organizes retrieved documents into the skeleton
+        of a thesis (top matches first). Wires in get_scoring_strategy to rank
+        them; capped at the top 3 results. Consumed by the thesis service.
 
         Returns:
             IThesisStructurer implementation (ThesisStructuringService).
@@ -512,6 +603,9 @@ class ServiceContainer:
     def get_ingestion_service(self) -> ArticleIngestionService:
         """Get or create article ingestion service.
 
+        The Bronze driver: pulls articles from get_article_source and lands them.
+        Thin wrapper whose only dependency is the article source.
+
         Returns:
             ArticleIngestionService instance.
         """
@@ -523,6 +617,15 @@ class ServiceContainer:
 
     def get_silver_service(self) -> SilverService:
         """Get or create the Silver service.
+
+        The Silver driver and the widest fan-out in this container. It reads
+        Bronze, then for each article:
+            classify --> scrape body --> score by theme
+            --> keep: write verdict + content, embed into the vector store
+            --> fail: park in the quarantine (dead-letter) repository
+        Wires in the Bronze article repo, all three Silver repos (verdict /
+        content / quarantine), the classifier, scraper, scoring strategy, theme
+        mappings, and the vector store.
 
         Reads Bronze, classifies + scrapes, and embeds into the persistent
         vector store. Requires the Supabase pgvector store (it needs
@@ -554,6 +657,13 @@ class ServiceContainer:
     def get_gold_service(self) -> GoldService:
         """Get or create the Gold aggregation service.
 
+        The Gold driver:
+            read Silver content + verdicts --> roll up per theme per week
+            --> write trend metrics --> theme-less articles go to the untagged
+                side-table (so nothing is silently dropped)
+        Wires in the Silver content and verdict repos plus the Gold trend and
+        untagged repos.
+
         Aggregates the fintech corpus into per-theme weekly trend metrics.
         Requires Supabase (Silver content/verdict and trend stores).
 
@@ -578,6 +688,9 @@ class ServiceContainer:
     def get_retrieval_service(self) -> DocumentRetrievalService:
         """Get or create document retrieval service.
 
+        The read side of the corpus: queries the vector store for articles
+        relevant to a prompt. Wires in get_vectorstore. Feeds the thesis flow.
+
         Returns:
             DocumentRetrievalService instance.
         """
@@ -590,6 +703,9 @@ class ServiceContainer:
     def get_approval_service(self) -> ApprovalService:
         """Get or create approval service.
 
+        Holds the human-in-the-loop approval state (approve / reject a generated
+        thesis). Self-contained, no dependencies.
+
         Returns:
             ApprovalService instance for human approval workflows.
         """
@@ -600,6 +716,9 @@ class ServiceContainer:
 
     def get_opportunity_scoring_service(self) -> OpportunityScoringService:
         """Get or create opportunity scoring service.
+
+        Scores how strong an investment opportunity a thesis represents. Wires in
+        get_scoring_strategy. Used by the thesis service and the agent graph.
 
         Returns:
             OpportunityScoringService instance.
@@ -613,6 +732,12 @@ class ServiceContainer:
 
     def get_thesis_service(self) -> ThesisGeneratorService:
         """Get or create thesis generator service.
+
+        The top-level service that produces a market thesis:
+            structure the retrieved docs --> score the opportunity
+            --> have the LLM write the thesis
+        Wires in get_llm, get_thesis_structurer, and the opportunity scoring
+        service. Consumed directly and by the agent refinement graph.
 
         Returns:
             ThesisGeneratorService instance.
@@ -631,6 +756,12 @@ class ServiceContainer:
 
     def get_refinement_graph(self) -> tuple:
         """Get or create the compiled LangGraph refinement graph with real tool calling.
+
+        Builds the agentic loop that iteratively improves a thesis by calling
+        tools. Wires in get_thesis_service and the opportunity scoring service,
+        and is gated on a Gemini API key (the agent needs real tool calling, so a
+        local-only setup cannot run it). Returns the graph plus an optional
+        Langfuse tracing handler.
 
         Returns:
             Tuple of (compiled graph, langfuse handler or None).

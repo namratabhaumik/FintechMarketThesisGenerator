@@ -11,11 +11,15 @@ from core.models.trend_metric import TrendMetric
 
 logger = logging.getLogger(__name__)
 
+# Gold-layer table: one article count per (week, theme) bucket.
 TABLE = "trend_metrics"
 
 
 class SupabaseTrendRepository(ITrendRepository):
     """Stores trend metrics in a Supabase `trend_metrics` table.
+
+    Medallion role: Gold. This is the aggregated output - per-theme weekly counts
+    rolled up from Silver verdicts - that the app charts as trends.
 
     Upserts on the (week_start, theme) primary key. It does NOT pass
     ignore_duplicates, so the default applies: a conflict UPDATEs the existing
@@ -23,9 +27,13 @@ class SupabaseTrendRepository(ITrendRepository):
     """
 
     def __init__(self, client: Client):
+        # Live Supabase connection used for every query below.
         self._client = client
 
     def upsert(self, metrics: List[TrendMetric]) -> int:
+        # each TrendMetric --> shape into a row keyed by week + theme with
+        # its article count --> collect into `rows`. week_start is a date, so it
+        # is serialized to an ISO string.
         rows = [
             {
                 "week_start": m.week_start.isoformat(),
@@ -34,13 +42,18 @@ class SupabaseTrendRepository(ITrendRepository):
             }
             for m in metrics
         ]
+        # Nothing to write --> return 0.
         if not rows:
             return 0
+        # Upsert on the (week_start, theme) key --> existing bucket gets its
+        # count OVERWRITTEN (no ignore_duplicates), so recompute refreshes
+        # numbers rather than skipping them.
         self._client.table(TABLE).upsert(rows, on_conflict="week_start,theme").execute()
         logger.info(f"Gold: upserted {len(rows)} trend metrics")
         return len(rows)
 
     def fetch_all(self) -> List[TrendMetric]:
+        # Read every bucket, newest week first --> rebuild each as a TrendMetric.
         resp = (
             self._client.table(TABLE)
             .select("*")
@@ -48,6 +61,7 @@ class SupabaseTrendRepository(ITrendRepository):
             .execute()
         )
         rows: list = resp.data or []
+        # DB row --> TrendMetric, parsing week_start back into a date.
         return [
             TrendMetric(
                 week_start=date.fromisoformat(row["week_start"]),

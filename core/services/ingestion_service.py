@@ -18,6 +18,10 @@ def article_to_document(article: Article) -> Document:
     identical metadata. `published_at` is included as an ISO string so the
     retrieval layer can filter/rank documents on the time axis.
     """
+    # page_content is what gets embedded: title first, then the body, separated
+    # by a blank line. metadata rides alongside the vector so retrieval can show
+    # the source/title/url and rank or filter on published_at (kept as an ISO
+    # string because the vector store stores plain JSON-friendly values).
     return Document(
         page_content=f"{article.title}\n\n{article.text}",
         metadata={
@@ -70,6 +74,10 @@ class ArticleIngestionService:
         Returns:
             List of valid normalized articles.
         """
+        # normalized: the articles we keep. The real validation already happened
+        # when each Article was constructed (its __post_init__ raises on bad
+        # data), so by here they are sound; this loop is the seam where a future
+        # extra check could drop a bad one and log it rather than crash.
         normalized = []
 
         for article in articles:
