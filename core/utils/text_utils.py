@@ -16,7 +16,6 @@ _BOILERPLATE_PATTERNS = re.compile(
     r'discover your next.*?(?:\n|$)|'  # Event promotions
     r'hear from \d+\+.*?(?:\n|$)|'  # Event speaker counts
     r'by \w+ \w+\s*(?:\n|$)|'  # Author bylines (e.g., "By John Doe")
-    r'\w+ (?:covers|writes about|is a|reports on).*?(?:\n|$)|' 
     r'about the author.*?(?:\n\n|$)|'  # Author bio headers
     r'subscribe.*?newsletter.*?(?:\n|$)|'  # Newsletter subscriptions
     r'follow us on.*?(?:\n|$)|'  # Social media follows
