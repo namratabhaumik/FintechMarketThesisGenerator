@@ -4,6 +4,9 @@ Reads the fintech (accepted) articles and their themes (assigned by Silver on
 the full scraped text), buckets them by the Monday of their publish week, and
 stores per-(week, theme) coverage counts. Articles that matched no theme are
 captured for later taxonomy analysis. Recomputed from current data each run.
+
+Gold reads only from Silver (the verdict store for themes, the article-content
+store for publish dates), never from Bronze
 """
 
 import logging
@@ -11,7 +14,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Dict, Tuple
 
-from core.interfaces.article_repository import IArticleRepository
+from core.interfaces.article_content_repository import IArticleContentRepository
 from core.interfaces.silver_repository import ISilverRepository
 from core.interfaces.trend_repository import ITrendRepository
 from core.interfaces.untagged_repository import IUntaggedRepository
@@ -25,12 +28,12 @@ class GoldService:
 
     def __init__(
         self,
-        article_repository: IArticleRepository,
+        content_repository: IArticleContentRepository,
         silver_repository: ISilverRepository,
         trend_repository: ITrendRepository,
         untagged_repository: IUntaggedRepository,
     ):
-        self._article_repository = article_repository
+        self._content_repository = content_repository
         self._silver_repository = silver_repository
         self._trend_repository = trend_repository
         self._untagged_repository = untagged_repository
@@ -42,18 +45,19 @@ class GoldService:
             The number of (week, theme) metric rows written.
         """
         themes_by_url = self._silver_repository.fintech_themes()
-        # In-memory filter: pull all Bronze rows and keep the fintech URLs. Fine
-        # at this scale. If volume ever makes the full fetch hurt, push this join 
-        # into a DB view, not a growing .in_() list.
-        articles = [
-            a for a in self._article_repository.fetch_all() if a.url in themes_by_url
-        ]
-        logger.info(f"Gold: aggregating {len(articles)} fintech articles")
-
+        # Single in-memory pass over the Silver content store (already just the
+        # accepted subset), joined to the verdict themes by URL. No Bronze read:
+        # Gold is a pure Silver -> Gold transform. Fine at this scale; if volume
+        # ever makes the full fetch hurt, push this join into a DB view, not a
+        # growing .in_() list.
         buckets: Dict[Tuple[date, str], int] = defaultdict(int)
         untagged = []
-        for article in articles:
-            themes = themes_by_url[article.url]
+        fintech = 0
+        for article in self._content_repository.fetch_all():
+            themes = themes_by_url.get(article.url or "")
+            if themes is None:
+                continue  # no fintech verdict for this URL
+            fintech += 1
             if not themes:
                 # Accepted but matched no theme: capture for later taxonomy
                 # analysis instead of dropping it.
@@ -62,6 +66,7 @@ class GoldService:
             week = self._week_start(article.published_at)
             for theme in themes:
                 buckets[(week, theme)] += 1
+        logger.info(f"Gold: aggregating {fintech} fintech articles")
 
         metrics = [
             TrendMetric(week_start=week, theme=theme, article_count=count)

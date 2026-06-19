@@ -555,7 +555,7 @@ class ServiceContainer:
         """Get or create the Gold aggregation service.
 
         Aggregates the fintech corpus into per-theme weekly trend metrics.
-        Requires Supabase (Bronze, Silver and trend stores).
+        Requires Supabase (Silver content/verdict and trend stores).
 
         Raises:
             ValueError: If Supabase is not configured.
@@ -568,7 +568,7 @@ class ServiceContainer:
                 )
             logger.info("Creating GoldService")
             self._gold_service = GoldService(
-                article_repository=self.get_article_repository(),
+                content_repository=self.get_content_repository(),
                 silver_repository=self.get_silver_repository(),
                 trend_repository=self.get_trend_repository(),
                 untagged_repository=self.get_untagged_repository(),

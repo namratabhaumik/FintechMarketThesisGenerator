@@ -2,13 +2,13 @@
 
 from datetime import date, datetime, timezone
 
-from core.models.raw_article import RawArticle
+from core.models.article import Article
 from core.services.gold_service import GoldService
 
 # Jan 2026: Jan 5 and Jan 12 are Mondays.
 
 
-class _FakeArticleRepo:
+class _FakeContentRepo:
     def __init__(self, articles):
         self._articles = articles
 
@@ -45,18 +45,18 @@ class _FakeUntaggedRepo:
 
 
 def _raw(url, day):
-    return RawArticle(
+    return Article(
         title="t",
+        text="body",
         url=url,
         published_at=datetime(2026, 1, day, tzinfo=timezone.utc),
-        summary="",
         source="x.com",
     )
 
 
 def _service(articles, themes_by_url, trend_repo, untagged_repo=None):
     return GoldService(
-        article_repository=_FakeArticleRepo(articles),
+        content_repository=_FakeContentRepo(articles),
         silver_repository=_FakeSilverRepo(themes_by_url),
         trend_repository=trend_repo,
         untagged_repository=untagged_repo or _FakeUntaggedRepo(),

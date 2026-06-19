@@ -6,7 +6,7 @@ from typing import List
 from supabase import Client
 
 from core.interfaces.untagged_repository import IUntaggedRepository
-from core.models.raw_article import RawArticle
+from core.models.article import Article
 
 logger = logging.getLogger(__name__)
 
@@ -17,18 +17,19 @@ class SupabaseUntaggedRepository(IUntaggedRepository):
     """Records theme-less fintech articles in a Supabase `untagged_articles` table.
 
     Deduped by the UNIQUE(url) constraint via ignore_duplicates, so re-running
-    Gold re-records nothing.
+    Gold re-records nothing. Stores the full scraped text (the same text themes
+    were matched against) so taxonomy gaps can be analysed from the real content.
     """
 
     def __init__(self, client: Client):
         self._client = client
 
-    def save(self, articles: List[RawArticle]) -> int:
+    def save(self, articles: List[Article]) -> int:
         rows = [
             {
                 "url": a.url,
                 "title": a.title,
-                "summary": a.summary,
+                "text": a.text,
                 "published_at": a.published_at.isoformat(),
             }
             for a in articles
