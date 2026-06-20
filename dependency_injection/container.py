@@ -58,7 +58,11 @@ from core.services.approval_service import ApprovalService
 from core.services.gold_service import GoldService
 from core.services.ingestion_service import ArticleIngestionService
 from core.services.silver_service import SilverService
-from finthesis_internal.category_mappings import ThemeMappings
+from finthesis_internal.category_mappings import (
+    ThemeMappings,
+    RiskMappings,
+    SignalMappings,
+)
 from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 from core.services.retrieval_service import DocumentRetrievalService
 from core.services.thesis_generator_service import ThesisGeneratorService
@@ -650,6 +654,8 @@ class ServiceContainer:
                 scraper=self.get_scraper(),
                 scoring_strategy=self.get_scoring_strategy(),
                 theme_categories=ThemeMappings.get_mapping().categories,
+                risk_categories=RiskMappings.get_mapping().categories,
+                signal_categories=SignalMappings.get_mapping().categories,
                 vectorstore=self.get_vectorstore(),
             )
         return self._silver_service

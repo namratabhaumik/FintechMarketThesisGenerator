@@ -37,6 +37,18 @@ class ISilverRepository(ABC):
         pass
 
     @abstractmethod
+    def fintech_tags(self) -> Dict[str, Dict[str, List[str]]]:
+        """Return {url: {"themes": [...], "risks": [...], "signals": [...]}}
+        for the accepted (fintech-relevant) articles.
+
+        All three dimensions were matched on the full scraped text when Silver
+        ran. Gold reads this to accumulate per-dimension historic trends, and the
+        thesis reads it (through the embedded chunk metadata) to stay grounded.
+        Any dimension that matched nothing maps to an empty list.
+        """
+        pass
+
+    @abstractmethod
     def record(self, verdicts: List[SilverVerdict]) -> int:
         """Save verdicts, skipping any URL that already has one.
 

@@ -70,6 +70,8 @@ class SilverService:
         scraper: IWebScraper,
         scoring_strategy: IScoringStrategy,
         theme_categories: Dict[str, List[str]],
+        risk_categories: Dict[str, List[str]],
+        signal_categories: Dict[str, List[str]],
         vectorstore: IVectorStore,
     ):
         self._repository = repository
@@ -79,7 +81,11 @@ class SilverService:
         self._classifier = classifier
         self._scraper = scraper
         self._scoring_strategy = scoring_strategy
+        # Three keyword-category maps - one per tag dimension - all scored the
+        # same way on the article's full text.
         self._theme_categories = theme_categories
+        self._risk_categories = risk_categories
+        self._signal_categories = signal_categories
         self._vectorstore = vectorstore
 
     def build(self) -> int:
@@ -142,12 +148,21 @@ class SilverService:
                     continue  # scrape failed or invalid -> quarantined
                 batch.new_content.append(article)
 
-            batch.documents.append(article_to_document(article))
+            # Tag the full text on all three dimensions once, then reuse the
+            # same tags for both the embedded document's metadata (so retrieval
+            # and the thesis can read them) and the stored verdict (so Gold can
+            # accumulate them).
+            themes, risks, signals = self._tags_for(article)
+            batch.documents.append(
+                article_to_document(article, themes=themes, risks=risks, signals=signals)
+            )
             batch.verdicts.append(
                 SilverVerdict(
                     url=raw.url,
                     fintech_relevant=True,
-                    themes=self._themes_for(article),
+                    themes=themes,
+                    risks=risks,
+                    signals=signals,
                 )
             )
         return batch
@@ -226,8 +241,21 @@ class SilverService:
             )
             return None
 
-    def _themes_for(self, article: Article) -> List[str]:
-        """Themes whose keywords appear in the article's title + full text."""
+    def _tags_for(self, article: Article) -> tuple:
+        """Tag the article on all three dimensions from its title + full text.
+
+        Returns (themes, risks, signals), each a list of the categories whose
+        keywords appear in the text. All three use the same keyword scoring, just
+        with a different category map.
+        """
         text = f"{article.title} {article.text}".lower()
-        scores = self._scoring_strategy.score(text, self._theme_categories)
-        return [theme for theme, count in scores.items() if count > 0]
+        return (
+            self._match(text, self._theme_categories),
+            self._match(text, self._risk_categories),
+            self._match(text, self._signal_categories),
+        )
+
+    def _match(self, text: str, categories: Dict[str, List[str]]) -> List[str]:
+        """Return the categories whose keywords appear in `text` (score > 0)."""
+        scores = self._scoring_strategy.score(text, categories)
+        return [category for category, count in scores.items() if count > 0]

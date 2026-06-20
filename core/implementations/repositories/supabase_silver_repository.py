@@ -49,14 +49,35 @@ class SupabaseSilverRepository(ISilverRepository):
         # so callers never have to handle None.
         return {row["url"]: (row.get("themes") or []) for row in rows}
 
+    def fintech_tags(self) -> Dict[str, Dict[str, List[str]]]:
+        # Pull all three tag dimensions for the accepted (fintech) rows.
+        resp = (
+            self._client.table(TABLE)
+            .select("url, themes, risks, signals")
+            .eq("fintech_relevant", True)
+            .execute()
+        )
+        rows: list = resp.data or []
+        # url --> {themes, risks, signals}; each null dimension falls back to []
+        return {
+            row["url"]: {
+                "themes": row.get("themes") or [],
+                "risks": row.get("risks") or [],
+                "signals": row.get("signals") or [],
+            }
+            for row in rows
+        }
+
     def record(self, verdicts: List[SilverVerdict]) -> int:
         # each SilverVerdict --> shape into a row holding the URL, the
-        # relevance flag, and its themes --> collect into `rows`.
+        # relevance flag, and all three tag dimensions --> collect into `rows`.
         rows = [
             {
                 "url": v.url,
                 "fintech_relevant": v.fintech_relevant,
                 "themes": v.themes,
+                "risks": v.risks,
+                "signals": v.signals,
             }
             for v in verdicts
         ]

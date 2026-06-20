@@ -79,6 +79,29 @@ def test_fintech_themes_returns_themes_for_relevant_only():
     assert repo.processed_urls() == {"https://x/1", "https://x/2", "https://x/3"}
 
 
+def test_fintech_tags_returns_all_dimensions_for_relevant_only():
+    repo = SupabaseSilverRepository(_FakeClient())
+    repo.record(
+        [
+            SilverVerdict(
+                url="https://x/1",
+                fintech_relevant=True,
+                themes=["Payments"],
+                risks=["Regulatory Risk"],
+                signals=["Payment Infrastructure"],
+            ),
+            SilverVerdict(url="https://x/2", fintech_relevant=False),
+        ]
+    )
+    assert repo.fintech_tags() == {
+        "https://x/1": {
+            "themes": ["Payments"],
+            "risks": ["Regulatory Risk"],
+            "signals": ["Payment Infrastructure"],
+        }
+    }
+
+
 def test_record_dedupes_by_url():
     repo = SupabaseSilverRepository(_FakeClient())
     repo.record([SilverVerdict(url="https://x/1", fintech_relevant=True)])

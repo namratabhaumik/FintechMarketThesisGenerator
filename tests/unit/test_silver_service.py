@@ -11,6 +11,9 @@ from finthesis_internal.keyword_scoring_strategy import KeywordCountScoringStrat
 
 PUB = datetime(2026, 1, 1, tzinfo=timezone.utc)
 THEMES = {"Payments": ["payment"], "Crypto": ["crypto"]}
+# The stub scraper body mentions "payment infrastructure", so these fire on it.
+RISKS = {"Scalability Risk": ["infrastructure"]}
+SIGNALS = {"Payment Infrastructure": ["payment"]}
 
 
 class _FakeRepo:
@@ -120,6 +123,8 @@ def _service(articles, silver_repo, vs, quarantine_repo=None, scraper=None, cont
         scraper or _StubScraper(),
         KeywordCountScoringStrategy(),
         THEMES,
+        RISKS,
+        SIGNALS,
         vs,
     )
 
@@ -138,10 +143,17 @@ def test_embeds_fintech_persists_text_and_records_themes():
 
     assert embedded == 1
     assert vs.built[0].metadata["url"] == "https://x/1"
+    # All three tag dimensions ride in the embedded chunk metadata.
+    assert vs.built[0].metadata["themes"] == ["Payments"]
+    assert vs.built[0].metadata["risks"] == ["Scalability Risk"]
+    assert vs.built[0].metadata["signals"] == ["Payment Infrastructure"]
     # Validated text is persisted for the newly-scraped article.
     assert [a.url for a in content_repo.saved] == ["https://x/1"]
     by_url = {v.url: v for v in silver_repo.recorded}
-    assert by_url["https://x/1"].themes == ["Payments"]  # from scraped body
+    # Tags computed from the scraped body are stored on the verdict too.
+    assert by_url["https://x/1"].themes == ["Payments"]
+    assert by_url["https://x/1"].risks == ["Scalability Risk"]
+    assert by_url["https://x/1"].signals == ["Payment Infrastructure"]
     assert by_url["https://x/2"].fintech_relevant is False
 
 

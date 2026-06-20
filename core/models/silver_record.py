@@ -11,16 +11,25 @@ class SilverVerdict:
     Recorded for every processed URL - accepted or rejected - so a later run
     never re-classifies an article it has already decided on. `fintech_relevant`
     is False for articles the classifier rejected (which are therefore never
-    scraped or embedded). `themes` are the fintech themes matched on the full
-    scraped text (empty for rejected articles, or for accepted ones matching no
-    theme); the Gold layer aggregates trends from them.
+    scraped or embedded).
+
+    The three tag lists - `themes`, `risks`, `signals` - are all matched
+    deterministically on the full scraped text at Silver time (same keyword
+    scoring, three different category maps). They are empty for rejected
+    articles, or for accepted ones that matched nothing in a given dimension.
+    Tagging all three here (rather than later, on a llm generated thesis summary) is what lets
+    Gold accumulate them into historic trends and lets the thesis stay grounded
+    in what articles actually reported.
     """
 
     url: str            # The Bronze article this verdict is about; the dedup key.
     fintech_relevant: bool  # True = accepted (scraped/embedded); False = rejected.
-    # Fintech themes matched on the full text. Empty when rejected, or when
-    # accepted but matching no theme. Gold rolls these up into weekly trends.
+    # Fintech sub-sector themes matched on the full text (e.g. "Digital Payments").
     themes: List[str] = field(default_factory=list)
+    # Risk categories explicitly present in the text (e.g. "Regulatory Risk").
+    risks: List[str] = field(default_factory=list)
+    # Investment-signal categories present in the text (e.g. "Payment Infrastructure").
+    signals: List[str] = field(default_factory=list)
 
     def __post_init__(self):
         # The URL is the identity of the verdict, so it must be present.
