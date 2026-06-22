@@ -681,7 +681,9 @@ class ServiceContainer:
         if not self._retrieval_service:
             logger.info("Creating DocumentRetrievalService")
             vectorstore = self.get_vectorstore()
-            self._retrieval_service = DocumentRetrievalService(vectorstore)
+            self._retrieval_service = DocumentRetrievalService(
+                vectorstore, self._config.retrieval
+            )
         return self._retrieval_service
 
     def get_approval_service(self) -> ApprovalService:

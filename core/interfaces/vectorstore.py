@@ -16,6 +16,13 @@ class IVectorStore(ABC):
         pass
 
     @abstractmethod
-    def as_retriever(self, vectorstore: VectorStore, k: int) -> Any:
-        """Return retriever from vectorstore."""
+    def as_retriever(
+        self, vectorstore: VectorStore, k: int, fetch_k: int, lambda_mult: float
+    ) -> Any:
+        """Return an MMR retriever from the vectorstore.
+
+        Retrieval is MMR: pull `fetch_k` candidates by similarity, then select
+        `k` by the MMR objective (`lambda_mult` trades relevance vs diversity).
+        The retrieval service passes these from RetrievalConfig.
+        """
         pass

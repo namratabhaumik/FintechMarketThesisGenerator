@@ -60,14 +60,21 @@ class FAISSVectorStore(IVectorStore):
         logger.info("FAISS vectorstore built successfully")
         return vectorstore
 
-    def as_retriever(self, vectorstore: VectorStore, k: int) -> Any:
-        """Get retriever from vectorstore.
+    def as_retriever(
+        self, vectorstore: VectorStore, k: int, fetch_k: int, lambda_mult: float
+    ) -> Any:
+        """Get an MMR retriever from the vectorstore.
 
         Args:
             vectorstore: Built vectorstore instance.
-            k: Number of documents to retrieve.
+            k: Number of documents to return.
+            fetch_k: Candidate pool pulled by similarity before MMR selection.
+            lambda_mult: Relevance/diversity trade-off.
 
         Returns:
             Retriever instance.
         """
-        return vectorstore.as_retriever(search_kwargs={"k": k})
+        return vectorstore.as_retriever(
+            search_type="mmr",
+            search_kwargs={"k": k, "fetch_k": fetch_k, "lambda_mult": lambda_mult},
+        )

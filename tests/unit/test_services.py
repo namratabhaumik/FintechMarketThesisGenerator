@@ -1,6 +1,5 @@
 """Unit tests for service layer."""
 
-import pytest
 from langchain_core.documents import Document
 
 from core.services.ingestion_service import ArticleIngestionService
@@ -54,20 +53,62 @@ class TestArticleIngestionService:
         assert doc.metadata["published_at"] == "2026-01-01T00:00:00+00:00"
 
 
+class _FakeRetriever:
+    def invoke(self, query):
+        return [Document(page_content="r", metadata={"url": "u"})]
+
+
+class _RecordingVectorStore:
+    """Fake IVectorStore that records the args as_retriever was called with."""
+
+    def __init__(self):
+        self.as_retriever_args = None
+
+    def build(self, documents):
+        return object()
+
+    def as_retriever(self, vectorstore, k, fetch_k, lambda_mult):
+        self.as_retriever_args = {"k": k, "fetch_k": fetch_k, "lambda_mult": lambda_mult}
+        return _FakeRetriever()
+
+
 class TestDocumentRetrievalService:
-    """Tests for DocumentRetrievalService."""
+    """Tests for DocumentRetrievalService MMR wiring."""
 
-    def test_build_vectorstore(self, mock_llm):
-        """Test that vectorstore is built from documents."""
+    def _service(self, config):
+        from core.services.retrieval_service import DocumentRetrievalService
 
-        # This would require actual FastEmbed model, so we skip in test
-        pytest.skip("Requires FastEmbed model initialization")
+        vs = _RecordingVectorStore()
+        service = DocumentRetrievalService(vs, config)
+        service.build_vectorstore([Document(page_content="x", metadata={"url": "u"})])
+        return service, vs
 
-    def test_is_built_false_initially(self, mock_llm):
-        """Test that vectorstore is not built initially."""
+    def test_is_built_false_initially(self):
+        from config.settings import RetrievalConfig
+        from core.services.retrieval_service import DocumentRetrievalService
 
-        # Create minimal setup to test is_built() without actual vectorstore
-        pytest.skip("Requires full setup")
+        service = DocumentRetrievalService(_RecordingVectorStore(), RetrievalConfig())
+        assert service.is_built() is False
+
+    def test_retrieve_uses_mmr_config(self):
+        from config.settings import RetrievalConfig
+
+        service, vs = self._service(RetrievalConfig(k=5, fetch_k=20, lambda_mult=0.5))
+        docs = service.retrieve("query")
+
+        assert vs.as_retriever_args == {"k": 5, "fetch_k": 20, "lambda_mult": 0.5}
+        assert len(docs) == 1
+
+    def test_retrieve_override_k_widens_fetch_k(self):
+        from config.settings import RetrievalConfig
+
+        # k override above the configured fetch_k must widen fetch_k (MMR needs
+        # fetch_k >= k).
+        service, vs = self._service(RetrievalConfig(k=5, fetch_k=20, lambda_mult=0.5))
+        service.retrieve("query", k=30)
+
+        assert vs.as_retriever_args["k"] == 30
+        assert vs.as_retriever_args["fetch_k"] == 30
 
 
 class TestThesisGeneratorService:

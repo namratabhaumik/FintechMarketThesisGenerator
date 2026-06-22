@@ -1,11 +1,12 @@
 """Document retrieval service."""
 
 import logging
-from typing import List
+from typing import List, Optional
 
 from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStore
 
+from config.settings import RetrievalConfig
 from core.interfaces.vectorstore import IVectorStore
 
 logger = logging.getLogger(__name__)
@@ -14,18 +15,20 @@ logger = logging.getLogger(__name__)
 class DocumentRetrievalService:
     """Service for document retrieval.
 
-    Single Responsibility: Vector store management and retrieval.
+    Single Responsibility: Vector store management and MMR retrieval.
     Implements Dependency Inversion: Depends on IVectorStore abstraction.
     """
 
-    def __init__(self, vectorstore: IVectorStore):
-        """Initialize with vectorstore implementation.
+    def __init__(self, vectorstore: IVectorStore, config: RetrievalConfig):
+        """Initialize with vectorstore implementation and retrieval config.
 
         Args:
             vectorstore: Injected vectorstore implementation.
+            config: MMR retrieval hyperparameters (k / fetch_k / lambda_mult).
         """
         self._vectorstore_impl = vectorstore
-        self._vectorstore_instance: VectorStore = None
+        self._config = config
+        self._vectorstore_instance: Optional[VectorStore] = None
 
     def build_vectorstore(self, documents: List[Document]) -> None:
         """Build vectorstore from documents.
@@ -40,12 +43,13 @@ class DocumentRetrievalService:
         self._vectorstore_instance = self._vectorstore_impl.build(documents)
         logger.info("Vectorstore built and cached")
 
-    def retrieve(self, query: str, k: int = 5) -> List[Document]:
-        """Retrieve relevant documents for query.
+    def retrieve(self, query: str, k: Optional[int] = None) -> List[Document]:
+        """Retrieve relevant documents for query via MMR.
 
         Args:
             query: Search query.
-            k: Number of documents to retrieve.
+            k: Number of documents to return. Defaults to the configured k; pass
+                an explicit value only to override per call.
 
         Returns:
             List of retrieved Document objects.
@@ -58,11 +62,19 @@ class DocumentRetrievalService:
                 "Vectorstore not built. Call build_vectorstore() first."
             )
 
-        logger.info(f"Retrieving {k} documents for query: {query}")
+        # Use the configured k unless the caller overrides it. fetch_k must be
+        # >= k for MMR (it is the candidate pool we select k from), so widen it
+        # if an override pushes k past the configured pool.
+        effective_k = k if k is not None else self._config.k
+        fetch_k = max(self._config.fetch_k, effective_k)
+
+        logger.info(f"Retrieving {effective_k} documents (MMR) for query: {query}")
         try:
             retriever = self._vectorstore_impl.as_retriever(
                 self._vectorstore_instance,
-                k=k
+                k=effective_k,
+                fetch_k=fetch_k,
+                lambda_mult=self._config.lambda_mult,
             )
             docs = retriever.invoke(query)
         except Exception as e:

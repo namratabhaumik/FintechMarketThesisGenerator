@@ -89,9 +89,15 @@ class SupabaseVectorStoreImpl(IVectorStore):
             query_name=QUERY_NAME,
         )
 
-    def as_retriever(self, vectorstore: VectorStore, k: int) -> Any:
-        # Wrap the store as a retriever that returns the top-k closest chunks.
-        return vectorstore.as_retriever(search_kwargs={"k": k})
+    def as_retriever(
+        self, vectorstore: VectorStore, k: int, fetch_k: int, lambda_mult: float
+    ) -> Any:
+        # MMR retriever: fetch `fetch_k` candidates by similarity, then pick `k`
+        # that are relevant (lambda_mult tunes the relevance/diversity balance).
+        return vectorstore.as_retriever(
+            search_type="mmr",
+            search_kwargs={"k": k, "fetch_k": fetch_k, "lambda_mult": lambda_mult},
+        )
 
     def _fetch_existing_urls(self) -> Set[str]:
         """Return the article URLs already embedded, for internal build dedup.

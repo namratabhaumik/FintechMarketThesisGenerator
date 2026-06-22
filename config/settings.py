@@ -79,6 +79,19 @@ class VectorStoreConfig:
 
 
 @dataclass
+class RetrievalConfig:
+    """MMR (Maximal Marginal Relevance) retrieval config.
+
+    It first pulls `fetch_k` candidates by similarity, then selects `k` of them 
+    by the MMR objective so the returned chunks are not near-duplicates of each 
+    other. `lambda_mult` is the relevance/diversity dial
+    """
+    k: int = 5
+    fetch_k: int = 20
+    lambda_mult: float = 0.5
+
+
+@dataclass
 class SupabaseConfig:
     """Supabase connection configuration."""
     url: str = ""
@@ -105,6 +118,7 @@ class AppConfig:
     embedding: EmbeddingConfig
     llm: LLMConfig
     vectorstore: VectorStoreConfig = field(default_factory=VectorStoreConfig)
+    retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
     scraper: ScraperConfig = field(default_factory=ScraperConfig)
     classifier: ClassifierConfig = field(default_factory=ClassifierConfig)
     supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
@@ -205,6 +219,13 @@ class AppConfig:
 
         vs_provider = os.getenv("VECTORSTORE_PROVIDER", "faiss")
 
+        # Retrieval config defaults for MMR
+        retrieval = RetrievalConfig(
+            k=int(os.getenv("RETRIEVAL_K", "5")),
+            fetch_k=int(os.getenv("RETRIEVAL_FETCH_K", "20")),
+            lambda_mult=float(os.getenv("RETRIEVAL_LAMBDA_MULT", "0.5")),
+        )
+
         # Supabase configuration (optional — falls back to in-memory if not set)
         supabase_url = os.getenv("SUPABASE_URL", "")
         supabase_service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -237,6 +258,7 @@ class AppConfig:
                 base_url=ollama_base_url,
             ),
             vectorstore=VectorStoreConfig(provider=vs_provider),
+            retrieval=retrieval,
             supabase=SupabaseConfig(
                 url=supabase_url,
                 service_role_key=supabase_service_role_key,
