@@ -52,7 +52,6 @@ from core.interfaces.llm import ILanguageModel
 from core.interfaces.relevance_classifier import IRelevanceClassifier
 from core.interfaces.scraper import IWebScraper
 from core.interfaces.scoring_strategy import IScoringStrategy
-from core.interfaces.thesis_structurer import IThesisStructurer
 from core.interfaces.vectorstore import IVectorStore
 from core.services.approval_service import ApprovalService
 from core.services.gold_service import GoldService
@@ -66,7 +65,6 @@ from finthesis_internal.category_mappings import (
 from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 from core.services.retrieval_service import DocumentRetrievalService
 from core.services.thesis_generator_service import ThesisGeneratorService
-from core.services.thesis_structuring_service import ThesisStructuringService
 
 # These registries map a config string (e.g. LLM_PROVIDER=gemini) to the class
 # that implements it. get_llm/get_embedding_model/get_relevance_classifier look
@@ -160,7 +158,6 @@ class ServiceContainer:
         self._untagged_repository: Optional[IUntaggedRepository] = None
         self._llm: Optional[ILanguageModel] = None
         self._scoring_strategy: Optional[IScoringStrategy] = None
-        self._thesis_structurer: Optional[IThesisStructurer] = None
 
         # AI Gateway components (singletons)
         self._cache_manager: Optional[CacheManager] = None
@@ -583,25 +580,6 @@ class ServiceContainer:
             self._scoring_strategy = KeywordCountScoringStrategy()
         return self._scoring_strategy
 
-    def get_thesis_structurer(self) -> IThesisStructurer:
-        """Get or create thesis structurer implementation.
-
-        Builds the component that organizes retrieved documents into the skeleton
-        of a thesis (top matches first). Wires in get_scoring_strategy to rank
-        them; capped at the top 3 results. Consumed by the thesis service.
-
-        Returns:
-            IThesisStructurer implementation (ThesisStructuringService).
-        """
-        if not self._thesis_structurer:
-            logger.info("Creating ThesisStructuringService")
-            scoring_strategy = self.get_scoring_strategy()
-            self._thesis_structurer = ThesisStructuringService(
-                scoring_strategy=scoring_strategy,
-                max_results=3
-            )
-        return self._thesis_structurer
-
     # === Service Factories ===
 
     def get_ingestion_service(self) -> ArticleIngestionService:
@@ -740,10 +718,10 @@ class ServiceContainer:
         """Get or create thesis generator service.
 
         The top-level service that produces a market thesis:
-            structure the retrieved docs --> score the opportunity
-            --> have the LLM write the thesis
-        Wires in get_llm, get_thesis_structurer, and the opportunity scoring
-        service. Consumed directly and by the agent refinement graph.
+            have the LLM write the narrative --> derive grounded tags from the
+            retrieved docs' Silver metadata --> score the opportunity
+        Wires in get_llm and the opportunity scoring service. Consumed directly
+        and by the agent refinement graph.
 
         Returns:
             ThesisGeneratorService instance.
@@ -751,11 +729,9 @@ class ServiceContainer:
         if not self._thesis_service:
             logger.info("Creating ThesisGeneratorService")
             llm = self.get_llm()
-            structurer = self.get_thesis_structurer()
             scoring_service = self.get_opportunity_scoring_service()
             self._thesis_service = ThesisGeneratorService(
                 llm=llm,
-                structuring_service=structurer,
                 scoring_service=scoring_service,
             )
         return self._thesis_service

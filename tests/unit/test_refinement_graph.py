@@ -17,8 +17,6 @@ from core.agents.refinement_graph import (
 from core.agents.thesis_tools import create_thesis_tools
 from core.models.thesis import StructuredThesis
 from core.services.thesis_generator_service import ThesisGeneratorService
-from core.services.thesis_structuring_service import ThesisStructuringService
-from finthesis_internal.keyword_scoring_strategy import KeywordCountScoringStrategy
 from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
 
@@ -174,7 +172,6 @@ class TestRefineThesisContentOnly:
         llm.refine.return_value = SIGNAL_RICH
         service = ThesisGeneratorService(
             llm=llm,
-            structuring_service=ThesisStructuringService(KeywordCountScoringStrategy()),
             scoring_service=OpportunityScoringService(),
         )
         current = StructuredThesis(raw_output="old", opportunity_score=4.0)
