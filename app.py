@@ -7,7 +7,7 @@ Uses dependency injection to manage all dependencies.
 import logging
 import os
 
-# Must be set before FAISS/ONNX Runtime are imported to avoid OpenMP conflict on macOS
+# Must be set before ONNX Runtime (FastEmbed) is imported to avoid OpenMP conflict on macOS
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 import streamlit as st

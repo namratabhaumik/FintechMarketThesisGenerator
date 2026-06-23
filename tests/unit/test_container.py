@@ -62,7 +62,7 @@ class TestServiceContainer:
         config.embedding.model_name = "test-embedding-model"
 
         config.vectorstore = Mock(spec=VectorStoreConfig)
-        config.vectorstore.provider = "faiss"
+        config.vectorstore.provider = "supabase"
         config.vectorstore.chunk_size = 800
         config.vectorstore.chunk_overlap = 100
 
@@ -157,10 +157,10 @@ class TestServiceContainer:
 
     # === Vectorstore Provider Lookup ===
 
-    def test_get_vectorstore_provider_lookup_faiss(self, mock_config):
-        """Test that get_vectorstore looks up FAISS provider."""
-        # Just verify that faiss provider is recognized
-        assert mock_config.vectorstore.provider == "faiss"
+    def test_get_vectorstore_provider_lookup_supabase(self, mock_config):
+        """Test that get_vectorstore looks up the Supabase provider."""
+        # Just verify that the supabase provider is recognized
+        assert mock_config.vectorstore.provider == "supabase"
 
     def test_get_vectorstore_raises_error_for_unknown_provider(self, mock_config):
         """Test that get_vectorstore raises ValueError for unknown provider."""

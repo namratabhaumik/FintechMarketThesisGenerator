@@ -38,7 +38,6 @@ from core.implementations.repositories.supabase_trend_repository import (
 from core.implementations.repositories.supabase_untagged_repository import (
     SupabaseUntaggedRepository,
 )
-from core.implementations.vectorstores.faiss_store import FAISSVectorStore
 from core.implementations.vectorstores.supabase_vector_store import SupabaseVectorStoreImpl
 from core.interfaces.article_content_repository import IArticleContentRepository
 from core.interfaces.article_repository import IArticleRepository
@@ -88,13 +87,9 @@ CLASSIFIER_PROVIDER_REGISTRY: Dict[str, Type[IRelevanceClassifier]] = {
 }
 
 
-# Vector stores need more than a class name to build (one wants a live Supabase
-# client), so the registry maps to factory functions instead of bare classes.
-# FAISS is in-memory and needs nothing extra; Supabase is the persistent store.
-def _build_faiss_store(app_config: "AppConfig", embedding_model) -> IVectorStore:
-    return FAISSVectorStore(app_config.vectorstore, embedding_model)
-
-
+# The vector store needs a live Supabase client to build, so the registry maps
+# the provider name to a factory function rather than a bare class. Supabase
+# (persistent pgvector) is the only provider
 def _build_supabase_store(app_config: "AppConfig", embedding_model) -> IVectorStore:
     # Persistent pgvector store --> needs Supabase creds, so refuse early if missing.
     if not app_config.supabase.enabled:
@@ -108,7 +103,6 @@ def _build_supabase_store(app_config: "AppConfig", embedding_model) -> IVectorSt
 
 # To add a new vectorstore provider, add an entry here and a factory function above
 VECTORSTORE_PROVIDER_REGISTRY = {
-    "faiss": _build_faiss_store,
     "supabase": _build_supabase_store,
 }
 
@@ -275,10 +269,9 @@ class ServiceContainer:
     def get_vectorstore(self) -> IVectorStore:
         """Get or create vectorstore implementation.
 
-        Builds the searchable store of embedded articles (faiss in-memory or
-        supabase persistent, chosen by VECTORSTORE_PROVIDER). Wires in
-        get_embedding_model. Silver writes embeddings here; retrieval queries it.
-        Note: Silver itself requires the supabase variant (see get_silver_service).
+        Builds the searchable store of embedded articles in Supabase. Wires in 
+        get_embedding_model. Silver writes embeddings here;
+        retrieval queries it.
 
         Returns:
             IVectorStore implementation based on configuration.
@@ -619,8 +612,8 @@ class ServiceContainer:
         if not self._silver_service:
             if self._config.vectorstore.provider != "supabase":
                 raise ValueError(
-                    "Silver requires VECTORSTORE_PROVIDER=supabase "
-                    "(a persistent corpus); in-memory FAISS cannot back it."
+                    "Silver requires VECTORSTORE_PROVIDER=supabase: the corpus "
+                    "must persist across runs."
                 )
             logger.info("Creating SilverService")
             self._silver_service = SilverService(

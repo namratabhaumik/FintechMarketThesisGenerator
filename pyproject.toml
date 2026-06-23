@@ -12,8 +12,6 @@ dependencies = [
     "langgraph==1.0.1",
     # Observability
     "langfuse>=4,<5",
-    # Vector Store
-    "faiss-cpu==1.12.0",
     # Embeddings
     "fastembed>=0.4.0",
     "huggingface_hub==1.15.0",

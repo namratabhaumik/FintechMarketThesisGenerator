@@ -73,7 +73,7 @@ class LLMConfig:
 @dataclass
 class VectorStoreConfig:
     """Vector store configuration."""
-    provider: str = "faiss"
+    provider: str = "supabase"
     chunk_size: int = 800
     chunk_overlap: int = 100
 
@@ -217,7 +217,7 @@ class AppConfig:
                 "Please set them in your .env file."
             )
 
-        vs_provider = os.getenv("VECTORSTORE_PROVIDER", "faiss")
+        vs_provider = os.getenv("VECTORSTORE_PROVIDER", "supabase")
 
         # Retrieval config defaults for MMR
         retrieval = RetrievalConfig(

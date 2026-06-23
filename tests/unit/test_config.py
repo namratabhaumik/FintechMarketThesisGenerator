@@ -56,7 +56,7 @@ class TestAppConfigFromEnv:
         assert config.embedding.model_name == "all-MiniLM-L6-v2"
 
     def test_load_config_with_default_vectorstore(self):
-        """Test that vectorstore defaults to 'faiss' if not specified."""
+        """Test that vectorstore defaults to 'supabase' if not specified."""
         os.environ["LLM_PROVIDER"] = "gemini"
         os.environ["GEMINI_MODEL"] = "gemini-2.0-flash"
         os.environ["GOOGLE_API_KEY"] = "test_key"
@@ -66,7 +66,7 @@ class TestAppConfigFromEnv:
 
         config = AppConfig.from_env()
 
-        assert config.vectorstore.provider == "faiss"
+        assert config.vectorstore.provider == "supabase"
 
     def test_load_config_with_custom_vectorstore(self):
         """Test loading with custom vectorstore provider."""
