@@ -81,7 +81,15 @@ class SupabaseVectorStoreImpl(IVectorStore):
             # Every URL was already embedded --> nothing to write this run.
             logger.info("All articles already cached — skipping embedding")
 
-        # Return a handle to the full store (old + new chunks) for searching.
+        # Hand back a read handle over the full store (old + new chunks).
+        return self.open()
+
+    def open(self) -> VectorStore:
+        """Open the existing persistent store for reading.
+
+        This is the read path a thesis request takes: it only retrieves from
+        what is already persisted, so build() reuses this for its final handle.
+        """
         return SupabaseVectorStore(
             client=self._client,
             embedding=self._embeddings,

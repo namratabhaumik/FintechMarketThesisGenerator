@@ -15,7 +15,6 @@ from dotenv import load_dotenv
 
 from config.settings import AppConfig
 from core.agents.hallucination_detector import HallucinationDetector
-from core.exceptions import NoArticlesFetchedError, NoRelevantArticlesError
 from core.models.thesis import StructuredThesis
 from core.utils.logging import setup_logging
 from dependency_injection.container import ServiceContainer
@@ -49,8 +48,6 @@ FEEDBACK_OPTIONS = [
 # Cache control for testing
 if st.button("🔄 Clear Cache & Reset"):
     st.cache_resource.clear()
-    if "vectorstore_built" in st.session_state:
-        del st.session_state["vectorstore_built"]
     st.success("Cache cleared! Refresh the page.")
     st.stop()
 
@@ -376,47 +373,20 @@ if st.button("Generate Thesis"):
     else:
         try:
             # Get services from DI container
-            ingestion_service = container.get_ingestion_service()
             retrieval_service = container.get_retrieval_service()
             thesis_service = container.get_thesis_service()
 
-            # Step 1: Fetch articles
-            with st.spinner("Fetching latest fintech news from RSS feeds..."):
-                try:
-                    articles = ingestion_service.fetch_articles(query="fintech", limit=20)
-                except NoRelevantArticlesError:
-                    st.warning(
-                        "No fintech articles matched in the latest feed. "
-                        "Please try again later."
-                    )
-                    st.stop()
-                except NoArticlesFetchedError:
-                    st.warning(
-                        "No articles found (feed empty or unreachable). "
-                        "Please try again later."
-                    )
-                    st.stop()
-
-                # Store articles in session state for display outside button block
-                st.session_state["articles"] = articles
-
-            # Step 2: Build vectorstore (cache in session)
-            if "vectorstore_built" not in st.session_state:
-                with st.spinner("Building FAISS vectorstore (one-time)..."):
-                    documents = ingestion_service.convert_to_documents(articles)
-                    retrieval_service.build_vectorstore(documents)
-                    st.session_state["vectorstore_built"] = True
-                    logger.info("Vectorstore built and cached in session")
-
-            # Step 3: Retrieve relevant documents
-            with st.spinner("Retrieving relevant context from vectorstore..."):
+            # Step 1: Retrieve from the corpus
+            with st.spinner("Retrieving relevant context from the corpus..."):
                 docs = retrieval_service.retrieve(query, k=5)
 
                 if not docs:
-                    st.warning("No relevant documents found for this query.")
+                    st.warning(
+                        "No relevant documents found."
+                    )
                     st.stop()
 
-            # Step 4: Generate thesis
+            # Step 2: Generate thesis
             with st.spinner("Generating market thesis with Gemini..."):
                 thesis = thesis_service.generate_thesis(query, docs)
                 st.session_state["generated_thesis"] = thesis
@@ -442,15 +412,21 @@ if st.button("Generate Thesis"):
             logger.exception("Error while generating thesis")
             st.error(f"An unexpected error occurred: {str(exc)}")
 
-# Step 5: Display articles (outside button block so they persist across reruns)
-if "articles" in st.session_state:
-    articles = st.session_state["articles"]
-    with st.expander("Latest Fintech Articles"):
-        for article in articles:
-            if article.url:
-                st.markdown(f"• [{article.title}]({article.url})")
+# Step 5: Display the articles used for context
+if "retrieved_docs" in st.session_state:
+    docs = st.session_state["retrieved_docs"]
+    seen_urls = set()
+    with st.expander("Source Articles"):
+        for doc in docs:
+            url = doc.metadata.get("url", "")
+            if url and url in seen_urls:
+                continue
+            seen_urls.add(url)
+            title = doc.metadata.get("title", "Untitled")
+            if url:
+                st.markdown(f"• [{title}]({url})")
             else:
-                st.markdown(f"• {article.title}")
+                st.markdown(f"• {title}")
 
 # Step 6: Display results (outside button block so toggle doesn't disappear)
 if "generated_thesis" in st.session_state:

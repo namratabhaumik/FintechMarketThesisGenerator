@@ -13,10 +13,11 @@ logger = logging.getLogger(__name__)
 
 
 class DocumentRetrievalService:
-    """Service for document retrieval.
+    """Reads the persistent corpus: opens the store and runs MMR retrieval.
 
-    Single Responsibility: Vector store management and MMR retrieval.
-    Implements Dependency Inversion: Depends on IVectorStore abstraction.
+    On the first retrieve it lazily opens the store, then returns the
+    most relevant, diverse chunks for a query. Depends on the IVectorStore
+    abstraction.
     """
 
     def __init__(self, vectorstore: IVectorStore, config: RetrievalConfig):
@@ -57,10 +58,12 @@ class DocumentRetrievalService:
         Raises:
             RuntimeError: If vectorstore not built.
         """
-        if not self._vectorstore_instance:
-            raise RuntimeError(
-                "Vectorstore not built. Call build_vectorstore() first."
-            )
+        if self._vectorstore_instance is None:
+            # Open the existing persistent corpus for reading
+            # Ingestion happens offline in Silver; a thesis request only
+            # reads what the medallion already built.
+            logger.info("Opening existing persistent vector store for retrieval")
+            self._vectorstore_instance = self._vectorstore_impl.open()
 
         # Use the configured k unless the caller overrides it. fetch_k must be
         # >= k for MMR (it is the candidate pool we select k from), so widen it

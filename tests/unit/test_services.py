@@ -67,6 +67,9 @@ class _RecordingVectorStore:
     def build(self, documents):
         return object()
 
+    def open(self):
+        return object()
+
     def as_retriever(self, vectorstore, k, fetch_k, lambda_mult):
         self.as_retriever_args = {"k": k, "fetch_k": fetch_k, "lambda_mult": lambda_mult}
         return _FakeRetriever()
@@ -89,6 +92,20 @@ class TestDocumentRetrievalService:
 
         service = DocumentRetrievalService(_RecordingVectorStore(), RetrievalConfig())
         assert service.is_built() is False
+
+    def test_retrieve_lazily_opens_existing_store(self):
+        from config.settings import RetrievalConfig
+        from core.services.retrieval_service import DocumentRetrievalService
+
+        # No build_vectorstore() call: retrieve must open the existing store
+        vs = _RecordingVectorStore()
+        service = DocumentRetrievalService(vs, RetrievalConfig())
+        assert service.is_built() is False
+
+        docs = service.retrieve("query")
+
+        assert service.is_built() is True
+        assert len(docs) == 1
 
     def test_retrieve_uses_mmr_config(self):
         from config.settings import RetrievalConfig

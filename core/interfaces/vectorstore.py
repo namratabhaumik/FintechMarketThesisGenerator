@@ -12,8 +12,19 @@ class IVectorStore(ABC):
 
     @abstractmethod
     def build(self, documents: List[Document]) -> VectorStore:
-        """Build vectorstore from documents."""
+        """Build the store by embedding documents (the write path)."""
         pass
+
+    def open(self) -> VectorStore:
+        """Open the existing persistent store for reading (the read path).
+
+        Returns a retriever-ready handle over whatever is already persisted,
+        without embedding or writing anything. Default: unsupported - in-memory
+        stores have nothing to open, so persistent stores override this.
+        """
+        raise NotImplementedError(
+            "This vector store has no persistent store to open; build() it first."
+        )
 
     @abstractmethod
     def as_retriever(
