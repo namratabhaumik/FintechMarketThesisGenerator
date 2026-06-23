@@ -6,6 +6,7 @@ Uses dependency injection to manage all dependencies.
 
 import logging
 import os
+from datetime import datetime
 
 # Must be set before ONNX Runtime (FastEmbed) is imported to avoid OpenMP conflict on macOS
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -19,8 +20,10 @@ from core.models.thesis import StructuredThesis
 from core.utils.logging import setup_logging
 from dependency_injection.container import ServiceContainer
 
-# Load environment variables from .env
-load_dotenv()
+# Load environment variables from .env. override=True so edits 
+# take effect on a Clear Cache & Reset (which rebuilds the
+# cached container) without a full process restart.
+load_dotenv(override=True)
 
 # ---- Setup ----
 setup_logging()
@@ -415,14 +418,37 @@ if st.button("Generate Thesis"):
 # Step 5: Display the articles used for context
 if "retrieved_docs" in st.session_state:
     docs = st.session_state["retrieved_docs"]
+    # Show each article once in relevance order.
     seen_urls = set()
-    with st.expander("Source Articles"):
-        for doc in docs:
-            url = doc.metadata.get("url", "")
-            if url and url in seen_urls:
-                continue
-            seen_urls.add(url)
-            title = doc.metadata.get("title", "Untitled")
+    sources = []
+    for doc in docs:
+        url = doc.metadata.get("url", "")
+        if url and url in seen_urls:
+            continue
+        seen_urls.add(url)
+        sources.append(doc.metadata)
+
+    # Timeframe = published-date span of the source articles
+    dates = []
+    for meta in sources:
+        raw = meta.get("published_at")
+        if raw:
+            try:
+                dates.append(datetime.fromisoformat(raw))
+            except ValueError:
+                pass
+    label = "Source Articles"
+    if dates:
+        lo, hi = min(dates), max(dates)
+        if lo.date() == hi.date():
+            label += f" ({lo.strftime('%b %d, %Y')})"
+        else:
+            label += f" ({lo.strftime('%b %d, %Y')} - {hi.strftime('%b %d, %Y')})"
+
+    with st.expander(label):
+        for meta in sources:
+            title = meta.get("title", "Untitled")
+            url = meta.get("url", "")
             if url:
                 st.markdown(f"• [{title}]({url})")
             else:

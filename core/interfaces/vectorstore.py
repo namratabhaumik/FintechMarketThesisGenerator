@@ -1,7 +1,7 @@
 """Abstract interface for vector stores."""
 
 from abc import ABC, abstractmethod
-from typing import Any, List
+from typing import List, Optional
 
 from langchain_core.documents import Document
 from langchain_core.vectorstores import VectorStore
@@ -25,13 +25,21 @@ class IVectorStore(ABC):
         pass
 
     @abstractmethod
-    def as_retriever(
-        self, vectorstore: VectorStore, k: int, fetch_k: int, lambda_mult: float
-    ) -> Any:
-        """Return an MMR retriever from the vectorstore.
+    def retrieve(
+        self,
+        vectorstore: VectorStore,
+        query: str,
+        k: int,
+        fetch_k: int,
+        lambda_mult: float,
+        window_days: Optional[int] = None,
+    ) -> List[Document]:
+        """Return up to `k` MMR-selected chunks for `query`.
 
-        Retrieval is MMR: pull `fetch_k` candidates by similarity, then select
-        `k` by the MMR objective (`lambda_mult` trades relevance vs diversity).
-        The retrieval service passes these from RetrievalConfig.
+        Pull `fetch_k` candidates by similarity, then select `k` by the MMR
+        objective (`lambda_mult` trades relevance vs diversity). When
+        `window_days` is set, only articles published within that trailing
+        window (anchored at query time) are considered; None or 0 searches the
+        whole corpus. The retrieval service passes these from RetrievalConfig.
         """
         pass

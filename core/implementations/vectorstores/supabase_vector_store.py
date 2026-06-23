@@ -1,12 +1,15 @@
 """Supabase pgvector vectorstore implementation with URL-based deduplication."""
 
+import json
 import logging
-from typing import Any, List, Set
+from typing import List, Optional, Set
 
+import numpy as np
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.vectorstores import VectorStore
 from langchain_community.vectorstores import SupabaseVectorStore
+from langchain_community.vectorstores.utils import maximal_marginal_relevance
 from supabase import Client
 
 from config.settings import VectorStoreConfig
@@ -97,15 +100,53 @@ class SupabaseVectorStoreImpl(IVectorStore):
             query_name=QUERY_NAME,
         )
 
-    def as_retriever(
-        self, vectorstore: VectorStore, k: int, fetch_k: int, lambda_mult: float
-    ) -> Any:
-        # MMR retriever: fetch `fetch_k` candidates by similarity, then pick `k`
-        # that are relevant (lambda_mult tunes the relevance/diversity balance).
-        return vectorstore.as_retriever(
-            search_type="mmr",
-            search_kwargs={"k": k, "fetch_k": fetch_k, "lambda_mult": lambda_mult},
+    def retrieve(
+        self,
+        vectorstore: VectorStore,
+        query: str,
+        k: int,
+        fetch_k: int,
+        lambda_mult: float,
+        window_days: Optional[int] = None,
+    ) -> List[Document]:
+        """Date-windowed MMR retrieval.
+
+        Pull `fetch_k` candidates from pgvector (within the last `window_days`
+        when set), then MMR-select `k`.
+        """
+        query_embedding = self._embeddings.embed_query(query)
+
+        params = {"query_embedding": query_embedding, "match_count": fetch_k}
+        # Default is a 1-year window (the trend window); window_days=0 omits it
+        # here so match_documents falls back to NULL = whole corpus.
+        if window_days and window_days > 0:
+            params["window_days"] = window_days
+        rows = self._client.rpc(QUERY_NAME, params).execute().data or []
+        if not rows:
+            return []
+
+        # MMR over the candidates' stored vectors (match_documents returns them).
+        candidate_embeddings = [self._parse_embedding(r["embedding"]) for r in rows]
+        selected = maximal_marginal_relevance(
+            np.array(query_embedding, dtype=np.float32),
+            candidate_embeddings,
+            k=min(k, len(rows)),
+            lambda_mult=lambda_mult,
         )
+        return [
+            Document(
+                page_content=rows[i].get("content", ""),
+                metadata=rows[i].get("metadata") or {},
+            )
+            for i in selected
+        ]
+
+    @staticmethod
+    def _parse_embedding(value):
+        # pgvector comes back from PostgREST as a JSON-encoded string.
+        if isinstance(value, str):
+            return json.loads(value)
+        return value
 
     def _fetch_existing_urls(self) -> Set[str]:
         """Return the article URLs already embedded, for internal build dedup.

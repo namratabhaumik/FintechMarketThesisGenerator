@@ -53,16 +53,11 @@ class TestArticleIngestionService:
         assert doc.metadata["published_at"] == "2026-01-01T00:00:00+00:00"
 
 
-class _FakeRetriever:
-    def invoke(self, query):
-        return [Document(page_content="r", metadata={"url": "u"})]
-
-
 class _RecordingVectorStore:
-    """Fake IVectorStore that records the args as_retriever was called with."""
+    """Fake IVectorStore that records the args retrieve() was called with."""
 
     def __init__(self):
-        self.as_retriever_args = None
+        self.retrieve_args = None
 
     def build(self, documents):
         return object()
@@ -70,9 +65,15 @@ class _RecordingVectorStore:
     def open(self):
         return object()
 
-    def as_retriever(self, vectorstore, k, fetch_k, lambda_mult):
-        self.as_retriever_args = {"k": k, "fetch_k": fetch_k, "lambda_mult": lambda_mult}
-        return _FakeRetriever()
+    def retrieve(self, vectorstore, query, k, fetch_k, lambda_mult, window_days=None):
+        self.retrieve_args = {
+            "query": query,
+            "k": k,
+            "fetch_k": fetch_k,
+            "lambda_mult": lambda_mult,
+            "window_days": window_days,
+        }
+        return [Document(page_content="r", metadata={"url": "u"})]
 
 
 class TestDocumentRetrievalService:
@@ -110,11 +111,24 @@ class TestDocumentRetrievalService:
     def test_retrieve_uses_mmr_config(self):
         from config.settings import RetrievalConfig
 
-        service, vs = self._service(RetrievalConfig(k=5, fetch_k=20, lambda_mult=0.5))
+        service, vs = self._service(
+            RetrievalConfig(k=5, fetch_k=20, lambda_mult=0.5, window_days=365)
+        )
         docs = service.retrieve("query")
 
-        assert vs.as_retriever_args == {"k": 5, "fetch_k": 20, "lambda_mult": 0.5}
+        assert vs.retrieve_args["k"] == 5
+        assert vs.retrieve_args["fetch_k"] == 20
+        assert vs.retrieve_args["lambda_mult"] == 0.5
         assert len(docs) == 1
+
+    def test_retrieve_passes_window_days(self):
+        from config.settings import RetrievalConfig
+
+        # The configured recency window must reach the vector store.
+        service, vs = self._service(RetrievalConfig(window_days=180))
+        service.retrieve("query")
+
+        assert vs.retrieve_args["window_days"] == 180
 
     def test_retrieve_override_k_widens_fetch_k(self):
         from config.settings import RetrievalConfig
@@ -124,8 +138,8 @@ class TestDocumentRetrievalService:
         service, vs = self._service(RetrievalConfig(k=5, fetch_k=20, lambda_mult=0.5))
         service.retrieve("query", k=30)
 
-        assert vs.as_retriever_args["k"] == 30
-        assert vs.as_retriever_args["fetch_k"] == 30
+        assert vs.retrieve_args["k"] == 30
+        assert vs.retrieve_args["fetch_k"] == 30
 
 
 class TestThesisGeneratorService:

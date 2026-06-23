@@ -19,7 +19,9 @@ Each thesis includes:
 
 ## How it works
 
-**Ingestion → retrieval → generation:** RSS articles fetched, embedded via FastEmbed (ONNX), stored in FAISS, top-k chunks passed to Gemini for summarization and structuring.
+**Ingestion → retrieval → generation:** RSS articles fetched, embedded via FastEmbed (ONNX), and persisted in Supabase pgvector. A query runs MMR retrieval over the corpus and passes the selected chunks to Gemini for summarization and structuring.
+
+**Recency window.** Retrieval only considers articles published within a trailing window (default: the last year), so a thesis reflects a trend over that window rather than spot news. The window slides with the query date and is editable via `RETRIEVAL_WINDOW_DAYS` (`0` searches the whole corpus). 
 
 **Refinement agent (LangGraph):** After reading a thesis, the user picks from a fixed set of feedback reasons. A LangGraph agent reasons about which tool to call and rewrites only the part of the thesis that needs changing.
 

@@ -73,13 +73,14 @@ class DocumentRetrievalService:
 
         logger.info(f"Retrieving {effective_k} documents (MMR) for query: {query}")
         try:
-            retriever = self._vectorstore_impl.as_retriever(
+            docs = self._vectorstore_impl.retrieve(
                 self._vectorstore_instance,
+                query,
                 k=effective_k,
                 fetch_k=fetch_k,
                 lambda_mult=self._config.lambda_mult,
+                window_days=self._config.window_days,
             )
-            docs = retriever.invoke(query)
         except Exception as e:
             logger.error(f"Retrieval failed for query '{query}': {e}")
             raise
