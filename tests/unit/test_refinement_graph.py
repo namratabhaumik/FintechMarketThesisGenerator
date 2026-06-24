@@ -37,9 +37,9 @@ def current_thesis():
         investment_signals=["Payment Infrastructure"],
         sources=["u1", "u2"],
         raw_output="Original prose about digital payments.",
-        opportunity_score=9.9,          # sentinel - any real re-score must replace this
-        confidence_level=9.9,
-        recommendation="STALE",
+        opportunity_score=9.9,          # frozen: must be carried forward unchanged on refine
+        confidence_level=9.9,           # re-derived on refine (not frozen)
+        recommendation="STALE",         # frozen: carried forward with the score
         key_risk_factors=["Regulatory Risk"],
     )
 
@@ -73,29 +73,37 @@ class TestResolveComponents:
 
 
 class TestScoreAndBuild:
-    """_score_and_build deterministically scores components into a StructuredThesis."""
+    """_score_and_build freezes the score (carried from current) and re-derives
+    only confidence + key risks from the refined components."""
 
-    def test_builds_thesis_and_scores_deterministically(self, scoring):
+    def test_freezes_score_and_recomputes_confidence(self, scoring, current_thesis):
         components = (["Digital Payments"], ["Regulatory Risk"],
-                      ["Payment Infrastructure"], ["u1", "u2"], SIGNAL_RICH)
-        thesis = _score_and_build(scoring, components)
+                      ["Payment Infrastructure"], ["u1", "u2"], "new prose")
+        thesis = _score_and_build(scoring, components, current_thesis)
 
         assert isinstance(thesis, StructuredThesis)
         assert thesis.key_themes == ["Digital Payments"]
-        assert thesis.raw_output == SIGNAL_RICH
-        # Score equals the scorer run directly on the same inputs (single authority).
-        expected = scoring.score_opportunity(
-            ["Digital Payments"], ["Regulatory Risk"], ["Payment Infrastructure"],
-            ["u1", "u2"], raw_text=SIGNAL_RICH,
+        assert thesis.raw_output == "new prose"
+        # Score + recommendation are FROZEN: carried from current, not recomputed.
+        assert thesis.opportunity_score == current_thesis.opportunity_score
+        assert thesis.recommendation == current_thesis.recommendation
+        # Confidence + key risks are re-derived from the refined components.
+        expected = scoring.assess_confidence(
+            risks=["Regulatory Risk"],
+            investment_signals=["Payment Infrastructure"],
+            sources=["u1", "u2"],
         )
-        assert thesis.opportunity_score == expected["score"]
-        assert thesis.recommendation == expected["recommendation"]
+        assert thesis.confidence_level == expected["confidence_level"]
         assert thesis.key_risk_factors == expected["key_risks"]
 
-    def test_signal_rich_outscores_risk_heavy(self, scoring):
-        sig = _score_and_build(scoring, ([], [], [], [], SIGNAL_RICH)).opportunity_score
-        rsk = _score_and_build(scoring, ([], [], [], [], RISK_HEAVY)).opportunity_score
-        assert sig > rsk
+    def test_score_is_frozen_regardless_of_content(self, scoring, current_thesis):
+        # Different refined prose / tags must NOT move the score - it reflects the
+        # retrieved evidence, which a refinement does not change.
+        a = _score_and_build(scoring, ([], [], [], [], SIGNAL_RICH), current_thesis)
+        b = _score_and_build(
+            scoring, (["T"], ["R1", "R2"], ["S"], ["u"], RISK_HEAVY), current_thesis
+        )
+        assert a.opportunity_score == b.opportunity_score == current_thesis.opportunity_score
 
 
 class TestAssembleNode:
@@ -110,7 +118,7 @@ class TestAssembleNode:
             "execution_log": [],
         }
 
-    def test_refine_thesis_is_rescored_and_logged(self, scoring, current_thesis):
+    def test_refine_thesis_freezes_score_and_logged(self, scoring, current_thesis):
         assemble = _make_assemble_node(scoring)
         msg = ToolMessage(content=json.dumps({
             "tool": "refine_thesis", "key_themes": ["Digital Payments"],
@@ -121,12 +129,16 @@ class TestAssembleNode:
         out = assemble(self._state(current_thesis, msg))
         t = out["current_thesis"]
 
-        expected = scoring.score_opportunity(
-            ["Digital Payments"], ["Regulatory Risk"], ["Payment Infrastructure"],
-            ["u1", "u2"], raw_text=SIGNAL_RICH,
+        # Score + recommendation frozen (carried from current).
+        assert t.opportunity_score == current_thesis.opportunity_score
+        assert t.recommendation == current_thesis.recommendation
+        # Confidence re-derived from the refined components (not frozen).
+        expected = scoring.assess_confidence(
+            risks=["Regulatory Risk"],
+            investment_signals=["Payment Infrastructure"],
+            sources=["u1", "u2"],
         )
-        assert t.opportunity_score == expected["score"]
-        assert t.opportunity_score != 9.9          # sentinel replaced
+        assert t.confidence_level == expected["confidence_level"]
         assert t.raw_output == SIGNAL_RICH
         assert out["refinement_count"] == 1
         assert out["execution_log"][-1] == {

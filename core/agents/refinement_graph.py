@@ -124,18 +124,23 @@ def _resolve_components(tool_name: str, result: dict, current: StructuredThesis)
     return None
 
 
-def _score_and_build(scoring_service: OpportunityScoringService, components) -> StructuredThesis:
-    """Deterministically score components and assemble a StructuredThesis.
+def _score_and_build(
+    scoring_service: OpportunityScoringService, components, current: StructuredThesis
+) -> StructuredThesis:
+    """Re-assemble a StructuredThesis after refinement.
+
+    The opportunity score (and the recommendation it drives) is FROZEN: it
+    reflects the retrieved evidence, which a refinement does not change, so it is
+    carried forward from the current thesis rather than recomputed. Only the
+    confidence and key risks are re-derived from the refined components.
 
     components is (key_themes, risks, investment_signals, sources, raw_output).
     """
     key_themes, risks, investment_signals, sources, raw_output = components
-    score = scoring_service.score_opportunity(
-        key_themes=key_themes,
+    assessment = scoring_service.assess_confidence(
         risks=risks,
         investment_signals=investment_signals,
         sources=sources,
-        raw_text=raw_output,
     )
     return StructuredThesis(
         key_themes=key_themes,
@@ -143,10 +148,10 @@ def _score_and_build(scoring_service: OpportunityScoringService, components) -> 
         investment_signals=investment_signals,
         sources=sources,
         raw_output=raw_output,
-        opportunity_score=score["score"],
-        confidence_level=score["confidence_level"],
-        recommendation=score["recommendation"],
-        key_risk_factors=score["key_risks"],
+        opportunity_score=current.opportunity_score,
+        confidence_level=assessment["confidence_level"],
+        recommendation=current.recommendation,
+        key_risk_factors=assessment["key_risks"],
     )
 
 
@@ -191,9 +196,10 @@ def _make_assemble_node(scoring_service: OpportunityScoringService):
             logger.warning(f"assemble_node: unknown tool '{tool_name}', keeping current thesis")
             return skip(tool_name, "skipped")
 
-        # Deterministic re-score of the refined content - the score may move up OR down
-        # (e.g. if the rewrite surfaces more risk language), since it reflects content.
-        new_thesis = _score_and_build(scoring_service, components)
+        # Re-assemble the refined thesis. The score (and recommendation) is frozen
+        # - carried forward from `current`, since it reflects the unchanged
+        # retrieved evidence. Only the narrative, displayed tags, and confidence move.
+        new_thesis = _score_and_build(scoring_service, components, current)
 
         execution_log.append({
             "tool_name": tool_name,

@@ -13,14 +13,9 @@ from finthesis_internal.opportunity_scoring_service import OpportunityScoringSer
 logger = logging.getLogger(__name__)
 
 
-def _ranked_tags_from_documents(
-    documents: List[Document],
-) -> Tuple[List[str], List[str], List[str]]:
-    """Frequency-rank the Silver tags carried in the retrieved chunks' metadata.
+def _tag_counters(documents: List[Document]) -> Dict[str, "Counter[str]"]:
+    """Count Silver-tag occurrences per dimension across the retrieved chunks.
 
-    Returns the full ranked candidate list per dimension (themes, risks,
-    signals), most common first and UNCAPPED. These are the only tags the thesis
-    can ever surface - they come straight from the evidence, never invented.
     Each chunk was tagged deterministically on its raw article text at Silver
     time. Missing metadata (e.g. older chunks embedded before tagging existed) is
     treated as no tags.
@@ -35,14 +30,46 @@ def _ranked_tags_from_documents(
         for key, counter in counters.items():
             # `or []` guards both an absent key and an explicit None.
             counter.update(metadata.get(key) or [])
+    return counters
 
-    def _ranked(counter: Counter) -> List[str]:
+
+def _ranked_tags_from_documents(
+    documents: List[Document],
+) -> Tuple[List[str], List[str], List[str]]:
+    """Frequency-rank the Silver tags carried in the retrieved chunks' metadata.
+
+    Returns the full ranked candidate list per dimension (themes, risks,
+    signals), most common first and UNCAPPED. These are the only tags the thesis
+    can ever surface - they come straight from the evidence, never invented.
+    """
+    counters = _tag_counters(documents)
+
+    def _ranked(counter: "Counter[str]") -> List[str]:
         return [label for label, _ in counter.most_common()]
 
     return (
         _ranked(counters["themes"]),
         _ranked(counters["risks"]),
         _ranked(counters["signals"]),
+    )
+
+
+def _tag_strengths_from_documents(
+    documents: List[Document],
+) -> Tuple[int, int, int]:
+    """Total Silver-tag occurrences per dimension across the retrieved chunks.
+
+    Returns (signal_strength, theme_strength, risk_strength) - the grounded
+    analog of the old keyword-hit counts, now summed from the Silver tags rather
+    than scanned from the LLM prose. Computed from the FULL tags (uncapped), so
+    the score is independent of how many tags are displayed and is identical for
+    the same retrieved set - which is what keeps it stable across refinement.
+    """
+    counters = _tag_counters(documents)
+    return (
+        sum(counters["signals"].values()),
+        sum(counters["themes"].values()),
+        sum(counters["risks"].values()),
     )
 
 
@@ -156,14 +183,21 @@ class ThesisGeneratorService:
         logger.info("Step 3: Extracting sources from documents...")
         sources = [doc.metadata["url"] for doc in documents if doc.metadata.get("url")]
 
-        # Step 4: Score opportunity (rule-based, no LLM)
-        logger.info("Step 4: Scoring opportunity...")
+        # Step 4: Score opportunity from the grounded Silver tag strengths
+        # (deterministic, no LLM). The score is a function of the retrieved
+        # evidence - not the LLM prose - so it is reproducible and stable across
+        # refinement. Strengths come from the FULL (uncapped) tags.
+        logger.info("Step 4: Scoring opportunity from grounded tag strengths...")
+        signal_strength, theme_strength, risk_strength = _tag_strengths_from_documents(
+            documents
+        )
         score_result = self._scoring_service.score_opportunity(
-            key_themes=key_themes,
             risks=risks,
             investment_signals=investment_signals,
             sources=sources,
-            raw_text=summary
+            signal_strength=signal_strength,
+            theme_strength=theme_strength,
+            risk_strength=risk_strength,
         )
 
         logger.info("Successfully generated structured thesis with scoring")

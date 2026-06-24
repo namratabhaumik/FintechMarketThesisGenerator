@@ -696,17 +696,16 @@ class ServiceContainer:
     def get_opportunity_scoring_service(self) -> OpportunityScoringService:
         """Get or create opportunity scoring service.
 
-        Scores how strong an investment opportunity a thesis represents. Wires in
-        get_scoring_strategy. Used by the thesis service and the agent graph.
+        Scores how strong an investment opportunity a thesis represents, from the
+        grounded Silver tag strengths passed in at scoring time. Used by the
+        thesis service and the agent graph.
 
         Returns:
             OpportunityScoringService instance.
         """
         if not self._opportunity_scoring_service:
             logger.info("Creating OpportunityScoringService")
-            self._opportunity_scoring_service = OpportunityScoringService(
-                scoring_strategy=self.get_scoring_strategy()
-            )
+            self._opportunity_scoring_service = OpportunityScoringService()
         return self._opportunity_scoring_service
 
     def get_thesis_service(self) -> ThesisGeneratorService:
