@@ -1,5 +1,7 @@
 """Unit tests for service layer."""
 
+from unittest.mock import Mock
+
 from langchain_core.documents import Document
 
 from core.services.ingestion_service import ArticleIngestionService
@@ -8,6 +10,13 @@ from core.services.thesis_generator_service import (
     _apply_feedback_caps,
     _ranked_tags_from_documents,
 )
+
+
+def _empty_trend():
+    """Trend repo stub with no Gold metrics (confidence falls to 0)."""
+    repo = Mock()
+    repo.fetch_all.return_value = []
+    return repo
 
 
 class TestArticleIngestionService:
@@ -150,7 +159,7 @@ class TestThesisGeneratorService:
         from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
         scoring_service = OpportunityScoringService()
-        service = ThesisGeneratorService(mock_llm, scoring_service)
+        service = ThesisGeneratorService(mock_llm, scoring_service, _empty_trend())
 
         docs = [Document(page_content="Test content", metadata={"url": "http://test.com"})]
         thesis = service.generate_thesis("Digital Banking", docs)
@@ -165,7 +174,7 @@ class TestThesisGeneratorService:
         from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
         scoring_service = OpportunityScoringService()
-        service = ThesisGeneratorService(mock_llm, scoring_service)
+        service = ThesisGeneratorService(mock_llm, scoring_service, _empty_trend())
 
         docs = [Document(page_content="Digital banking is the future", metadata={"url": "http://test.com"})]
         thesis = service.generate_thesis("Digital Banking", docs)
@@ -178,7 +187,7 @@ class TestThesisGeneratorService:
         from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
         scoring_service = OpportunityScoringService()
-        service = ThesisGeneratorService(mock_llm, scoring_service)
+        service = ThesisGeneratorService(mock_llm, scoring_service, _empty_trend())
 
         docs = [
             Document(page_content="Digital banking innovation", metadata={"url": "http://test.com"}),
@@ -199,7 +208,7 @@ class TestThesisGeneratorService:
         from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
         scoring_service = OpportunityScoringService()
-        service = ThesisGeneratorService(mock_llm, scoring_service)
+        service = ThesisGeneratorService(mock_llm, scoring_service, _empty_trend())
 
         docs = [Document(page_content="Test", metadata={"url": "http://test.com"})]
         thesis = service.generate_thesis("Test Query", docs)
@@ -278,7 +287,7 @@ class TestGroundedTagDerivation:
     def test_generate_thesis_surfaces_grounded_tags(self, mock_llm):
         from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
-        service = ThesisGeneratorService(mock_llm, OpportunityScoringService())
+        service = ThesisGeneratorService(mock_llm, OpportunityScoringService(), _empty_trend())
         docs = [
             self._doc(
                 themes=["Digital Payments"],

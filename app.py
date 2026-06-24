@@ -335,6 +335,8 @@ def display_structured_thesis(thesis: StructuredThesis):
 
     with col2:
         st.metric("Confidence Level", f"{int(thesis.confidence_level * 100)}%")
+        if thesis.confidence_as_of:
+            st.caption(f"trends as of {thesis.confidence_as_of}")
 
     with col3:
         # Color code the recommendation

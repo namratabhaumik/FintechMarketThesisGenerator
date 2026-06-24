@@ -15,7 +15,6 @@ from langgraph.prebuilt import ToolNode
 from core.agents.execution_tracker import ExecutionTracker  # noqa: F401 (kept for compatibility)
 from core.agents.thesis_tools import create_thesis_tools
 from core.models.thesis import StructuredThesis
-from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 from core.services.thesis_generator_service import ThesisGeneratorService
 
 logger = logging.getLogger(__name__)
@@ -124,24 +123,18 @@ def _resolve_components(tool_name: str, result: dict, current: StructuredThesis)
     return None
 
 
-def _score_and_build(
-    scoring_service: OpportunityScoringService, components, current: StructuredThesis
-) -> StructuredThesis:
+def _score_and_build(components, current: StructuredThesis) -> StructuredThesis:
     """Re-assemble a StructuredThesis after refinement.
 
-    The opportunity score (and the recommendation it drives) is FROZEN: it
-    reflects the retrieved evidence, which a refinement does not change, so it is
-    carried forward from the current thesis rather than recomputed. Only the
-    confidence and key risks are re-derived from the refined components.
+    Every number is FROZEN - score, recommendation, confidence and the
+    confidence as-of date all reflect the retrieved evidence and the Gold
+    snapshot, neither of which a refinement changes, so they are carried forward
+    from the current thesis. Only the refined content (narrative + displayed
+    tags) is swapped in; key risks follow the refined risk list.
 
     components is (key_themes, risks, investment_signals, sources, raw_output).
     """
     key_themes, risks, investment_signals, sources, raw_output = components
-    assessment = scoring_service.assess_confidence(
-        risks=risks,
-        investment_signals=investment_signals,
-        sources=sources,
-    )
     return StructuredThesis(
         key_themes=key_themes,
         risks=risks,
@@ -149,13 +142,14 @@ def _score_and_build(
         sources=sources,
         raw_output=raw_output,
         opportunity_score=current.opportunity_score,
-        confidence_level=assessment["confidence_level"],
+        confidence_level=current.confidence_level,
+        confidence_as_of=current.confidence_as_of,
         recommendation=current.recommendation,
-        key_risk_factors=assessment["key_risks"],
+        key_risk_factors=risks[:min(3, len(risks))],
     )
 
 
-def _make_assemble_node(scoring_service: OpportunityScoringService):
+def _make_assemble_node():
     """Return an assemble node that rebuilds StructuredThesis from tool output."""
 
     def assemble_node(state: ThesisRefinementState) -> dict:
@@ -196,10 +190,11 @@ def _make_assemble_node(scoring_service: OpportunityScoringService):
             logger.warning(f"assemble_node: unknown tool '{tool_name}', keeping current thesis")
             return skip(tool_name, "skipped")
 
-        # Re-assemble the refined thesis. The score (and recommendation) is frozen
-        # - carried forward from `current`, since it reflects the unchanged
-        # retrieved evidence. Only the narrative, displayed tags, and confidence move.
-        new_thesis = _score_and_build(scoring_service, components, current)
+        # Re-assemble the refined thesis. All numbers (score, recommendation,
+        # confidence, as-of) are frozen - carried forward from `current`, since
+        # they reflect the unchanged retrieved evidence and Gold snapshot. Only
+        # the narrative and displayed tags move.
+        new_thesis = _score_and_build(components, current)
 
         execution_log.append({
             "tool_name": tool_name,
@@ -250,7 +245,6 @@ def _route_after_planner(state: ThesisRefinementState) -> str:
 
 def build_refinement_graph(
     thesis_service: ThesisGeneratorService,
-    scoring_service: OpportunityScoringService,
     gemini_api_key: str,
     model_name: str = "gemini-2.5-flash",
 ) -> object:
@@ -263,7 +257,6 @@ def build_refinement_graph(
 
     Args:
         thesis_service: For LLM-driven thesis rewriting.
-        scoring_service: For rule-based re-scoring.
         gemini_api_key: API key for the planner LLM.
         model_name: Gemini model to use for tool-call decisions.
 
@@ -282,7 +275,7 @@ def build_refinement_graph(
 
     graph.add_node("planner", _make_planner_node(planner_llm))
     graph.add_node("tools", ToolNode(tools))
-    graph.add_node("assemble", _make_assemble_node(scoring_service))
+    graph.add_node("assemble", _make_assemble_node())
     graph.add_node("escalate", _escalate_node)
 
     graph.set_conditional_entry_point(

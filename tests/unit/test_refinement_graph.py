@@ -1,7 +1,8 @@
-"""Unit tests for the refinement graph: component resolution, deterministic
-scoring/assembly, the assemble node orchestration, and the tool registry shape."""
+"""Unit tests for the refinement graph: component resolution, frozen-number
+assembly, the assemble node orchestration, and the tool registry shape."""
 
 import json
+from datetime import date
 from unittest.mock import Mock
 
 import pytest
@@ -25,21 +26,19 @@ RISK_HEAVY = "Regulatory enforcement, compliance bans, data breaches, fraud and 
 
 
 @pytest.fixture
-def scoring():
-    return OpportunityScoringService()
-
-
-@pytest.fixture
 def current_thesis():
+    # All numbers are frozen on refine - carried forward unchanged - so these
+    # sentinels must survive any re-assembly untouched.
     return StructuredThesis(
         key_themes=["Digital Payments"],
         risks=["Regulatory Risk"],
         investment_signals=["Payment Infrastructure"],
         sources=["u1", "u2"],
         raw_output="Original prose about digital payments.",
-        opportunity_score=9.9,          # frozen: must be carried forward unchanged on refine
-        confidence_level=9.9,           # re-derived on refine (not frozen)
-        recommendation="STALE",         # frozen: carried forward with the score
+        opportunity_score=9.9,
+        confidence_level=0.42,
+        confidence_as_of=date(2026, 6, 15),
+        recommendation="STALE",
         key_risk_factors=["Regulatory Risk"],
     )
 
@@ -73,41 +72,37 @@ class TestResolveComponents:
 
 
 class TestScoreAndBuild:
-    """_score_and_build freezes the score (carried from current) and re-derives
-    only confidence + key risks from the refined components."""
+    """_score_and_build carries every number forward (frozen) and only swaps in
+    the refined content; key risks follow the refined risk list."""
 
-    def test_freezes_score_and_recomputes_confidence(self, scoring, current_thesis):
-        components = (["Digital Payments"], ["Regulatory Risk"],
+    def test_freezes_numbers_and_swaps_content(self, current_thesis):
+        components = (["Digital Payments"], ["Regulatory Risk", "Credit Risk"],
                       ["Payment Infrastructure"], ["u1", "u2"], "new prose")
-        thesis = _score_and_build(scoring, components, current_thesis)
+        thesis = _score_and_build(components, current_thesis)
 
         assert isinstance(thesis, StructuredThesis)
-        assert thesis.key_themes == ["Digital Payments"]
         assert thesis.raw_output == "new prose"
-        # Score + recommendation are FROZEN: carried from current, not recomputed.
+        assert thesis.risks == ["Regulatory Risk", "Credit Risk"]
+        # Every number is FROZEN: carried from current.
         assert thesis.opportunity_score == current_thesis.opportunity_score
+        assert thesis.confidence_level == current_thesis.confidence_level
+        assert thesis.confidence_as_of == current_thesis.confidence_as_of
         assert thesis.recommendation == current_thesis.recommendation
-        # Confidence + key risks are re-derived from the refined components.
-        expected = scoring.assess_confidence(
-            risks=["Regulatory Risk"],
-            investment_signals=["Payment Infrastructure"],
-            sources=["u1", "u2"],
-        )
-        assert thesis.confidence_level == expected["confidence_level"]
-        assert thesis.key_risk_factors == expected["key_risks"]
+        # key_risk_factors follows the refined (displayed) risks, top 3.
+        assert thesis.key_risk_factors == ["Regulatory Risk", "Credit Risk"]
 
-    def test_score_is_frozen_regardless_of_content(self, scoring, current_thesis):
-        # Different refined prose / tags must NOT move the score - it reflects the
-        # retrieved evidence, which a refinement does not change.
-        a = _score_and_build(scoring, ([], [], [], [], SIGNAL_RICH), current_thesis)
-        b = _score_and_build(
-            scoring, (["T"], ["R1", "R2"], ["S"], ["u"], RISK_HEAVY), current_thesis
-        )
+    def test_numbers_frozen_regardless_of_content(self, current_thesis):
+        # Different refined prose / tags must NOT move any number - they reflect
+        # the retrieved evidence and Gold snapshot, which a refinement leaves alone.
+        a = _score_and_build(([], [], [], [], SIGNAL_RICH), current_thesis)
+        b = _score_and_build((["T"], ["R1", "R2"], ["S"], ["u"], RISK_HEAVY), current_thesis)
         assert a.opportunity_score == b.opportunity_score == current_thesis.opportunity_score
+        assert a.confidence_level == b.confidence_level == current_thesis.confidence_level
 
 
 class TestAssembleNode:
-    """assemble_node: re-score refined content, skip unknown/missing/unparseable."""
+    """assemble_node: swap refined content with numbers frozen; skip
+    unknown/missing/unparseable tool results."""
 
     @staticmethod
     def _state(current, tool_msg=None, count=0):
@@ -118,8 +113,8 @@ class TestAssembleNode:
             "execution_log": [],
         }
 
-    def test_refine_thesis_freezes_score_and_logged(self, scoring, current_thesis):
-        assemble = _make_assemble_node(scoring)
+    def test_refine_thesis_freezes_numbers_and_logged(self, current_thesis):
+        assemble = _make_assemble_node()
         msg = ToolMessage(content=json.dumps({
             "tool": "refine_thesis", "key_themes": ["Digital Payments"],
             "risks": ["Regulatory Risk"], "investment_signals": ["Payment Infrastructure"],
@@ -129,24 +124,19 @@ class TestAssembleNode:
         out = assemble(self._state(current_thesis, msg))
         t = out["current_thesis"]
 
-        # Score + recommendation frozen (carried from current).
+        # All numbers frozen (carried from current); only the content changes.
         assert t.opportunity_score == current_thesis.opportunity_score
+        assert t.confidence_level == current_thesis.confidence_level
+        assert t.confidence_as_of == current_thesis.confidence_as_of
         assert t.recommendation == current_thesis.recommendation
-        # Confidence re-derived from the refined components (not frozen).
-        expected = scoring.assess_confidence(
-            risks=["Regulatory Risk"],
-            investment_signals=["Payment Infrastructure"],
-            sources=["u1", "u2"],
-        )
-        assert t.confidence_level == expected["confidence_level"]
         assert t.raw_output == SIGNAL_RICH
         assert out["refinement_count"] == 1
         assert out["execution_log"][-1] == {
             "tool_name": "refine_thesis", "status": "executed", "refinement_number": 1,
         }
 
-    def test_unknown_tool_skips_and_keeps_thesis(self, scoring, current_thesis):
-        assemble = _make_assemble_node(scoring)
+    def test_unknown_tool_skips_and_keeps_thesis(self, current_thesis):
+        assemble = _make_assemble_node()
         msg = ToolMessage(content=json.dumps({"tool": "score_opportunity"}), tool_call_id="2")
 
         out = assemble(self._state(current_thesis, msg))
@@ -155,14 +145,14 @@ class TestAssembleNode:
         assert out["execution_log"][-1]["status"] == "skipped"
         assert out["refinement_count"] == 1
 
-    def test_no_tool_message_skips(self, scoring, current_thesis):
-        assemble = _make_assemble_node(scoring)
+    def test_no_tool_message_skips(self, current_thesis):
+        assemble = _make_assemble_node()
         out = assemble(self._state(current_thesis, tool_msg=None))
         assert out["execution_log"][-1]["tool_name"] == "no_tool"
         assert out["execution_log"][-1]["status"] == "skipped"
 
-    def test_unparseable_tool_result_skips(self, scoring, current_thesis):
-        assemble = _make_assemble_node(scoring)
+    def test_unparseable_tool_result_skips(self, current_thesis):
+        assemble = _make_assemble_node()
         msg = ToolMessage(content="not json", tool_call_id="3")
         out = assemble(self._state(current_thesis, msg))
         assert out["execution_log"][-1]["status"] == "parse_error"
@@ -185,6 +175,7 @@ class TestRefineThesisContentOnly:
         service = ThesisGeneratorService(
             llm=llm,
             scoring_service=OpportunityScoringService(),
+            trend_repository=Mock(),  # refine_thesis does not read Gold
         )
         current = StructuredThesis(raw_output="old", opportunity_score=4.0)
 

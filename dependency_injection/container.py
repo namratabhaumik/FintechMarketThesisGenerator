@@ -727,6 +727,7 @@ class ServiceContainer:
             self._thesis_service = ThesisGeneratorService(
                 llm=llm,
                 scoring_service=scoring_service,
+                trend_repository=self.get_trend_repository(),
             )
         return self._thesis_service
 
@@ -734,10 +735,10 @@ class ServiceContainer:
         """Get or create the compiled LangGraph refinement graph with real tool calling.
 
         Builds the agentic loop that iteratively improves a thesis by calling
-        tools. Wires in get_thesis_service and the opportunity scoring service,
-        and is gated on a Gemini API key (the agent needs real tool calling, so a
-        local-only setup cannot run it). Returns the graph plus an optional
-        Langfuse tracing handler.
+        tools. Wires in get_thesis_service, and is gated on a Gemini API key (the
+        agent needs real tool calling, so a local-only setup cannot run it). The
+        refine path carries the numbers forward unchanged, so it does not need the
+        scoring service. Returns the graph plus an optional Langfuse tracing handler.
 
         Returns:
             Tuple of (compiled graph, langfuse handler or None).
@@ -756,7 +757,6 @@ class ServiceContainer:
 
             self._refinement_graph, self._langfuse_handler = build_refinement_graph(
                 thesis_service=self.get_thesis_service(),
-                scoring_service=self.get_opportunity_scoring_service(),
                 gemini_api_key=self._config.llm.api_key,
                 model_name=self._config.llm.model_name,
             )
