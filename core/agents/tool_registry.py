@@ -17,19 +17,6 @@ def get_available_tool_names() -> list[str]:
     return list(AVAILABLE_TOOLS.keys())
 
 
-def get_tools_description() -> str:
-    """Get formatted description of available tools.
-
-    Returns:
-        Human-readable description of all available tools.
-    """
-    tools_text = "\n".join(
-        f"- {name}: {description}"
-        for name, description in AVAILABLE_TOOLS.items()
-    )
-    return tools_text
-
-
 def is_valid_tool(tool_name: str) -> bool:
     """Check if a tool name is valid.
 
