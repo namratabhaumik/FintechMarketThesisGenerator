@@ -1,13 +1,16 @@
 """Unit tests for service layer."""
 
+from datetime import date
 from unittest.mock import Mock
 
 from langchain_core.documents import Document
 
+from core.models.trend_metric import TrendMetric
 from core.services.ingestion_service import ArticleIngestionService
 from core.services.thesis_generator_service import (
     ThesisGeneratorService,
     _apply_feedback_caps,
+    _gold_confidence_inputs,
     _ranked_tags_from_documents,
 )
 
@@ -17,6 +20,54 @@ def _empty_trend():
     repo = Mock()
     repo.fetch_all.return_value = []
     return repo
+
+
+class TestGoldConfidenceInputs:
+    """_gold_confidence_inputs: covered weeks for the evidence's categories over
+    the window, derived from Gold; window is the retrieval window in weeks (or the
+    full Gold span when None)."""
+
+    # Four consecutive Mondays (the recent window) plus one older Monday.
+    W0, W1, W2, W3 = (
+        date(2026, 6, 15), date(2026, 6, 8), date(2026, 6, 1), date(2026, 5, 25),
+    )
+    OLD = date(2026, 5, 4)
+
+    @staticmethod
+    def _doc():
+        return Document(page_content="x", metadata={
+            "url": "u", "themes": ["Payments"], "risks": ["Reg"], "signals": ["Infra"],
+        })
+
+    def _metrics(self):
+        return [
+            TrendMetric(week_start=self.W0, dimension="theme", category="Payments", article_count=5),
+            TrendMetric(week_start=self.W2, dimension="theme", category="Payments", article_count=3),
+            TrendMetric(week_start=self.W1, dimension="signal", category="Infra", article_count=2),
+            TrendMetric(week_start=self.W0, dimension="theme", category="Other", article_count=9),
+            TrendMetric(week_start=self.OLD, dimension="theme", category="Payments", article_count=4),
+        ]
+
+    def test_empty_gold_gives_zero_over_window(self):
+        assert _gold_confidence_inputs([self._doc()], [], 4) == (0, 4, None)
+        # window None (whole corpus) with no metrics still avoids a zero denominator.
+        assert _gold_confidence_inputs([self._doc()], [], None) == (0, 1, None)
+
+    def test_windowed_counts_matching_weeks_in_window(self):
+        # Matching weeks: W0, W2 (Payments), W1 (Infra), OLD (Payments, outside window).
+        # "Other" is not in the evidence -> ignored. Window = {W0, W1, W2, W3}.
+        covered, window_weeks, as_of = _gold_confidence_inputs(
+            [self._doc()], self._metrics(), 4
+        )
+        assert (covered, window_weeks, as_of) == (3, 4, self.W0)
+
+    def test_whole_corpus_spans_full_gold(self):
+        # window None -> denominator is the full span (W0..OLD = 7 weeks inclusive),
+        # covered = all distinct matching weeks (W0, W1, W2, OLD).
+        covered, window_weeks, as_of = _gold_confidence_inputs(
+            [self._doc()], self._metrics(), None
+        )
+        assert (covered, window_weeks, as_of) == (4, 7, self.W0)
 
 
 class TestArticleIngestionService:

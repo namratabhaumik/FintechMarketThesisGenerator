@@ -728,6 +728,7 @@ class ServiceContainer:
                 llm=llm,
                 scoring_service=scoring_service,
                 trend_repository=self.get_trend_repository(),
+                retrieval_window_days=self._config.retrieval.window_days,
             )
         return self._thesis_service
 

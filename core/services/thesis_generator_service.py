@@ -15,10 +15,6 @@ from finthesis_internal.opportunity_scoring_service import OpportunityScoringSer
 
 logger = logging.getLogger(__name__)
 
-# How many of the most recent Gold weeks count toward the confidence recency
-# signal. A theme covered in more of these weeks reads as more current.
-RECENCY_WEEKS = 4
-
 
 def _tag_counters(documents: List[Document]) -> Dict[str, "Counter[str]"]:
     """Count Silver-tag occurrences per dimension across the retrieved chunks.
@@ -83,22 +79,23 @@ def _tag_strengths_from_documents(
 def _gold_confidence_inputs(
     documents: List[Document],
     metrics: List[TrendMetric],
-    recency_weeks: int,
-) -> Tuple[int, int, int, Optional[date]]:
-    """Derive Gold-based confidence signals for the thesis's categories.
+    window_weeks: Optional[int],
+) -> Tuple[int, int, Optional[date]]:
+    """Derive the Gold-based confidence inputs for the thesis's categories.
 
     Matches the FULL set of (dimension, category) tags the retrieved evidence
     carries - across all three dimensions - against the Gold trend metrics, and
-    returns (coverage_count, recent_weeks_covered, recency_window, as_of):
-      - coverage_count: total Gold coverage (summed article_count) logged for
-        those categories - the depth of corpus support.
-      - recent_weeks_covered: how many of the last `recency_weeks` Gold weeks had
-        any such coverage - how current that support is.
-      - as_of: the latest week present in Gold (data freshness), or None if Gold
-        is empty.
+    returns (covered_weeks, window_weeks, as_of):
+      - covered_weeks: how many of the evidence window's (i.e. Gold weeks ending at
+        the latest week) had any coverage of those categories.
+      - window_weeks: the window size in weeks - the confidence denominator. When
+        the caller passes None (whole-corpus retrieval) it is the full span of
+        Gold, earliest week to latest, inclusive.
+      - as_of: the latest week present in Gold (data freshness), or None if empty.
 
-    Uses the uncapped evidence tags, so the result is independent of how many
-    tags are displayed and is stable across a refinement session.
+    The window is derived from the retrieval window, so a 1-year retrieval gives a
+    52-week window, a 6-month retrieval a 26-week window, and so on. Uses the
+    uncapped evidence tags, so the result is stable across a refinement session.
     """
     counters = _tag_counters(documents)
     evidence = (
@@ -107,16 +104,21 @@ def _gold_confidence_inputs(
         | {("signal", c) for c in counters["signals"]}
     )
     if not metrics:
-        return 0, 0, recency_weeks, None
+        return 0, (window_weeks or 1), None
 
-    as_of = max(m.week_start for m in metrics)
-    matching = [m for m in metrics if (m.dimension, m.category) in evidence]
-    coverage_count = sum(m.article_count for m in matching)
-    recent_weeks = {as_of - timedelta(weeks=i) for i in range(recency_weeks)}
-    recent_weeks_covered = len(
-        {m.week_start for m in matching if m.week_start in recent_weeks}
-    )
-    return coverage_count, recent_weeks_covered, recency_weeks, as_of
+    weeks_present = [m.week_start for m in metrics]
+    as_of = max(weeks_present)
+    matching_weeks = {m.week_start for m in metrics if (m.dimension, m.category) in evidence}
+
+    if window_weeks is None:
+        # Whole-corpus retrieval: the window spans all of Gold.
+        window_weeks = (as_of - min(weeks_present)).days // 7 + 1
+        covered_weeks = len(matching_weeks)
+    else:
+        window = {as_of - timedelta(weeks=i) for i in range(window_weeks)}
+        covered_weeks = len(matching_weeks & window)
+
+    return covered_weeks, max(1, window_weeks), as_of
 
 
 def _apply_feedback_caps(
@@ -173,6 +175,7 @@ class ThesisGeneratorService:
         llm: ILanguageModel,
         scoring_service: OpportunityScoringService,
         trend_repository: ITrendRepository,
+        retrieval_window_days: int = 365,
         max_tags_per_dimension: int = 3,
     ):
         """Initialize with dependencies.
@@ -181,13 +184,17 @@ class ThesisGeneratorService:
             llm: Injected LLM implementation (for summarization).
             scoring_service: Injected opportunity scoring service.
             trend_repository: Gold-layer trend store, read to ground confidence in
-                corpus coverage depth + recency.
+                corpus coverage over the evidence window.
+            retrieval_window_days: The retrieval recency window (RETRIEVAL_WINDOW_DAYS).
+                The confidence window is derived from it - a 1-year retrieval gives
+                a 52-week confidence window. 0 (whole corpus) -> full Gold span.
             max_tags_per_dimension: How many of the most common themes / risks /
                 signals from the retrieved docs to surface per dimension.
         """
         self._llm = llm
         self._scoring_service = scoring_service
         self._trend_repository = trend_repository
+        self._retrieval_window_days = retrieval_window_days
         self._max_tags = max_tags_per_dimension
 
     def generate_thesis(
@@ -234,26 +241,27 @@ class ThesisGeneratorService:
         sources = [doc.metadata["url"] for doc in documents if doc.metadata.get("url")]
 
         # Step 4: Score from the grounded Silver tag strengths; ground confidence
-        # in Gold trend coverage (depth + recency) for the thesis's categories.
-        # Both numbers are functions of the retrieved evidence + the Gold snapshot
-        # - not the LLM prose - so they are reproducible and stable across
-        # refinement. Strengths and the matched categories come from the FULL
-        # (uncapped) tags. The as-of date is the latest Gold week (data freshness).
-        logger.info("Step 4: Scoring (score<-Silver strengths, confidence<-Gold trends)...")
+        # in Gold trend coverage for the thesis's categories. 
+        # The confidence window is the retrieval window in weeks (None = whole corpus). 
+        # The as-of date is the latest Gold week.
+        logger.info("Step 4: Scoring (score<-Silver strengths, confidence<-Gold coverage)...")
         signal_strength, theme_strength, risk_strength = _tag_strengths_from_documents(
             documents
         )
-        coverage_count, recent_weeks_covered, recency_window, as_of = (
-            _gold_confidence_inputs(documents, self._trend_repository.fetch_all(), RECENCY_WEEKS)
+        window_weeks = (
+            None if self._retrieval_window_days <= 0
+            else max(1, round(self._retrieval_window_days / 7))
+        )
+        covered_weeks, window_weeks, as_of = _gold_confidence_inputs(
+            documents, self._trend_repository.fetch_all(), window_weeks
         )
         score_result = self._scoring_service.score_opportunity(
             risks=risks,
             signal_strength=signal_strength,
             theme_strength=theme_strength,
             risk_strength=risk_strength,
-            coverage_count=coverage_count,
-            recent_weeks_covered=recent_weeks_covered,
-            recency_window=recency_window,
+            covered_weeks=covered_weeks,
+            window_weeks=window_weeks,
         )
 
         logger.info("Successfully generated structured thesis with scoring")

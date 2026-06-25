@@ -1,9 +1,9 @@
 """Unit tests for opportunity scoring service (evidence-grounded scoring).
 
 The score comes from Silver tag strengths (signal / theme / risk occurrences in
-the retrieved chunks). Confidence comes from Gold trend coverage: depth
-(coverage_count, saturating at depth_target) and recency (share of the recency
-window's weeks with coverage).
+the retrieved chunks). Confidence comes from Gold trend coverage: the share of
+the evidence window's weeks (covered_weeks / window_weeks) in which the corpus
+covered the thesis's categories.
 """
 
 import pytest
@@ -19,21 +19,20 @@ class TestOpportunityScoringService:
         return OpportunityScoringService()
 
     def _call(self, service, *, signal=0, theme=0, risk=0, risks=None,
-              coverage=0, recent=0, window=4):
+              covered=0, window=4):
         return service.score_opportunity(
             risks=risks or [],
             signal_strength=signal,
             theme_strength=theme,
             risk_strength=risk,
-            coverage_count=coverage,
-            recent_weeks_covered=recent,
-            recency_window=window,
+            covered_weeks=covered,
+            window_weeks=window,
         )
 
     # === Output shape ===
 
     def test_returns_dict_with_required_keys(self, service):
-        result = self._call(service, signal=5, risk=4, coverage=10, recent=2)
+        result = self._call(service, signal=5, risk=4, covered=2, window=4)
         assert isinstance(result, dict)
         for key in ("score", "confidence_level", "recommendation", "key_risks"):
             assert key in result
@@ -80,43 +79,37 @@ class TestOpportunityScoringService:
         for signal, theme, risk in ((1000, 1000, 0), (0, 0, 1000), (0, 0, 0), (5, 2, 4)):
             assert 0.0 <= self._score(service, signal, theme, risk) <= 5.0
 
-    # === Confidence derives from Gold coverage depth + recency ===
+    # === Confidence = covered_weeks / window_weeks (Gold coverage over the window) ===
 
-    def test_full_depth_and_recency_is_max_confidence(self, service):
-        result = self._call(service, coverage=service._depth_target, recent=4, window=4)
+    def test_all_weeks_covered_is_max_confidence(self, service):
+        result = self._call(service, covered=4, window=4)
         assert result["confidence_level"] == 1.0
 
-    def test_no_coverage_is_zero_confidence(self, service):
-        result = self._call(service, coverage=0, recent=0, window=4)
+    def test_no_weeks_covered_is_zero_confidence(self, service):
+        result = self._call(service, covered=0, window=4)
         assert result["confidence_level"] == 0.0
 
-    def test_half_depth_half_recency(self, service):
-        # depth 0.5 * 0.6 + recency 0.5 * 0.4 = 0.5
-        result = self._call(service, coverage=service._depth_target // 2, recent=2, window=4)
+    def test_half_the_weeks_covered(self, service):
+        result = self._call(service, covered=2, window=4)
         assert result["confidence_level"] == 0.5
 
-    def test_depth_saturates_at_target(self, service):
-        result = self._call(service, coverage=service._depth_target * 10, recent=4, window=4)
+    def test_fraction_over_long_window(self, service):
+        # 39 of 52 weeks covered -> 0.75
+        result = self._call(service, covered=39, window=52)
+        assert result["confidence_level"] == 0.75
+
+    def test_zero_window_is_zero_confidence(self, service):
+        # No window (e.g. empty Gold) -> 0.0, never a divide-by-zero.
+        result = self._call(service, covered=0, window=0)
+        assert result["confidence_level"] == 0.0
+
+    def test_covered_exceeding_window_clamps_to_one(self, service):
+        result = self._call(service, covered=10, window=4)
         assert result["confidence_level"] == 1.0
 
-    def test_depth_only_no_recency(self, service):
-        # depth 1.0 * 0.6 + recency 0 = 0.6
-        result = self._call(service, coverage=service._depth_target, recent=0, window=4)
-        assert result["confidence_level"] == 0.6
-
-    def test_recency_only_no_depth(self, service):
-        # depth 0 + recency 1.0 * 0.4 = 0.4
-        result = self._call(service, coverage=0, recent=4, window=4)
-        assert result["confidence_level"] == 0.4
-
-    def test_zero_window_is_no_recency(self, service):
-        # window 0 -> recency factor 0, even with depth
-        result = self._call(service, coverage=service._depth_target, recent=0, window=0)
-        assert result["confidence_level"] == 0.6
-
     def test_confidence_within_unit_interval(self, service):
-        for coverage, recent, window in ((0, 0, 4), (10, 1, 4), (9999, 4, 4)):
-            c = self._call(service, coverage=coverage, recent=recent, window=window)["confidence_level"]
+        for covered, window in ((0, 4), (1, 4), (52, 52), (10, 4), (0, 0)):
+            c = self._call(service, covered=covered, window=window)["confidence_level"]
             assert 0.0 <= c <= 1.0
 
     # === Key Risks ===
