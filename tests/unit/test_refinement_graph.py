@@ -11,6 +11,7 @@ from langchain_core.messages import ToolMessage
 
 from core.agents.refinement_graph import (
     _create_langfuse_handler,
+    _diff_thesis,
     _make_assemble_node,
     _resolve_components,
     _score_and_build,
@@ -100,6 +101,32 @@ class TestScoreAndBuild:
         assert a.confidence_level == b.confidence_level == current_thesis.confidence_level
 
 
+class TestDiffThesis:
+    """_diff_thesis surfaces the narrative + tag changes and always notes that
+    the numbers stayed frozen."""
+
+    def test_reports_narrative_and_tag_changes(self):
+        current = StructuredThesis(
+            key_themes=["Payments"], risks=["Reg", "Liquidity"],
+            investment_signals=["Infra"], raw_output="old",
+        )
+        new = StructuredThesis(
+            key_themes=["Payments", "Crypto"], risks=["Reg"],
+            investment_signals=["Infra"], raw_output="new prose",
+        )
+        changes = _diff_thesis(current, new)
+        assert "Narrative rewritten" in changes
+        assert "Themes: +Crypto" in changes
+        assert "Risks: -Liquidity" in changes
+        assert not any(c.startswith("Signals:") for c in changes)  # unchanged dim omitted
+        assert "Score, confidence, recommendation unchanged" in changes
+
+    def test_identical_content_reports_only_frozen_numbers(self):
+        current = StructuredThesis(key_themes=["A"], raw_output="same")
+        new = StructuredThesis(key_themes=["A"], raw_output="same")
+        assert _diff_thesis(current, new) == ["Score, confidence, recommendation unchanged"]
+
+
 class TestAssembleNode:
     """assemble_node: swap refined content with numbers frozen; skip
     unknown/missing/unparseable tool results."""
@@ -131,9 +158,11 @@ class TestAssembleNode:
         assert t.recommendation == current_thesis.recommendation
         assert t.raw_output == SIGNAL_RICH
         assert out["refinement_count"] == 1
-        assert out["execution_log"][-1] == {
-            "tool_name": "refine_thesis", "status": "executed", "refinement_number": 1,
-        }
+        event = out["execution_log"][-1]
+        assert event["tool_name"] == "refine_thesis"
+        assert event["status"] == "executed"
+        assert event["refinement_number"] == 1
+        assert isinstance(event["changes"], list) and event["changes"]
 
     def test_unknown_tool_skips_and_keeps_thesis(self, current_thesis):
         assemble = _make_assemble_node()

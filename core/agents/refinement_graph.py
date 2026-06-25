@@ -149,6 +149,34 @@ def _score_and_build(components, current: StructuredThesis) -> StructuredThesis:
     )
 
 
+def _diff_thesis(current: StructuredThesis, new: StructuredThesis) -> List[str]:
+    """Short, plain lines describing what a refinement changed.
+
+    The numbers are frozen by design, so this surfaces the narrative rewrite and
+    the per-dimension added/removed tags, then states plainly that the numbers
+    held - so a reader who asked to "raise the score" can see why it did not move.
+    """
+    changes: List[str] = []
+    if (new.raw_output or "") != (current.raw_output or ""):
+        changes.append("Narrative rewritten")
+    for label, before, after in (
+        ("Themes", current.key_themes, new.key_themes),
+        ("Risks", current.risks, new.risks),
+        ("Signals", current.investment_signals, new.investment_signals),
+    ):
+        added = [t for t in after if t not in before]
+        removed = [t for t in before if t not in after]
+        parts = []
+        if added:
+            parts.append("+" + ", ".join(added))
+        if removed:
+            parts.append("-" + ", ".join(removed))
+        if parts:
+            changes.append(f"{label}: " + "  ".join(parts))
+    changes.append("Score, confidence, recommendation unchanged")
+    return changes
+
+
 def _make_assemble_node():
     """Return an assemble node that rebuilds StructuredThesis from tool output."""
 
@@ -200,6 +228,7 @@ def _make_assemble_node():
             "tool_name": tool_name,
             "status": "executed",
             "refinement_number": new_refinement_count,
+            "changes": _diff_thesis(current, new_thesis),
         })
 
         logger.info(

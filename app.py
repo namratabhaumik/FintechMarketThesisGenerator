@@ -189,6 +189,8 @@ def show_execution_trace(execution_log: list):
                 st.caption(f"Refinement #{event['refinement_number']}")
             if event.get("reason"):
                 st.caption(f"Reason: {event['reason']}")
+            for change in event.get("changes", []):
+                st.caption(change)
 
 
 def show_hallucination_analysis(analysis: dict):
