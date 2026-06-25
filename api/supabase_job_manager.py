@@ -110,6 +110,7 @@ class _RowProxy:
         self.error: Optional[str] = data.get("error")
         self.refinement_count: int = data.get("refinement_count", 0)
         self.refinement_status: str = data.get("refinement_status", "refining")
+        self.created_at: Optional[str] = data.get("created_at")
         self.feedback_history: list = data.get("feedback_history", [])
         self.execution_log: list = data.get("execution_log", [])
         self.thesis = rehydrate_thesis(data.get("thesis"))

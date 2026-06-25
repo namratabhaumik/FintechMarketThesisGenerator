@@ -14,6 +14,8 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import streamlit as st
 from dotenv import load_dotenv
 
+from api.schemas import JobStatus
+from api.supabase_job_manager import SupabaseJobManager
 from config.settings import AppConfig
 from core.agents.hallucination_detector import HallucinationDetector
 from core.models.thesis import StructuredThesis
@@ -51,6 +53,8 @@ FEEDBACK_OPTIONS = [
 # Cache control for testing
 if st.button("🔄 Clear Cache & Reset"):
     st.cache_resource.clear()
+    st.session_state.clear()
+    st.query_params.clear()
     st.success("Cache cleared! Refresh the page.")
     st.stop()
 
@@ -73,6 +77,126 @@ def get_container() -> ServiceContainer:
 
 
 container = get_container()
+
+
+# === Refinement Checkpointing in Supabase ===
+# st.session_state remains the source of truth for the active
+# session. Persisting here just means a server restart between refinement
+# rounds doesn't silently lose completed rounds. No-op if Supabase isn't
+# configured (config.supabase.enabled is False).
+
+
+@st.cache_resource
+def get_job_manager():
+    """Initialize and cache the Supabase job manager, or None if unconfigured."""
+    config = AppConfig.from_env()
+    if not config.supabase.enabled:
+        logger.info("Supabase not configured - refinement checkpointing disabled")
+        return None
+    return SupabaseJobManager(
+        url=config.supabase.url,
+        service_role_key=config.supabase.service_role_key,
+    )
+
+
+job_manager = get_job_manager()
+
+
+def _checkpoint(job_id, **fields) -> None:
+    """Persist refinement fields to the job row. Logs and swallows failures."""
+    if not job_manager or not job_id:
+        return
+    try:
+        job_manager.update_job(job_id, **fields)
+    except Exception:
+        logger.exception(f"Failed to checkpoint job {job_id}")
+
+
+def _load_job_into_session(job, job_id: str) -> None:
+    """Populate session_state from a checkpointed job row."""
+    st.session_state["job_id"] = job_id
+    st.session_state["generated_thesis"] = job.thesis
+    st.session_state["retrieved_docs"] = job.retrieved_docs
+    st.session_state["refinement_state"] = {
+        "topic": job.query,
+        "refinement_count": job.refinement_count,
+        "status": job.refinement_status,
+        "feedback_history": job.feedback_history,
+        "refinement_supported": True,
+    }
+    st.session_state["execution_log"] = job.execution_log
+    st.session_state["refinement_history"] = []
+    st.session_state["thesis_count"] = 1
+    st.query_params["job_id"] = job_id
+    logger.info(f"Loaded job {job_id} from Supabase checkpoint")
+
+
+def _restore_from_job_id() -> None:
+    """Rehydrate session_state from a checkpointed job, if a job_id is in the URL.
+
+    Browser session_state is lost on a new tab, a refresh, or a server
+    restart - the job_id query param is the only thing that survives all
+    three, so it's the resume key. Runs once: a no-op once generated_thesis
+    is already in session_state for this run.
+    """
+    if "generated_thesis" in st.session_state:
+        return
+    job_id = st.query_params.get("job_id")
+    if not job_id or not job_manager:
+        return
+    try:
+        job = job_manager.get_job(job_id)
+    except Exception:
+        logger.exception(f"Failed to restore job {job_id}")
+        return
+    if not job or not job.thesis:
+        return
+    _load_job_into_session(job, job_id)
+
+
+def show_resume_picker() -> None:
+    """Let the user manually resume a previous session without the exact URL.
+
+    Only the job_id query param survives a fresh tab without it (e.g. a
+    bookmark to the bare URL), so this is the fallback resume path: pick a
+    past job from Supabase directly instead of needing the link. Escalated
+    jobs are excluded as max refinements is already reached, so there's
+    nothing left to resume into.
+    """
+    if "generated_thesis" in st.session_state or not job_manager:
+        return
+    try:
+        jobs = [
+            j for j in job_manager.list_jobs()
+            if j.thesis and j.refinement_status != "escalated"
+        ]
+    except Exception:
+        logger.exception("Failed to list jobs for resume picker")
+        return
+    if not jobs:
+        return
+
+    with st.expander(f"📂 Resume a previous session ({len(jobs)} available)"):
+        labels = {
+            j.id: (
+                f"{j.query} — round {j.refinement_count}/3 ({j.refinement_status}) "
+                f"— {(j.created_at or '')[:19]}"
+            )
+            for j in jobs
+        }
+        selected_id = st.selectbox(
+            "Pick a session to resume:",
+            options=list(labels.keys()),
+            format_func=lambda jid: labels[jid],
+            key="resume_job_select",
+        )
+        if st.button("Resume", key="resume_job_btn"):
+            job = next(j for j in jobs if j.id == selected_id)
+            _load_job_into_session(job, selected_id)
+            st.rerun()
+
+
+_restore_from_job_id()
 
 
 # === UI Helper Functions ===
@@ -319,6 +443,16 @@ def _run_refinement_step(selected_feedback: list):
         "feedback_history": result_state["feedback_history"],
     }
 
+    # Checkpoint this round so a restart doesn't lose it
+    _checkpoint(
+        st.session_state.get("job_id"),
+        thesis=refined_thesis,
+        refinement_count=result_state["refinement_count"],
+        refinement_status=result_state["status"],
+        feedback_history=result_state["feedback_history"],
+        execution_log=result_state.get("execution_log", []),
+    )
+
     # Rerun to display updated thesis
     st.rerun()
 
@@ -369,6 +503,8 @@ def display_structured_thesis(thesis: StructuredThesis):
 
 # === Main Application ===
 
+show_resume_picker()
+
 query = st.text_input(
     "Enter a market topic or question:",
     placeholder="e.g., Future of Digital Lending in Asia"
@@ -414,6 +550,27 @@ if st.button("Generate Thesis"):
 
                 # Increment counter so the toggle gets a new unique key (resets automatically)
                 st.session_state["thesis_count"] = st.session_state.get("thesis_count", 0) + 1
+
+                # Create and checkpoint the job (no-op if Supabase isn't configured)
+                job_id = None
+                if job_manager:
+                    try:
+                        job_id = job_manager.create_job(query).id
+                    except Exception:
+                        logger.exception("Failed to create Supabase job")
+                st.session_state["job_id"] = job_id
+                if job_id:
+                    st.query_params["job_id"] = job_id
+                _checkpoint(
+                    job_id,
+                    status=JobStatus.COMPLETED,
+                    thesis=thesis,
+                    retrieved_docs=docs,
+                    refinement_count=0,
+                    refinement_status="refining",
+                    feedback_history=[],
+                    execution_log=[],
+                )
 
         except Exception as exc:
             logger.exception("Error while generating thesis")

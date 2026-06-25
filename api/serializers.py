@@ -11,8 +11,9 @@ The only fields that need special handling are ones JSON cannot represent
 directly (datetimes, the JobStatus enum); the rest pass straight through.
 """
 
+import logging
 from dataclasses import asdict
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 from langchain_core.documents import Document
@@ -21,16 +22,24 @@ from api.schemas import JobStatus
 from core.models.article import Article
 from core.models.thesis import StructuredThesis
 
+logger = logging.getLogger(__name__)
+
 
 def rehydrate_thesis(raw: Any) -> Optional[StructuredThesis]:
     """Convert a stored JSON dict to a StructuredThesis, or None.
 
     The stored shape is a flat dict whose keys match the dataclass fields, so it
     expands directly into the constructor. A missing/non-dict value (e.g. a job
-    with no thesis yet) becomes None rather than an error.
+    with no thesis yet) becomes None rather than an error. `confidence_as_of` is
+    stored as an ISO 8601 date string and parsed back into a `date`, mirroring
+    serialise_thesis.
     """
     if raw and isinstance(raw, dict):
-        return StructuredThesis(**raw)
+        data = dict(raw)
+        as_of = data.get("confidence_as_of")
+        if isinstance(as_of, str):
+            data["confidence_as_of"] = date.fromisoformat(as_of)
+        return StructuredThesis(**data)
     return None
 
 
@@ -50,7 +59,10 @@ def rehydrate_articles(raw: Any) -> List[Article]:
         published = data.get("published_at")
         if isinstance(published, str):
             data["published_at"] = datetime.fromisoformat(published)
-        articles.append(Article(**data))
+        try:
+            articles.append(Article(**data))
+        except TypeError:
+            logger.warning(f"Skipping malformed stored article: {data.get('url', '?')}")
     return articles
 
 
@@ -77,10 +89,14 @@ def rehydrate_docs(raw: Any) -> list:
 def serialise_thesis(thesis: StructuredThesis) -> dict:
     """Convert a StructuredThesis to a JSON-safe dict.
 
-    The dataclass holds only plain JSON-safe values, so a flat asdict is enough;
-    rehydrate_thesis is the exact inverse.
+    Every field is JSON-safe via a flat asdict except `confidence_as_of`,
+    which is a `date` and not natively JSON-serialisable, so it's emitted as
+    an ISO 8601 string; rehydrate_thesis is the exact inverse.
     """
-    return asdict(thesis)
+    data = asdict(thesis)
+    if isinstance(data.get("confidence_as_of"), date):
+        data["confidence_as_of"] = data["confidence_as_of"].isoformat()
+    return data
 
 
 def serialise_articles(articles: List[Article]) -> list:
