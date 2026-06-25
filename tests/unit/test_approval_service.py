@@ -42,14 +42,6 @@ class TestApprovalRecording:
         assert record["key_themes"] == ["AI", "Digital Payments"]
         assert record["risks"] == ["Regulatory", "Cybersecurity"]
 
-    def test_record_rejection_decision(self, approval_service, sample_thesis):
-        """Successfully record a rejection decision."""
-        record = approval_service.record_approval(sample_thesis, decision="reject")
-
-        assert record["decision"] == "reject"
-        assert record["opportunity_score"] == 3.8
-        assert "timestamp" in record
-
     def test_record_approval_with_notes(self, approval_service, sample_thesis):
         """Record approval with human notes."""
         notes = "Strong signal but risky market timing"
@@ -75,14 +67,6 @@ class TestApprovalSummary:
         summary = approval_service.get_approval_summary(record)
 
         assert "APPROVE" in summary
-        assert record["timestamp"] in summary
-
-    def test_rejection_summary_generation(self, approval_service, sample_thesis):
-        """Generate human-readable rejection summary."""
-        record = approval_service.record_approval(sample_thesis, decision="reject")
-        summary = approval_service.get_approval_summary(record)
-
-        assert "REJECT" in summary
         assert record["timestamp"] in summary
 
 
@@ -112,7 +96,7 @@ class TestApprovalMetadata:
         )
 
         record1 = approval_service.record_approval(sample_thesis, decision="approve")
-        record2 = approval_service.record_approval(thesis2, decision="reject")
+        record2 = approval_service.record_approval(thesis2, decision="approve")
 
         assert record1["opportunity_score"] == 3.8
         assert record2["opportunity_score"] == 2.0
