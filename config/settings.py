@@ -68,6 +68,11 @@ class LLMConfig:
     model_name: str
     api_key: str
     temperature: float = 0.0
+    # upper limit with headroom above the observed max (llm timeout + token limit)
+    timeout: int = 120
+    max_output_tokens: int = 4096
+    timeout: int = 60
+    max_output_tokens: int = 2048
 
 
 @dataclass
@@ -254,6 +259,8 @@ class AppConfig:
                 provider=llm_provider,
                 model_name=model_name,
                 api_key=api_key,
+                timeout=int(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
+                max_output_tokens=int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "4096")),
             ),
             embedding=EmbeddingConfig(
                 provider=embed_provider,

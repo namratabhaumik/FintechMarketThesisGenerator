@@ -28,7 +28,9 @@ class GeminiLanguageModel(ILanguageModel):
         self._llm = ChatGoogleGenerativeAI(
             model=config.model_name,
             temperature=config.temperature,
-            google_api_key=config.api_key
+            google_api_key=config.api_key,
+            timeout=config.timeout,
+            max_output_tokens=config.max_output_tokens,
         )
 
     def summarize(self, documents: List[Document]) -> str:

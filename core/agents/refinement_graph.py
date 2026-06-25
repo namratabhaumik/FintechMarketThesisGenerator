@@ -276,6 +276,8 @@ def build_refinement_graph(
     thesis_service: ThesisGeneratorService,
     gemini_api_key: str,
     model_name: str = "gemini-2.5-flash",
+    timeout: int = 120,
+    max_output_tokens: int = 4096,
 ) -> object:
     """Build and compile the LangGraph refinement graph with real tool calling.
 
@@ -288,6 +290,8 @@ def build_refinement_graph(
         thesis_service: For LLM-driven thesis rewriting.
         gemini_api_key: API key for the planner LLM.
         model_name: Gemini model to use for tool-call decisions.
+        timeout: Per-call timeout (seconds) for the planner LLM.
+        max_output_tokens: Per-call output token ceiling for the planner LLM.
 
     Returns:
         Tuple of (compiled graph, langfuse callback handler or None).
@@ -298,6 +302,8 @@ def build_refinement_graph(
         model=model_name,
         temperature=0,
         google_api_key=gemini_api_key,
+        timeout=timeout,
+        max_output_tokens=max_output_tokens,
     ).bind_tools(tools)
 
     graph = StateGraph(ThesisRefinementState)

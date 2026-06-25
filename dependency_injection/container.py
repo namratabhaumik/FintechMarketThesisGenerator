@@ -760,5 +760,7 @@ class ServiceContainer:
                 thesis_service=self.get_thesis_service(),
                 gemini_api_key=self._config.llm.api_key,
                 model_name=self._config.llm.model_name,
+                timeout=self._config.llm.timeout,
+                max_output_tokens=self._config.llm.max_output_tokens,
             )
         return self._refinement_graph, self._langfuse_handler
