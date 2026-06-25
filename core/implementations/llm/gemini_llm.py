@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage
 
 from config.settings import LLMConfig
 from core.interfaces.llm import ILanguageModel
+from core.utils.text_utils import wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ class GeminiLanguageModel(ILanguageModel):
 
             prompt = f"""Provide a concise summary of the following documents:
 
-{doc_content}
+{wrap_untrusted(doc_content, label="documents")}
 
 Summary:"""
 
@@ -104,7 +105,7 @@ READER FEEDBACK (address each point):
 {feedback_str}
 
 SOURCE DOCUMENTS (for context):
-{doc_content}
+{wrap_untrusted(doc_content, label="documents")}
 
 Revised thesis:"""
 

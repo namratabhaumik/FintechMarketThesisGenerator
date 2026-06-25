@@ -10,6 +10,7 @@ from abc import abstractmethod
 from typing import List
 
 from core.interfaces.relevance_classifier import IRelevanceClassifier
+from core.utils.text_utils import wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +39,12 @@ class BaseChatClassifier(IRelevanceClassifier):
         """
         # Two-part chat prompt: the system rules, then the article's title and
         # description as the user turn for the model to judge.
+        article_block = wrap_untrusted(
+            f"Title: {title}\nDescription: {description}", label="article"
+        )
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Title: {title}\nDescription: {description}"},
+            {"role": "user", "content": article_block},
         ]
         # Ask the backend, then normalize: None --> "", trim whitespace,
         # uppercase, so the YES/NO check is robust to spacing and case.
