@@ -33,6 +33,7 @@ class IVectorStore(ABC):
         fetch_k: int,
         lambda_mult: float,
         window_days: Optional[int] = None,
+        query_embedding: Optional[List[float]] = None,
     ) -> List[Document]:
         """Return up to `k` MMR-selected chunks for `query`.
 
@@ -41,5 +42,10 @@ class IVectorStore(ABC):
         `window_days` is set, only articles published within that trailing
         window (anchored at query time) are considered; None or 0 searches the
         whole corpus. The retrieval service passes these from RetrievalConfig.
+
+        `query_embedding`, when provided, is the already-computed vector for
+        `query`: implementations reuse it instead of embedding again, so a
+        caller that also needs the query vector elsewhere (e.g. episodic recall)
+        embeds once. When None, the implementation embeds `query` itself.
         """
         pass

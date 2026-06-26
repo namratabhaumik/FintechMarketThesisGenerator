@@ -601,9 +601,22 @@ if st.button("Generate Thesis"):
             retrieval_service = container.get_retrieval_service()
             thesis_service = container.get_thesis_service()
 
+            # Embed the query once and reuse it: MMR retrieval searches the
+            # corpus with it, and episodic recall stores it to rank past runs.
+            # On failure, retrieval re-embeds internally and recall is skipped.
+            query_embedding = None
+            try:
+                query_embedding = (
+                    container.get_embedding_model().get_embeddings().embed_query(query)
+                )
+            except Exception:
+                logger.exception("Failed to embed query; retrieval will re-embed")
+
             # Step 1: Retrieve from the corpus
             with st.spinner("Retrieving relevant context from the corpus..."):
-                docs = retrieval_service.retrieve(query, k=5)
+                docs = retrieval_service.retrieve(
+                    query, k=5, query_embedding=query_embedding
+                )
 
                 if not docs:
                     st.warning(
@@ -616,15 +629,9 @@ if st.button("Generate Thesis"):
                 thesis = thesis_service.generate_thesis(query, docs)
                 st.session_state["generated_thesis"] = thesis
 
-                # Embed the query for episodic recall: it is stored on the job 
-                # and used to rank related past runs.
-                query_embedding = None
-                try:
-                    query_embedding = (
-                        container.get_embedding_model().get_embeddings().embed_query(query)
-                    )
-                except Exception:
-                    logger.exception("Failed to embed query for recall")
+                # query_embedding was computed once before retrieval and is
+                # reused here for episodic recall (stored on the job to rank
+                # related past runs).
 
                 # Store retrieved documents for refinement
                 st.session_state["retrieved_docs"] = docs

@@ -44,13 +44,22 @@ class DocumentRetrievalService:
         self._vectorstore_instance = self._vectorstore_impl.build(documents)
         logger.info("Vectorstore built and cached")
 
-    def retrieve(self, query: str, k: Optional[int] = None) -> List[Document]:
+    def retrieve(
+        self,
+        query: str,
+        k: Optional[int] = None,
+        query_embedding: Optional[List[float]] = None,
+    ) -> List[Document]:
         """Retrieve relevant documents for query via MMR.
 
         Args:
             query: Search query.
             k: Number of documents to return. Defaults to the configured k; pass
                 an explicit value only to override per call.
+            query_embedding: Precomputed vector for `query`. Pass it when the
+                caller already embedded the query (e.g. to reuse it for episodic
+                recall) so retrieval does not embed a second time; None embeds
+                the query inside the vector store.
 
         Returns:
             List of retrieved Document objects.
@@ -80,6 +89,7 @@ class DocumentRetrievalService:
                 fetch_k=fetch_k,
                 lambda_mult=self._config.lambda_mult,
                 window_days=self._config.window_days,
+                query_embedding=query_embedding,
             )
         except Exception as e:
             logger.error(f"Retrieval failed for query '{query}': {e}")

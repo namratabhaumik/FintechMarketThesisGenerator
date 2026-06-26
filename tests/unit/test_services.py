@@ -125,13 +125,23 @@ class _RecordingVectorStore:
     def open(self):
         return object()
 
-    def retrieve(self, vectorstore, query, k, fetch_k, lambda_mult, window_days=None):
+    def retrieve(
+        self,
+        vectorstore,
+        query,
+        k,
+        fetch_k,
+        lambda_mult,
+        window_days=None,
+        query_embedding=None,
+    ):
         self.retrieve_args = {
             "query": query,
             "k": k,
             "fetch_k": fetch_k,
             "lambda_mult": lambda_mult,
             "window_days": window_days,
+            "query_embedding": query_embedding,
         }
         return [Document(page_content="r", metadata={"url": "u"})]
 

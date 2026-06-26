@@ -108,13 +108,18 @@ class SupabaseVectorStoreImpl(IVectorStore):
         fetch_k: int,
         lambda_mult: float,
         window_days: Optional[int] = None,
+        query_embedding: Optional[List[float]] = None,
     ) -> List[Document]:
         """Date-windowed MMR retrieval.
 
         Pull `fetch_k` candidates from pgvector (within the last `window_days`
         when set), then MMR-select `k`.
+
+        Reuse `query_embedding` when the caller already computed it (so the
+        query is embedded once per run); otherwise embed `query` here.
         """
-        query_embedding = self._embeddings.embed_query(query)
+        if query_embedding is None:
+            query_embedding = self._embeddings.embed_query(query)
 
         params = {"query_embedding": query_embedding, "match_count": fetch_k}
         # Default is a 1-year window (the trend window); window_days=0 omits it
