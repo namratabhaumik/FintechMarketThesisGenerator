@@ -19,6 +19,7 @@ from api.supabase_job_manager import SupabaseJobManager
 from config.settings import AppConfig
 from core.agents.hallucination_detector import HallucinationDetector
 from core.models.thesis import StructuredThesis
+from core.services.episodic_recall import recall_similar
 from core.utils.logging import setup_logging
 from dependency_injection.container import ServiceContainer
 
@@ -135,6 +136,42 @@ def _persist_approval_once() -> None:
         logger.exception("Failed to record approval")
 
 
+# 0.55 = same-topic + related sub-topics; drops same-domain-but-different-topic (~0.3-0.45)
+RECALL_MIN_SIMILARITY = 0.55
+
+
+def _compute_related(query_embedding, current_job_id, top_n: int = 3) -> list:
+    """Rank past runs by query similarity to the current one (episodic recall).
+
+    Returns lightweight display dicts, excluding the current run and any run
+    without a stored embedding.
+    """
+    if not query_embedding or not job_manager:
+        return []
+    try:
+        jobs = [
+            j for j in job_manager.list_jobs()
+            if j.id != current_job_id and j.thesis
+        ]
+        return [
+            {
+                "job_id": job.id,
+                "query": job.query,
+                "created_at": job.created_at,
+                "score": job.thesis.opportunity_score,
+                "recommendation": job.thesis.recommendation,
+                "approved": bool(job.approved_at),
+                "similarity": round(score, 2),
+            }
+            for job, score in recall_similar(
+                query_embedding, jobs, top_n=top_n, min_score=RECALL_MIN_SIMILARITY
+            )
+        ]
+    except Exception:
+        logger.exception("Failed to compute related past theses")
+        return []
+
+
 def _load_job_into_session(job, job_id: str) -> None:
     """Populate session_state from a checkpointed job row."""
     st.session_state["job_id"] = job_id
@@ -151,6 +188,7 @@ def _load_job_into_session(job, job_id: str) -> None:
     st.session_state["refinement_history"] = []
     st.session_state["thesis_count"] = 1
     st.session_state["approved_at"] = job.approved_at
+    st.session_state["related_theses"] = _compute_related(job.query_embedding, job_id)
     st.query_params["job_id"] = job_id
     logger.info(f"Loaded job {job_id} from Supabase checkpoint")
 
@@ -183,16 +221,15 @@ def show_resume_picker() -> None:
 
     Only the job_id query param survives a fresh tab without it (e.g. a
     bookmark to the bare URL), so this is the fallback resume path: pick a
-    past job from Supabase directly instead of needing the link. Excluded:
-    approved runs (nothing left to do after approval) and "escalated" runs
-    (max refinements reached).
+    past job from Supabase directly instead of needing the link. Only runs
+    actively mid-refinement ("refining") appear.
     """
     if "generated_thesis" in st.session_state or not job_manager:
         return
     try:
         jobs = [
             j for j in job_manager.list_jobs()
-            if j.thesis and not j.approved_at and j.refinement_status != "escalated"
+            if j.thesis and j.refinement_status == "refining"
         ]
     except Exception:
         logger.exception("Failed to list jobs for resume picker")
@@ -317,6 +354,21 @@ def show_history(history: list):
                 f"Score: {prev_thesis.opportunity_score}/5 | "
                 f"Recommendation: {prev_thesis.recommendation}"
             )
+
+
+def show_related_theses(related: list) -> None:
+    """Show related past theses surfaced by episodic recall (query similarity)."""
+    if not related:
+        return
+    with st.expander(f"🧠 Related past theses ({len(related)})"):
+        for r in related:
+            date = (r["created_at"] or "")[:10]
+            approved = " · approved" if r["approved"] else ""
+            meta = " · ".join(
+                p for p in (f"score {r['score']}/5", r["recommendation"], date) if p
+            )
+            st.markdown(f"**{r['query']}**  \n{meta}{approved} · [open](?job_id={r['job_id']})")
+            st.caption(f"similarity {r['similarity']}")
 
 
 def show_execution_trace(execution_log: list):
@@ -564,6 +616,16 @@ if st.button("Generate Thesis"):
                 thesis = thesis_service.generate_thesis(query, docs)
                 st.session_state["generated_thesis"] = thesis
 
+                # Embed the query for episodic recall: it is stored on the job 
+                # and used to rank related past runs.
+                query_embedding = None
+                try:
+                    query_embedding = (
+                        container.get_embedding_model().get_embeddings().embed_query(query)
+                    )
+                except Exception:
+                    logger.exception("Failed to embed query for recall")
+
                 # Store retrieved documents for refinement
                 st.session_state["retrieved_docs"] = docs
 
@@ -598,9 +660,15 @@ if st.button("Generate Thesis"):
                     thesis=thesis,
                     retrieved_docs=docs,
                     refinement_count=0,
-                    refinement_status="refining",
+                    refinement_status="N/A",  # not in a refinement session yet
                     feedback_history=[],
                     execution_log=[],
+                    query_embedding=query_embedding,
+                )
+
+                # Episodic recall: surface past runs on similar queries.
+                st.session_state["related_theses"] = _compute_related(
+                    query_embedding, job_id
                 )
 
         except Exception as exc:
@@ -657,6 +725,9 @@ if "generated_thesis" in st.session_state:
     if thesis.key_themes:
         st.success("Structured thesis generated successfully")
         display_structured_thesis(thesis)
+
+        # Related past theses (episodic recall over similar past queries)
+        show_related_theses(st.session_state.get("related_theses", []))
 
         # Display refinement panel if thesis is available
         display_refinement_panel()
