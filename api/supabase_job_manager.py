@@ -113,6 +113,7 @@ class _RowProxy:
         self.created_at: Optional[str] = data.get("created_at")
         self.feedback_history: list = data.get("feedback_history", [])
         self.execution_log: list = data.get("execution_log", [])
+        self.approved_at: Optional[str] = data.get("approved_at")
         self.thesis = rehydrate_thesis(data.get("thesis"))
         self.articles = rehydrate_articles(data.get("articles", []))
         self.retrieved_docs = rehydrate_docs(data.get("retrieved_docs", []))

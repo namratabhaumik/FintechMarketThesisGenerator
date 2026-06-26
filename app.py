@@ -6,7 +6,7 @@ Uses dependency injection to manage all dependencies.
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Must be set before ONNX Runtime (FastEmbed) is imported to avoid OpenMP conflict on macOS
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
@@ -112,6 +112,29 @@ def _checkpoint(job_id, **fields) -> None:
         logger.exception(f"Failed to checkpoint job {job_id}")
 
 
+def _persist_approval_once() -> None:
+    """Record the approval timestamp on the job the first time the toggle is on.
+
+    Approval is toggle-based (approve only), so we capture just when it happened.
+    Guarded by session state so Streamlit reruns don't keep rewriting it.
+    """
+    if st.session_state.get("approved_at"):
+        return
+    try:
+        ts = datetime.now(timezone.utc).isoformat()
+        job_id = st.session_state.get("job_id")
+        # Approval is terminal: stamp the time and mark the run "refined" so it
+        # drops out of the Resume picker (nothing left to refine).
+        _checkpoint(job_id, approved_at=ts, refinement_status="refined")
+        st.session_state["approved_at"] = ts
+        ref_state = st.session_state.get("refinement_state", {})
+        ref_state["status"] = "refined"
+        st.session_state["refinement_state"] = ref_state
+        logger.info(f"Thesis approved at {ts} (job {job_id})")
+    except Exception:
+        logger.exception("Failed to record approval")
+
+
 def _load_job_into_session(job, job_id: str) -> None:
     """Populate session_state from a checkpointed job row."""
     st.session_state["job_id"] = job_id
@@ -127,6 +150,7 @@ def _load_job_into_session(job, job_id: str) -> None:
     st.session_state["execution_log"] = job.execution_log
     st.session_state["refinement_history"] = []
     st.session_state["thesis_count"] = 1
+    st.session_state["approved_at"] = job.approved_at
     st.query_params["job_id"] = job_id
     logger.info(f"Loaded job {job_id} from Supabase checkpoint")
 
@@ -159,16 +183,16 @@ def show_resume_picker() -> None:
 
     Only the job_id query param survives a fresh tab without it (e.g. a
     bookmark to the bare URL), so this is the fallback resume path: pick a
-    past job from Supabase directly instead of needing the link. Escalated
-    jobs are excluded as max refinements is already reached, so there's
-    nothing left to resume into.
+    past job from Supabase directly instead of needing the link. Excluded:
+    approved runs (nothing left to do after approval) and "escalated" runs
+    (max refinements reached).
     """
     if "generated_thesis" in st.session_state or not job_manager:
         return
     try:
         jobs = [
             j for j in job_manager.list_jobs()
-            if j.thesis and j.refinement_status != "escalated"
+            if j.thesis and not j.approved_at and j.refinement_status != "escalated"
         ]
     except Exception:
         logger.exception("Failed to list jobs for resume picker")
@@ -202,11 +226,13 @@ _restore_from_job_id()
 # === UI Helper Functions ===
 
 
-def show_approval_toggle(thesis_count: int) -> bool:
+def show_approval_toggle(thesis_count: int, initial: bool = False) -> bool:
     """Display approval toggle and return its state.
 
     Args:
         thesis_count: Unique counter for widget key.
+        initial: Default on-state - True when the loaded run is already approved,
+            so reopening an approved run reflects it instead of showing it as new.
 
     Returns:
         Boolean indicating if thesis is approved.
@@ -215,7 +241,7 @@ def show_approval_toggle(thesis_count: int) -> bool:
     with col_toggle:
         return st.toggle(
             "✅ Approved",
-            value=False,
+            value=initial,
             key=f"approval_toggle_{thesis_count}"
         )
 
@@ -348,11 +374,15 @@ def display_refinement_panel():
 
     st.divider()
 
-    # Show approval toggle
-    is_approved = show_approval_toggle(thesis_count)
+    # Show approval toggle (defaults on when this run was already approved)
+    is_approved = show_approval_toggle(
+        thesis_count, initial=bool(st.session_state.get("approved_at"))
+    )
 
-    # If approved, show confirmation and history (if supported), then exit
+    # If approved, persist the approval timestamp once, then show confirmation
+    # and history (if supported), and exit.
     if is_approved:
+        _persist_approval_once()
         show_approved_state(refinement_supported)
         return
 
@@ -547,6 +577,7 @@ if st.button("Generate Thesis"):
                 }
                 st.session_state["refinement_history"] = []
                 st.session_state["execution_log"] = []
+                st.session_state["approved_at"] = None  # fresh thesis starts unapproved
 
                 # Increment counter so the toggle gets a new unique key (resets automatically)
                 st.session_state["thesis_count"] = st.session_state.get("thesis_count", 0) + 1
