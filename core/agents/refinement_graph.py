@@ -200,7 +200,12 @@ def _make_assemble_node():
 
         tool_messages = [m for m in state["messages"] if isinstance(m, ToolMessage)]
         if not tool_messages:
-            logger.warning("assemble_node: no ToolMessage found, keeping current thesis")
+            last_message = state["messages"][-1] if state["messages"] else None
+            raw_content = getattr(last_message, "content", None)
+            logger.error(
+                "assemble_node: planner produced no tool call despite tool_choice='any' "
+                f"forcing one. Raw response: {raw_content!r}"
+            )
             return skip("no_tool", "skipped")
 
         try:
@@ -304,7 +309,7 @@ def build_refinement_graph(
         google_api_key=gemini_api_key,
         timeout=timeout,
         max_output_tokens=max_output_tokens,
-    ).bind_tools(tools)
+    ).bind_tools(tools, tool_choice="any")
 
     graph = StateGraph(ThesisRefinementState)
 
