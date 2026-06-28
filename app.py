@@ -136,8 +136,8 @@ def _persist_approval_once() -> None:
         logger.exception("Failed to record approval")
 
 
-# 0.55 = same-topic + related sub-topics; drops same-domain-but-different-topic (~0.3-0.45)
-RECALL_MIN_SIMILARITY = 0.55
+# 0.86 = same-topic + related sub-topics; drops same-domain-but-different-topic
+RECALL_MIN_SIMILARITY = 0.86
 
 
 def _compute_related(query_embedding, current_job_id, top_n: int = 3) -> list:
