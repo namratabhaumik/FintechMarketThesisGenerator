@@ -9,7 +9,7 @@ from core.models.trend_metric import TrendMetric
 from core.services.ingestion_service import ArticleIngestionService
 from core.services.thesis_generator_service import (
     ThesisGeneratorService,
-    _apply_feedback_caps,
+    _apply_cap_deltas,
     _gold_confidence_inputs,
     _ranked_tags_from_documents,
 )
@@ -314,36 +314,48 @@ class TestGroundedTagDerivation:
         docs = [Document(page_content="x", metadata={"url": "u"})]  # no tag keys
         assert _ranked_tags_from_documents(docs) == ([], [], [])
 
-    def test_feedback_trims_risks_and_expands_signals(self):
-        kt, kr, ks = _apply_feedback_caps(
+    def test_planner_deltas_trim_risks_and_expand_signals(self):
+        kt, kr, ks = _apply_cap_deltas(
             ["T1", "T2", "T3", "T4"],
             ["R1", "R2", "R3", "R4"],
             ["S1", "S2", "S3", "S4"],
-            ["Too many risks, not enough opportunities"],
+            theme_delta=0, risk_delta=-1, signal_delta=1,
             base_cap=3,
         )
         assert kr == ["R1", "R2"]                 # risks trimmed to base-1
         assert ks == ["S1", "S2", "S3", "S4"]     # signals expanded to base+1
         assert kt == ["T1", "T2", "T3"]           # themes unchanged at base
 
-    def test_feedback_expansion_bounded_by_evidence(self):
-        # "score too low" expands signals, but only as far as the evidence goes.
-        _, _, ks = _apply_feedback_caps(
+    def test_delta_expansion_bounded_by_evidence(self):
+        # +1 expands signals, but only as far as the evidence goes.
+        _, _, ks = _apply_cap_deltas(
             ["T1"], ["R1"], ["S1", "S2"],
-            ["Opportunity score seems too low"],
+            theme_delta=0, risk_delta=0, signal_delta=1,
             base_cap=3,
         )
         assert ks == ["S1", "S2"]  # base+1=4 requested, only 2 grounded signals
 
-    def test_narrative_only_feedback_leaves_caps_at_base(self):
-        result = _apply_feedback_caps(
+    def test_zero_deltas_leave_caps_at_base(self):
+        result = _apply_cap_deltas(
             ["T1", "T2", "T3", "T4"],
             ["R1", "R2", "R3", "R4"],
             ["S1", "S2", "S3", "S4"],
-            ["Need stronger evidence for key themes"],
+            theme_delta=0, risk_delta=0, signal_delta=0,
             base_cap=3,
         )
         assert result == (["T1", "T2", "T3"], ["R1", "R2", "R3"], ["S1", "S2", "S3"])
+
+    def test_deltas_clamped_beyond_one(self):
+        # Even if the LLM somehow returns an out-of-range delta, it's clamped to +-1.
+        kt, kr, ks = _apply_cap_deltas(
+            ["T1", "T2", "T3", "T4", "T5"],
+            ["R1", "R2", "R3", "R4"],
+            ["S1", "S2", "S3", "S4"],
+            theme_delta=3, risk_delta=-5, signal_delta=0,
+            base_cap=3,
+        )
+        assert kt == ["T1", "T2", "T3", "T4"]  # clamped to base+1, not base+3
+        assert kr == ["R1", "R2"]              # clamped to base-1 (floor 1), not base-5
 
     def test_generate_thesis_surfaces_grounded_tags(self, mock_llm):
         from finthesis_internal.opportunity_scoring_service import OpportunityScoringService

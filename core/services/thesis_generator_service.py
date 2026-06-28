@@ -121,43 +121,31 @@ def _gold_confidence_inputs(
     return covered_weeks, max(1, window_weeks), as_of
 
 
-def _apply_feedback_caps(
+def _apply_cap_deltas(
     themes: List[str],
     risks: List[str],
     signals: List[str],
-    feedback_items: List[str],
+    theme_delta: int,
+    risk_delta: int,
+    signal_delta: int,
     base_cap: int,
 ) -> Tuple[List[str], List[str], List[str]]:
     """Apply the QUANTITATIVE effect of feedback to the grounded tags.
 
     Every feedback item also drives the LLM narrative rewrite (the qualitative
-    effect, handled by llm.refine). On top of that, feedback about the SHAPE of
-    the structured output adjusts how many grounded tags surface per dimension. 
-    Eg: "Sharpen" feedback surfaces MORE concrete grounded tags (+1, capped
-    by what the evidence has); "too many" trims to the best-supported (-1).
-    Because the score is computed from these tags downstream, it tracks the
-    feedback too.
+    effect, handled by llm.refine). On top of that, the planner LLM reads the
+    same feedback and proposes a per-dimension delta on how many grounded tags
+    to surface: +1 sharpens by surfacing one more concrete grounded tag (bounded
+    by what the evidence has), -1 trims to the best-supported, 0 leaves the cap
+    at base. Deltas are clamped to [-1, +1] here regardless of what the LLM
+    returns.
     """
-    text = " ".join(feedback_items).lower()
-    theme_cap = risk_cap = signal_cap = base_cap
+    def _clamp_cap(delta: int) -> int:
+        return max(1, base_cap + max(-1, min(1, delta)))
 
-    # "too broad / be more specific" -> sharpen every dimension by surfacing more
-    # concrete grounded specifics (bounded by the evidence).
-    if "broad" in text or "specific" in text:
-        theme_cap = risk_cap = signal_cap = base_cap + 1
-    # "too many risks" -> trim risks to the best-supported.
-    if "too many" in text and "risk" in text:
-        risk_cap = max(1, base_cap - 1)
-    # "signals too vague" -> sharpen signals by surfacing more concrete grounded ones.
-    if "vague" in text and "signal" in text:
-        signal_cap = base_cap + 1
-    # "not enough opportunities / score too low" -> surface one more grounded
-    # signal (which also lifts the downstream score).
-    if "opportunit" in text or "score" in text:
-        signal_cap = base_cap + 1
-    # "missing recent trends" -> widen theme coverage by one.
-    if "recent" in text or "trend" in text:
-        theme_cap = base_cap + 1
+    theme_cap = _clamp_cap(theme_delta)
+    risk_cap = _clamp_cap(risk_delta)
+    signal_cap = _clamp_cap(signal_delta)
 
     return themes[:theme_cap], risks[:risk_cap], signals[:signal_cap]
 
@@ -284,12 +272,15 @@ class ThesisGeneratorService:
         documents: List[Document],
         current_thesis: StructuredThesis,
         feedback_items: List[str],
+        theme_delta: int = 0,
+        risk_delta: int = 0,
+        signal_delta: int = 0,
     ) -> StructuredThesis:
         """Refine an existing thesis based on user feedback.
 
         Calls the LLM for a feedback-aware rewrite, then runs the same
-        structuring as generate_thesis; assemble_node owns the single 
-        deterministic scoring step, keeping the scoring service the 
+        structuring as generate_thesis; assemble_node owns the single
+        deterministic scoring step, keeping the scoring service the
         sole authority for scores.
 
         Args:
@@ -297,6 +288,10 @@ class ThesisGeneratorService:
             documents: Retrieved context documents.
             current_thesis: The thesis to refine.
             feedback_items: Predefined feedback strings selected by user.
+            theme_delta: Planner-LLM-proposed cap adjustment for themes
+                (-1/0/+1), clamped by _apply_cap_deltas.
+            risk_delta: Same, for risks.
+            signal_delta: Same, for investment signals.
 
         Returns:
             New StructuredThesis with refinements applied.
@@ -313,13 +308,15 @@ class ThesisGeneratorService:
             raise RuntimeError("Failed to refine thesis")
 
         # Step 2: Derive grounded tags from the retrieved docs; apply the
-        # qualitative + quantitative effects of the feedback.
+        # quantitative effect of the feedback via the planner-LLM-proposed
+        # cap deltas (clamped, see _apply_cap_deltas).
         logger.info("Step 2: Deriving feedback-adjusted grounded tags...")
         ranked_themes, ranked_risks, ranked_signals = _ranked_tags_from_documents(
             documents
         )
-        key_themes, risks, investment_signals = _apply_feedback_caps(
-            ranked_themes, ranked_risks, ranked_signals, feedback_items, self._max_tags
+        key_themes, risks, investment_signals = _apply_cap_deltas(
+            ranked_themes, ranked_risks, ranked_signals,
+            theme_delta, risk_delta, signal_delta, self._max_tags
         )
 
         # Step 3: Extract sources from document metadata (same as generate_thesis)

@@ -5,6 +5,7 @@ import logging
 from typing import Annotated
 
 from langchain_core.tools import tool
+from pydantic import Field
 from langgraph.prebuilt import InjectedState
 
 from core.services.thesis_generator_service import ThesisGeneratorService
@@ -30,6 +31,9 @@ def create_thesis_tools(
     @tool
     def refine_thesis(
         feedback_focus: str,
+        theme_delta: Annotated[int, Field(ge=-1, le=1)],
+        risk_delta: Annotated[int, Field(ge=-1, le=1)],
+        signal_delta: Annotated[int, Field(ge=-1, le=1)],
         state: Annotated[dict, InjectedState],
     ) -> str:
         """Rewrite the investment thesis content based on user feedback.
@@ -40,6 +44,15 @@ def create_thesis_tools(
 
         Args:
             feedback_focus: Brief description of what aspect to focus on.
+            theme_delta: How many more/fewer themes to surface, from this
+                feedback (eg: +1 if thesis is too broad/generic or is 
+                missing recent trends; -1 if themes are repetitive; 0 otherwise)
+            risk_delta: Same idea for risks (eg: +1 if feedback wants risks
+                covered more thoroughly; -1 if it says there are too many
+                risks listed; 0 otherwise)
+            signal_delta: Same idea for investment signals (eg: +1 if signals 
+            are vague or the opportunity score seems too low; -1 if too many 
+            signals; 0 otherwise)
         """
         documents = state["documents"]
         current_thesis = state["current_thesis"]
@@ -50,13 +63,19 @@ def create_thesis_tools(
             else [feedback_focus]
         )
 
-        logger.info(f"Tool refine_thesis: focus='{feedback_focus}'")
+        logger.info(
+            f"Tool refine_thesis: focus='{feedback_focus}' "
+            f"deltas=(theme={theme_delta}, risk={risk_delta}, signal={signal_delta})"
+        )
 
         refined = thesis_service.refine_thesis(
             topic=topic,
             documents=documents,
             current_thesis=current_thesis,
             feedback_items=feedback_items,
+            theme_delta=theme_delta,
+            risk_delta=risk_delta,
+            signal_delta=signal_delta,
         )
 
         return json.dumps({
