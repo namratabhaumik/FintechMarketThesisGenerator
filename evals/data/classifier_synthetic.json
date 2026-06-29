@@ -1,0 +1,72 @@
+[
+  {
+    "input": {"title": "Stripe launches new instant payouts for marketplaces", "description": "The payments giant rolls out faster settlement for platform sellers across the US and EU."},
+    "expected_output": "YES",
+    "metadata": {"category": "payments", "kind": "clear-positive"}
+  },
+  {
+    "input": {"title": "Coinbase adds support for three new layer-2 tokens", "description": "The crypto exchange expands trading pairs as on-chain volume recovers."},
+    "expected_output": "YES",
+    "metadata": {"category": "crypto", "kind": "clear-positive"}
+  },
+  {
+    "input": {"title": "Chime files confidentially for IPO", "description": "The challenger bank, which offers fee-free checking and early direct deposit, eyes a public listing."},
+    "expected_output": "YES",
+    "metadata": {"category": "neobank", "kind": "clear-positive"}
+  },
+  {
+    "input": {"title": "Robinhood rolls out futures trading to retail users", "description": "The brokerage app expands its derivatives offering with low-cost contracts."},
+    "expected_output": "YES",
+    "metadata": {"category": "trading", "kind": "clear-positive"}
+  },
+  {
+    "input": {"title": "Lemonade reports lower loss ratio on AI underwriting", "description": "The insurtech credits its claims automation for improved margins this quarter."},
+    "expected_output": "YES",
+    "metadata": {"category": "insurtech", "kind": "clear-positive"}
+  },
+  {
+    "input": {"title": "Klarna expands buy-now-pay-later to in-store checkout", "description": "The BNPL provider partners with major retailers for point-of-sale installment plans."},
+    "expected_output": "YES",
+    "metadata": {"category": "bnpl", "kind": "clear-positive"}
+  },
+  {
+    "input": {"title": "Budgeting app Copilot adds shared household accounts", "description": "The personal finance software lets couples track spending and net worth together."},
+    "expected_output": "YES",
+    "metadata": {"category": "personal-finance", "kind": "clear-positive"}
+  },
+  {
+    "input": {"title": "Bank deploys ML model to flag fraudulent transactions in real time", "description": "The lender's new fraud-detection system scores card payments as they happen."},
+    "expected_output": "YES",
+    "metadata": {"category": "banking-infra", "kind": "tricky-ai-in-fintech"}
+  },
+  {
+    "input": {"title": "SpaceX Starship completes its sixth test flight", "description": "The rocket reached orbital velocity before a controlled splashdown."},
+    "expected_output": "NO",
+    "metadata": {"category": "space", "kind": "clear-negative"}
+  },
+  {
+    "input": {"title": "Nvidia unveils next-gen GPU for data centers", "description": "The new chip doubles memory bandwidth for AI training workloads."},
+    "expected_output": "NO",
+    "metadata": {"category": "hardware", "kind": "clear-negative"}
+  },
+  {
+    "input": {"title": "Startup raises $40M for general-purpose AI writing assistant", "description": "The chatbot helps marketers draft blog posts and emails."},
+    "expected_output": "NO",
+    "metadata": {"category": "general-ai", "kind": "tricky-ai-not-fintech"}
+  },
+  {
+    "input": {"title": "E-commerce marketplace adds same-day delivery in 10 cities", "description": "The online retailer expands its logistics network for faster shipping."},
+    "expected_output": "NO",
+    "metadata": {"category": "ecommerce", "kind": "clear-negative"}
+  },
+  {
+    "input": {"title": "Indie studio launches roguelike platformer on Steam", "description": "The mobile and PC game features procedurally generated levels."},
+    "expected_output": "NO",
+    "metadata": {"category": "gaming", "kind": "clear-negative"}
+  },
+  {
+    "input": {"title": "AI image generator startup opens public beta", "description": "The tool turns text prompts into photorealistic images for designers."},
+    "expected_output": "NO",
+    "metadata": {"category": "general-ai", "kind": "tricky-ai-not-fintech"}
+  }
+]

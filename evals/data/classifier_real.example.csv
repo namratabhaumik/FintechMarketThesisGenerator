@@ -1,0 +1,6 @@
+url,title,summary,model_verdict,label
+https://example.com/payments-startup,Example fintech headline about a payments startup raising a round,One-sentence summary used as the classifier description input.,YES,YES
+https://example.com/space-launch,Example non-fintech headline about a rocket launch,One-sentence summary used as the classifier description input.,NO,NO
+https://example.com/travel-payments,VC leads a bet on a travel *payments* platform,"Mismatch: model said NO, human flips to YES - payments make it fintech.",NO,YES
+https://example.com/bookkeeping-saas,Startup building bookkeeping / accounting software for SMBs,"Mismatch: model said NO, human flips to YES - accounting SaaS is finance software.",NO,YES
+https://example.com/space-ipo,Space company's record IPO raises billions in its debut,"Mismatch: model said YES (over-triggered on 'IPO/valuation/raised'), human flips to NO - it's a space company, not fintech.",YES,NO
