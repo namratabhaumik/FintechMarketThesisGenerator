@@ -16,7 +16,7 @@ from dotenv import load_dotenv
 
 from api.schemas import JobStatus
 from api.supabase_job_manager import SupabaseJobManager
-from config.settings import AppConfig
+from config.settings import AppConfig, FEEDBACK_OPTIONS
 from core.agents.hallucination_detector import HallucinationDetector
 from core.models.thesis import StructuredThesis
 from core.services.episodic_recall import recall_similar
@@ -40,16 +40,6 @@ st.markdown(
     "Generate structured **market theses** from live fintech news using semantic retrieval "
     "and keyword-driven analysis — powered by a local summarizer or an LLM of your choice."
 )
-
-# === Refinement Configuration ===
-FEEDBACK_OPTIONS = [
-    "Too many risks, not enough opportunities",
-    "Missing recent market trends",
-    "Investment signals are too vague",
-    "Opportunity score seems too low",
-    "Analysis is too broad, be more specific",
-    "Need stronger evidence for key themes",
-]
 
 # Cache control for testing
 if st.button("🔄 Clear Cache & Reset"):

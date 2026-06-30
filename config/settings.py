@@ -21,6 +21,16 @@ PROVIDER_MODEL_ENV: Dict[str, str] = {
     "local": "LOCAL_MODEL",
 }
 
+# Fixed set of refinement feedback reasons.
+FEEDBACK_OPTIONS: List[str] = [
+    "Too many risks, not enough opportunities",
+    "Missing recent market trends",
+    "Investment signals are too vague",
+    "Opportunity score seems too low",
+    "Analysis is too broad, be more specific",
+    "Need stronger evidence for key themes",
+]
+
 
 @dataclass
 class RSSFeedConfig:
