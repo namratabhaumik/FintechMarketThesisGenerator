@@ -240,6 +240,8 @@ secrets.json
 *.sqlite
 *.sqlite3
 *.sql
+# but do track the committed schema DDL
+!sql/*.sql
 
 # Logs
 logs/
