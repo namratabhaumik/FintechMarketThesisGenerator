@@ -2,6 +2,9 @@
 
 from datetime import datetime, timezone
 
+import pytest
+
+from core.exceptions import ClassifierOutageError
 from core.interfaces.relevance_classifier import IRelevanceClassifier
 from core.interfaces.scraper import IWebScraper
 from core.models.article import Article
@@ -75,6 +78,25 @@ class _BoomClassifier(IRelevanceClassifier):
 
     def is_relevant(self, title: str, description: str) -> bool:
         raise RuntimeError("classifier unavailable")
+
+
+class _ScriptedClassifier(IRelevanceClassifier):
+    """Follows a scripted list of per-call outcomes, in call order.
+
+    Each item is a bool (returned) or an Exception (raised), letting a test
+    drive a specific pass/fail pattern through the batch.
+    """
+
+    def __init__(self, outcomes):
+        self._outcomes = list(outcomes)
+        self._i = 0
+
+    def is_relevant(self, title: str, description: str) -> bool:
+        outcome = self._outcomes[self._i]
+        self._i += 1
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
 
 
 class _StubScraper(IWebScraper):
@@ -257,3 +279,35 @@ def test_no_new_articles_does_not_call_build():
     assert _service(raw, silver_repo, vs).build() == 0
     assert vs.built == []
     assert silver_repo.recorded == []
+
+
+def test_five_consecutive_failures_abort_the_run():
+    # A total outage: the classifier errors on every call. After 5 in a row the
+    # breaker aborts, and nothing is committed (the rows stay pending).
+    raw = [_raw("Fintech A", f"https://x/{i}") for i in range(5)]
+    silver_repo = _FakeSilverRepo()
+    vs = _FakeVectorStore()
+
+    with pytest.raises(ClassifierOutageError):
+        _service(raw, silver_repo, vs, classifier=_BoomClassifier()).build()
+
+    assert silver_repo.recorded == []
+    assert vs.built == []
+
+
+def test_a_success_resets_the_failure_streak():
+    # 4 failures, one success (a real NO), then 4 more failures: never 5 in a
+    # row, so the run finishes per-article instead of aborting.
+    boom = RuntimeError("classifier unavailable")
+    outcomes = [boom, boom, boom, boom, False, boom, boom, boom, boom]
+    raw = [_raw("A", f"https://x/{i}") for i in range(len(outcomes))]
+    silver_repo = _FakeSilverRepo()
+    vs = _FakeVectorStore()
+
+    embedded = _service(
+        raw, silver_repo, vs, classifier=_ScriptedClassifier(outcomes)
+    ).build()
+
+    assert embedded == 0
+    # Only the one success recorded a verdict; the streak never reached 5.
+    assert [v.fintech_relevant for v in silver_repo.recorded] == [False]

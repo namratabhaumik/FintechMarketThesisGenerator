@@ -7,6 +7,7 @@ on exactly once (a verdict is recorded), so later runs never re-classify it.
 import logging
 from typing import Dict, List, NamedTuple
 
+from core.exceptions import ClassifierOutageError
 from core.interfaces.article_content_repository import IArticleContentRepository
 from core.interfaces.article_repository import IArticleRepository
 from core.interfaces.quarantine_repository import IQuarantineRepository
@@ -30,6 +31,11 @@ logger = logging.getLogger(__name__)
 
 # Upper bound on stored article text (~2000 words).
 MAX_ARTICLE_CHARS = 12_000
+
+# Circuit breaker: this many classifier failures in a row (a single success
+# resets the count) means the classifier is down, not a flaky article - so the
+# Silver build aborts rather than hammering a dead classifier through the batch.
+OUTAGE_ABORT_AFTER = 5
 
 
 class _Batch(NamedTuple):
@@ -122,6 +128,7 @@ class SilverService:
         batch = _Batch(
             documents=[], verdicts=[], quarantined=[], new_content=[], errored=[]
         )
+        consecutive_errors = 0  # reset by any success; trips the outage breaker
         for raw in pending:
             try:
                 relevant = self._classifier.is_relevant(raw.title, raw.summary)
@@ -134,8 +141,19 @@ class SilverService:
                     f"later run: {e}"
                 )
                 batch.errored.append(raw.url)
+                # Outage circuit breaker: N failures in a row (no success between)
+                # means the classifier is down, not a flaky article. Abort now to
+                # bound wasted cloud calls and fail loud; untouched rows stay
+                # pending for the next run.
+                consecutive_errors += 1
+                if consecutive_errors >= OUTAGE_ABORT_AFTER:
+                    raise ClassifierOutageError(
+                        f"Classifier failed on {consecutive_errors} articles in a "
+                        f"row; aborting run. Last error: {e}"
+                    )
                 continue
 
+            consecutive_errors = 0  # a success breaks the failure streak
             if not relevant:  # real NO -> frozen rejected verdict
                 batch.verdicts.append(SilverVerdict(url=raw.url, fintech_relevant=False))
                 continue

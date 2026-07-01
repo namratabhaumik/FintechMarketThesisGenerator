@@ -11,3 +11,11 @@ class NoArticlesFetchedError(ArticleFetchError):
 
 class NoRelevantArticlesError(ArticleFetchError):
     """Entries were fetched, but none passed the relevance (fintech) classifier."""
+
+
+class ClassifierOutageError(Exception):
+    """Every pending article failed classification - the classifier appears down.
+
+    Raised by the Silver build to abort and fail loud (non-zero exit) for
+    investigatigation.
+    """
