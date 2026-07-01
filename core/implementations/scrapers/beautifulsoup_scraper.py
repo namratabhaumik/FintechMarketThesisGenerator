@@ -1,6 +1,7 @@
 """BeautifulSoup-based web scraper implementation."""
 
 import logging
+import re
 
 import requests
 from bs4 import BeautifulSoup, Tag
@@ -93,12 +94,15 @@ class BeautifulSoupScraper(IWebScraper):
             # blocks: the cleaned text of each body element inside root. We walk
             # paragraphs, subheadings, list items, and quotes (all article
             # content) and keep each element's trimmed text, dropping anything
-            # 1 char or shorter (stray markup, bullets).
-            blocks = [
-                el.get_text(strip=True)
-                for el in root.find_all(["p", "h2", "h3", "li", "blockquote"])
-                if len(el.get_text(strip=True)) > 1
-            ]
+            # 1 char or shorter (stray markup, bullets). separator=" " puts a
+            # space between adjacent inline elements (links, spans) so their text
+            # isn't fused ("Digital Bank" + "Grasshopper" -> "Digital
+            # BankGrasshopper"); \s+ then collapses any doubles it introduces.
+            blocks = []
+            for el in root.find_all(["p", "h2", "h3", "li", "blockquote"]):
+                block = re.sub(r"\s+", " ", el.get_text(separator=" ", strip=True)).strip()
+                if len(block) > 1:
+                    blocks.append(block)
 
             # Join with newlines, not spaces: downstream clean_article_text
             # strips boilerplate line-by-line (its patterns anchor on \n). A
