@@ -21,6 +21,16 @@ PROVIDER_MODEL_ENV: Dict[str, str] = {
     "local": "LOCAL_MODEL",
 }
 
+# Fixed set of refinement feedback reasons.
+FEEDBACK_OPTIONS: List[str] = [
+    "Too many risks, not enough opportunities",
+    "Missing recent market trends",
+    "Investment signals are too vague",
+    "Opportunity score seems too low",
+    "Analysis is too broad, be more specific",
+    "Need stronger evidence for key themes",
+]
+
 
 @dataclass
 class RSSFeedConfig:
@@ -28,6 +38,23 @@ class RSSFeedConfig:
     name: str
     url: str
     enabled: bool = True
+
+
+@dataclass
+class ClassifierConfig:
+    """Fintech relevance classifier configuration.
+
+    `provider` selects the backend: "ollama" (local) or "huggingface" (hosted).
+    `model` is the chat model to run, so each user can pick one that
+    fits their hardware; from_env resolves a provider-appropriate default.
+    `api_key` is the HF token (huggingface only); `base_url` is the Ollama
+    server (ollama only).
+    """
+    provider: str = "ollama"
+    model: str = ""
+    api_key: str = ""
+    base_url: str = "http://localhost:11434"
+    timeout: int = 30
 
 
 @dataclass
@@ -51,14 +78,39 @@ class LLMConfig:
     model_name: str
     api_key: str
     temperature: float = 0.0
+    # upper limit with headroom above the observed max (llm timeout + token limit)
+    timeout: int = 120
+    max_output_tokens: int = 4096
+    timeout: int = 60
+    max_output_tokens: int = 2048
 
 
 @dataclass
 class VectorStoreConfig:
     """Vector store configuration."""
-    provider: str = "faiss"
+    provider: str = "supabase"
     chunk_size: int = 800
     chunk_overlap: int = 100
+
+
+@dataclass
+class RetrievalConfig:
+    """MMR (Maximal Marginal Relevance) retrieval config.
+
+    It first pulls `fetch_k` candidates by similarity, then selects `k` of them 
+    by the MMR objective so the returned chunks are not near-duplicates of each 
+    other. `lambda_mult` is the relevance/diversity dial
+
+    `window_days` is a trailing recency window: retrieval only considers articles
+    published within the last `window_days` from the query time (a sliding window
+    that moves as time advances). The corpus is sparse and historic, so the
+    default is a broad year. Set it to 0 to disable the filter and search the
+    whole corpus.
+    """
+    k: int = 5
+    fetch_k: int = 20
+    lambda_mult: float = 0.5
+    window_days: int = 365
 
 
 @dataclass
@@ -88,16 +140,28 @@ class AppConfig:
     embedding: EmbeddingConfig
     llm: LLMConfig
     vectorstore: VectorStoreConfig = field(default_factory=VectorStoreConfig)
+    retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
     scraper: ScraperConfig = field(default_factory=ScraperConfig)
+    classifier: ClassifierConfig = field(default_factory=ClassifierConfig)
     supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
     ai_gateway: AIGatewayConfig = field(default_factory=AIGatewayConfig)
 
     rss_feeds: List[RSSFeedConfig] = field(default_factory=lambda: [
         RSSFeedConfig(
-            name="TechCrunch Fintech",
+            name="TechCrunch",
+            url="https://techcrunch.com/feed/",
+            enabled=True
+        ),
+        RSSFeedConfig(
+            name="TechCrunch Fintech (category)",
             url="https://techcrunch.com/category/fintech/feed/",
             enabled=True
-        )
+        ),
+        RSSFeedConfig(
+            name="TechCrunch Fintech (tag)",
+            url="https://techcrunch.com/tag/fintech/feed/",
+            enabled=True
+        ),
     ])
 
     @classmethod
@@ -154,13 +218,39 @@ class AppConfig:
                 else:
                     missing.append(model_env)
 
+        # Fintech relevance classifier — always on. Default provider is local
+        # Ollama (no token); HF_TOKEN is required only for the huggingface provider.
+        classifier_provider = os.getenv("CLASSIFIER_PROVIDER", "ollama").lower()
+        hf_token = os.getenv("HF_TOKEN", "")
+        # Bearer token for a hosted Ollama endpoint (e.g. Ollama Cloud). Empty
+        # for a local server, which needs no auth.
+        ollama_api_key = os.getenv("OLLAMA_API_KEY", "")
+        ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+        # Default model differs by backend (Ollama tag vs HF repo id).
+        default_model = (
+            "Qwen/Qwen2.5-7B-Instruct"
+            if classifier_provider == "huggingface"
+            else "qwen2.5:7b"
+        )
+        classifier_model = os.getenv("CLASSIFIER_MODEL", default_model)
+        if classifier_provider == "huggingface" and not hf_token:
+            missing.append("HF_TOKEN")
+
         if missing:
             raise EnvironmentError(
                 f"Missing required environment variables: {', '.join(missing)}. "
                 "Please set them in your .env file."
             )
 
-        vs_provider = os.getenv("VECTORSTORE_PROVIDER", "faiss")
+        vs_provider = os.getenv("VECTORSTORE_PROVIDER", "supabase")
+
+        # Retrieval config defaults for MMR
+        retrieval = RetrievalConfig(
+            k=int(os.getenv("RETRIEVAL_K", "5")),
+            fetch_k=int(os.getenv("RETRIEVAL_FETCH_K", "20")),
+            lambda_mult=float(os.getenv("RETRIEVAL_LAMBDA_MULT", "0.5")),
+            window_days=int(os.getenv("RETRIEVAL_WINDOW_DAYS", "365")),
+        )
 
         # Supabase configuration (optional — falls back to in-memory if not set)
         supabase_url = os.getenv("SUPABASE_URL", "")
@@ -182,12 +272,22 @@ class AppConfig:
                 provider=llm_provider,
                 model_name=model_name,
                 api_key=api_key,
+                timeout=int(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
+                max_output_tokens=int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "4096")),
             ),
             embedding=EmbeddingConfig(
                 provider=embed_provider,
                 model_name=embed_model,
             ),
+            classifier=ClassifierConfig(
+                provider=classifier_provider,
+                # HF uses the HF token; Ollama uses the cloud bearer token.
+                model=classifier_model,
+                api_key=(hf_token if classifier_provider == "huggingface" else ollama_api_key),
+                base_url=ollama_base_url,
+            ),
             vectorstore=VectorStoreConfig(provider=vs_provider),
+            retrieval=retrieval,
             supabase=SupabaseConfig(
                 url=supabase_url,
                 service_role_key=supabase_service_role_key,

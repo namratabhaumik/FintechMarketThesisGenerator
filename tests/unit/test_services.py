@@ -1,11 +1,73 @@
 """Unit tests for service layer."""
 
-import pytest
+from datetime import date
+from unittest.mock import Mock
+
 from langchain_core.documents import Document
 
+from core.models.trend_metric import TrendMetric
 from core.services.ingestion_service import ArticleIngestionService
-from core.services.retrieval_service import DocumentRetrievalService
-from core.services.thesis_generator_service import ThesisGeneratorService
+from core.services.thesis_generator_service import (
+    ThesisGeneratorService,
+    _apply_cap_deltas,
+    _gold_confidence_inputs,
+    _ranked_tags_from_documents,
+)
+
+
+def _empty_trend():
+    """Trend repo stub with no Gold metrics (confidence falls to 0)."""
+    repo = Mock()
+    repo.fetch_all.return_value = []
+    return repo
+
+
+class TestGoldConfidenceInputs:
+    """_gold_confidence_inputs: covered weeks for the evidence's categories over
+    the window, derived from Gold; window is the retrieval window in weeks (or the
+    full Gold span when None)."""
+
+    # Four consecutive Mondays (the recent window) plus one older Monday.
+    W0, W1, W2, W3 = (
+        date(2026, 6, 15), date(2026, 6, 8), date(2026, 6, 1), date(2026, 5, 25),
+    )
+    OLD = date(2026, 5, 4)
+
+    @staticmethod
+    def _doc():
+        return Document(page_content="x", metadata={
+            "url": "u", "themes": ["Payments"], "risks": ["Reg"], "signals": ["Infra"],
+        })
+
+    def _metrics(self):
+        return [
+            TrendMetric(week_start=self.W0, dimension="theme", category="Payments", article_count=5),
+            TrendMetric(week_start=self.W2, dimension="theme", category="Payments", article_count=3),
+            TrendMetric(week_start=self.W1, dimension="signal", category="Infra", article_count=2),
+            TrendMetric(week_start=self.W0, dimension="theme", category="Other", article_count=9),
+            TrendMetric(week_start=self.OLD, dimension="theme", category="Payments", article_count=4),
+        ]
+
+    def test_empty_gold_gives_zero_over_window(self):
+        assert _gold_confidence_inputs([self._doc()], [], 4) == (0, 4, None)
+        # window None (whole corpus) with no metrics still avoids a zero denominator.
+        assert _gold_confidence_inputs([self._doc()], [], None) == (0, 1, None)
+
+    def test_windowed_counts_matching_weeks_in_window(self):
+        # Matching weeks: W0, W2 (Payments), W1 (Infra), OLD (Payments, outside window).
+        # "Other" is not in the evidence -> ignored. Window = {W0, W1, W2, W3}.
+        covered, window_weeks, as_of = _gold_confidence_inputs(
+            [self._doc()], self._metrics(), 4
+        )
+        assert (covered, window_weeks, as_of) == (3, 4, self.W0)
+
+    def test_whole_corpus_spans_full_gold(self):
+        # window None -> denominator is the full span (W0..OLD = 7 weeks inclusive),
+        # covered = all distinct matching weeks (W0, W1, W2, OLD).
+        covered, window_weeks, as_of = _gold_confidence_inputs(
+            [self._doc()], self._metrics(), None
+        )
+        assert (covered, window_weeks, as_of) == (4, 7, self.W0)
 
 
 class TestArticleIngestionService:
@@ -46,31 +108,108 @@ class TestArticleIngestionService:
         assert "title" in doc.metadata
         assert "source" in doc.metadata
         assert "url" in doc.metadata
+        assert "published_at" in doc.metadata
         assert doc.metadata["title"] == "Test Article 1"
+        assert doc.metadata["published_at"] == "2026-01-01T00:00:00+00:00"
+
+
+class _RecordingVectorStore:
+    """Fake IVectorStore that records the args retrieve() was called with."""
+
+    def __init__(self):
+        self.retrieve_args = None
+
+    def build(self, documents):
+        return object()
+
+    def open(self):
+        return object()
+
+    def retrieve(
+        self,
+        vectorstore,
+        query,
+        k,
+        fetch_k,
+        lambda_mult,
+        window_days=None,
+        query_embedding=None,
+    ):
+        self.retrieve_args = {
+            "query": query,
+            "k": k,
+            "fetch_k": fetch_k,
+            "lambda_mult": lambda_mult,
+            "window_days": window_days,
+            "query_embedding": query_embedding,
+        }
+        return [Document(page_content="r", metadata={"url": "u"})]
 
 
 class TestDocumentRetrievalService:
-    """Tests for DocumentRetrievalService."""
+    """Tests for DocumentRetrievalService MMR wiring."""
 
-    def test_build_vectorstore(self, mock_llm):
-        """Test that vectorstore is built from documents."""
-        from tests.conftest import MockLanguageModel
-        from core.implementations.embeddings.fastembed_embeddings import FastEmbedEmbeddingModel
-        from core.implementations.vectorstores.faiss_store import FAISSVectorStore
-        from config.settings import EmbeddingConfig, VectorStoreConfig
+    def _service(self, config):
+        from core.services.retrieval_service import DocumentRetrievalService
 
-        # This would require actual FastEmbed model, so we skip in test
-        pytest.skip("Requires FastEmbed model initialization")
+        vs = _RecordingVectorStore()
+        service = DocumentRetrievalService(vs, config)
+        service.build_vectorstore([Document(page_content="x", metadata={"url": "u"})])
+        return service, vs
 
-    def test_is_built_false_initially(self, mock_llm):
-        """Test that vectorstore is not built initially."""
-        from core.implementations.vectorstores.faiss_store import FAISSVectorStore
-        from config.settings import VectorStoreConfig
-        from core.implementations.embeddings.fastembed_embeddings import FastEmbedEmbeddingModel
-        from config.settings import EmbeddingConfig
+    def test_is_built_false_initially(self):
+        from config.settings import RetrievalConfig
+        from core.services.retrieval_service import DocumentRetrievalService
 
-        # Create minimal setup to test is_built() without actual vectorstore
-        pytest.skip("Requires full setup")
+        service = DocumentRetrievalService(_RecordingVectorStore(), RetrievalConfig())
+        assert service.is_built() is False
+
+    def test_retrieve_lazily_opens_existing_store(self):
+        from config.settings import RetrievalConfig
+        from core.services.retrieval_service import DocumentRetrievalService
+
+        # No build_vectorstore() call: retrieve must open the existing store
+        vs = _RecordingVectorStore()
+        service = DocumentRetrievalService(vs, RetrievalConfig())
+        assert service.is_built() is False
+
+        docs = service.retrieve("query")
+
+        assert service.is_built() is True
+        assert len(docs) == 1
+
+    def test_retrieve_uses_mmr_config(self):
+        from config.settings import RetrievalConfig
+
+        service, vs = self._service(
+            RetrievalConfig(k=5, fetch_k=20, lambda_mult=0.5, window_days=365)
+        )
+        docs = service.retrieve("query")
+
+        assert vs.retrieve_args["k"] == 5
+        assert vs.retrieve_args["fetch_k"] == 20
+        assert vs.retrieve_args["lambda_mult"] == 0.5
+        assert len(docs) == 1
+
+    def test_retrieve_passes_window_days(self):
+        from config.settings import RetrievalConfig
+
+        # The configured recency window must reach the vector store.
+        service, vs = self._service(RetrievalConfig(window_days=180))
+        service.retrieve("query")
+
+        assert vs.retrieve_args["window_days"] == 180
+
+    def test_retrieve_override_k_widens_fetch_k(self):
+        from config.settings import RetrievalConfig
+
+        # k override above the configured fetch_k must widen fetch_k (MMR needs
+        # fetch_k >= k).
+        service, vs = self._service(RetrievalConfig(k=5, fetch_k=20, lambda_mult=0.5))
+        service.retrieve("query", k=30)
+
+        assert vs.retrieve_args["k"] == 30
+        assert vs.retrieve_args["fetch_k"] == 30
 
 
 class TestThesisGeneratorService:
@@ -78,12 +217,10 @@ class TestThesisGeneratorService:
 
     def test_generate_thesis_structure(self, mock_llm, mock_scoring_strategy):
         """Test that thesis has correct structure."""
-        from core.services.thesis_structuring_service import ThesisStructuringService
         from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
-        structurer = ThesisStructuringService(mock_scoring_strategy)
         scoring_service = OpportunityScoringService()
-        service = ThesisGeneratorService(mock_llm, structurer, scoring_service)
+        service = ThesisGeneratorService(mock_llm, scoring_service, _empty_trend())
 
         docs = [Document(page_content="Test content", metadata={"url": "http://test.com"})]
         thesis = service.generate_thesis("Digital Banking", docs)
@@ -95,12 +232,10 @@ class TestThesisGeneratorService:
 
     def test_generate_thesis_with_mock_llm(self, mock_llm, mock_scoring_strategy):
         """Test thesis generation with mock LLM."""
-        from core.services.thesis_structuring_service import ThesisStructuringService
         from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
-        structurer = ThesisStructuringService(mock_scoring_strategy)
         scoring_service = OpportunityScoringService()
-        service = ThesisGeneratorService(mock_llm, structurer, scoring_service)
+        service = ThesisGeneratorService(mock_llm, scoring_service, _empty_trend())
 
         docs = [Document(page_content="Digital banking is the future", metadata={"url": "http://test.com"})]
         thesis = service.generate_thesis("Digital Banking", docs)
@@ -110,12 +245,10 @@ class TestThesisGeneratorService:
 
     def test_generate_thesis_includes_opportunity_score(self, mock_llm, mock_scoring_strategy):
         """Test that thesis includes opportunity score and confidence."""
-        from core.services.thesis_structuring_service import ThesisStructuringService
         from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
-        structurer = ThesisStructuringService(mock_scoring_strategy)
         scoring_service = OpportunityScoringService()
-        service = ThesisGeneratorService(mock_llm, structurer, scoring_service)
+        service = ThesisGeneratorService(mock_llm, scoring_service, _empty_trend())
 
         docs = [
             Document(page_content="Digital banking innovation", metadata={"url": "http://test.com"}),
@@ -133,12 +266,10 @@ class TestThesisGeneratorService:
 
     def test_generate_thesis_recommendation_based_on_score(self, mock_llm, mock_scoring_strategy):
         """Test that recommendation matches score thresholds."""
-        from core.services.thesis_structuring_service import ThesisStructuringService
         from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
-        structurer = ThesisStructuringService(mock_scoring_strategy)
         scoring_service = OpportunityScoringService()
-        service = ThesisGeneratorService(mock_llm, structurer, scoring_service)
+        service = ThesisGeneratorService(mock_llm, scoring_service, _empty_trend())
 
         docs = [Document(page_content="Test", metadata={"url": "http://test.com"})]
         thesis = service.generate_thesis("Test Query", docs)
@@ -150,3 +281,98 @@ class TestThesisGeneratorService:
             assert thesis.recommendation == "Investigate"
         else:
             assert thesis.recommendation == "Skip"
+
+
+class TestGroundedTagDerivation:
+    """Thesis tags come only from the retrieved docs' Silver metadata; feedback
+    adjusts how many surface but never invents tags absent from the evidence."""
+
+    @staticmethod
+    def _doc(themes=None, risks=None, signals=None, url="u"):
+        return Document(
+            page_content="x",
+            metadata={
+                "url": url,
+                "themes": themes or [],
+                "risks": risks or [],
+                "signals": signals or [],
+            },
+        )
+
+    def test_ranked_tags_are_frequency_ordered(self):
+        docs = [
+            self._doc(themes=["Payments", "Crypto"]),
+            self._doc(themes=["Payments"]),
+            self._doc(themes=["Payments", "Lending"]),
+        ]
+        themes, risks, signals = _ranked_tags_from_documents(docs)
+        assert themes[0] == "Payments"  # most frequent first
+        assert set(themes) == {"Payments", "Crypto", "Lending"}
+        assert risks == [] and signals == []
+
+    def test_missing_metadata_treated_as_no_tags(self):
+        docs = [Document(page_content="x", metadata={"url": "u"})]  # no tag keys
+        assert _ranked_tags_from_documents(docs) == ([], [], [])
+
+    def test_planner_deltas_trim_risks_and_expand_signals(self):
+        kt, kr, ks = _apply_cap_deltas(
+            ["T1", "T2", "T3", "T4"],
+            ["R1", "R2", "R3", "R4"],
+            ["S1", "S2", "S3", "S4"],
+            theme_delta=0, risk_delta=-1, signal_delta=1,
+            base_cap=3,
+        )
+        assert kr == ["R1", "R2"]                 # risks trimmed to base-1
+        assert ks == ["S1", "S2", "S3", "S4"]     # signals expanded to base+1
+        assert kt == ["T1", "T2", "T3"]           # themes unchanged at base
+
+    def test_delta_expansion_bounded_by_evidence(self):
+        # +1 expands signals, but only as far as the evidence goes.
+        _, _, ks = _apply_cap_deltas(
+            ["T1"], ["R1"], ["S1", "S2"],
+            theme_delta=0, risk_delta=0, signal_delta=1,
+            base_cap=3,
+        )
+        assert ks == ["S1", "S2"]  # base+1=4 requested, only 2 grounded signals
+
+    def test_zero_deltas_leave_caps_at_base(self):
+        result = _apply_cap_deltas(
+            ["T1", "T2", "T3", "T4"],
+            ["R1", "R2", "R3", "R4"],
+            ["S1", "S2", "S3", "S4"],
+            theme_delta=0, risk_delta=0, signal_delta=0,
+            base_cap=3,
+        )
+        assert result == (["T1", "T2", "T3"], ["R1", "R2", "R3"], ["S1", "S2", "S3"])
+
+    def test_deltas_clamped_beyond_one(self):
+        # Even if the LLM somehow returns an out-of-range delta, it's clamped to +-1.
+        kt, kr, ks = _apply_cap_deltas(
+            ["T1", "T2", "T3", "T4", "T5"],
+            ["R1", "R2", "R3", "R4"],
+            ["S1", "S2", "S3", "S4"],
+            theme_delta=3, risk_delta=-5, signal_delta=0,
+            base_cap=3,
+        )
+        assert kt == ["T1", "T2", "T3", "T4"]  # clamped to base+1, not base+3
+        assert kr == ["R1", "R2"]              # clamped to base-1 (floor 1), not base-5
+
+    def test_generate_thesis_surfaces_grounded_tags(self, mock_llm):
+        from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
+
+        service = ThesisGeneratorService(mock_llm, OpportunityScoringService(), _empty_trend())
+        docs = [
+            self._doc(
+                themes=["Digital Payments"],
+                risks=["Regulatory Risk"],
+                signals=["Payment Infrastructure"],
+                url="u1",
+            ),
+            self._doc(themes=["Digital Payments"], url="u2"),
+        ]
+        thesis = service.generate_thesis("payments", docs)
+
+        assert thesis.key_themes == ["Digital Payments"]
+        assert thesis.risks == ["Regulatory Risk"]
+        assert thesis.investment_signals == ["Payment Infrastructure"]
+        assert thesis.sources == ["u1", "u2"]

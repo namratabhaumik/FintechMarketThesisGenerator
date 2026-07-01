@@ -8,7 +8,7 @@ interface that route handlers expect.
 
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from supabase import Client, create_client
 
@@ -45,7 +45,7 @@ class SupabaseJobManager(IJobManager):
             "articles": [],
             "error": None,
             "refinement_count": 0,
-            "refinement_status": "refining",
+            "refinement_status": "N/A",  # becomes "refining" only once the user refines
             "feedback_history": [],
             "execution_log": [],
             "retrieved_docs": [],
@@ -109,9 +109,12 @@ class _RowProxy:
         self.progress: Optional[str] = data.get("progress")
         self.error: Optional[str] = data.get("error")
         self.refinement_count: int = data.get("refinement_count", 0)
-        self.refinement_status: str = data.get("refinement_status", "refining")
+        self.refinement_status: str = data.get("refinement_status", "N/A")
+        self.created_at: Optional[str] = data.get("created_at")
         self.feedback_history: list = data.get("feedback_history", [])
         self.execution_log: list = data.get("execution_log", [])
+        self.approved_at: Optional[str] = data.get("approved_at")
+        self.query_embedding: Optional[list] = data.get("query_embedding")
         self.thesis = rehydrate_thesis(data.get("thesis"))
         self.articles = rehydrate_articles(data.get("articles", []))
         self.retrieved_docs = rehydrate_docs(data.get("retrieved_docs", []))

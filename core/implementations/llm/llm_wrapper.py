@@ -94,8 +94,8 @@ class LLMWrapper(ILanguageModel):
                 raise
 
     def get_model_name(self) -> str:
-        """Return model identifier showing both primary and fallback."""
-        return f"{self._primary_llm.get_model_name()}[+{self._fallback_llm.get_model_name()}]"
+        """Return the primary model identifier (the billable model on the success path)."""
+        return self._primary_llm.get_model_name()
 
     def refine(
         self,

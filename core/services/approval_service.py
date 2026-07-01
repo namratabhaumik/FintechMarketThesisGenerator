@@ -1,9 +1,8 @@
 """Service for managing human approval of opportunity scoring recommendations."""
 
-import json
 import logging
 from datetime import datetime
-from typing import Dict, Literal
+from typing import Dict
 
 from core.models.thesis import StructuredThesis
 
@@ -11,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class ApprovalService:
-    """Handles human approval/rejection of opportunity score recommendations.
+    """Handles human approval of opportunity score recommendations.
 
     Records and logs human decisions for governance and feedback tracking.
     """
@@ -23,21 +22,21 @@ class ApprovalService:
     def record_approval(
         self,
         thesis: StructuredThesis,
-        decision: Literal["approve", "reject"],
+        decision: str = "approve",
         notes: str = "",
     ) -> Dict:
-        """Record human approval or rejection of a thesis recommendation.
+        """Record human approval of a thesis recommendation.
 
         Args:
-            thesis: StructuredThesis object that was approved/rejected.
-            decision: "approve" or "reject".
+            thesis: StructuredThesis object that was approved.
+            decision: Must be "approve".
             notes: Optional human notes explaining the decision.
 
         Returns:
             Dict with approval record including timestamp and decision.
         """
-        if decision not in ("approve", "reject"):
-            raise ValueError(f"Invalid decision: {decision}. Must be 'approve' or 'reject'.")
+        if decision != "approve":
+            raise ValueError(f"Invalid decision: {decision}. Must be 'approve'.")
 
         approval_record = {
             "timestamp": datetime.utcnow().isoformat(),
@@ -60,10 +59,7 @@ class ApprovalService:
         if notes:
             log_message += f", Notes={notes}"
 
-        if decision == "approve":
-            logger.info(f"✓ {log_message}")
-        else:
-            logger.warning(f"✗ {log_message}")
+        logger.info(f"✓ {log_message}")
 
         return approval_record
 

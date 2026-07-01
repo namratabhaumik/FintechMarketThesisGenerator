@@ -8,15 +8,13 @@ from typing import Annotated, Any, Dict, List, Optional, TypedDict
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.graph import END, START, StateGraph
+from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
 from core.agents.execution_tracker import ExecutionTracker  # noqa: F401 (kept for compatibility)
 from core.agents.thesis_tools import create_thesis_tools
-from core.interfaces.thesis_structurer import IThesisStructurer
 from core.models.thesis import StructuredThesis
-from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 from core.services.thesis_generator_service import ThesisGeneratorService
 
 logger = logging.getLogger(__name__)
@@ -50,20 +48,18 @@ class ThesisRefinementState(TypedDict):
 
 def _create_langfuse_handler() -> Optional[object]:
     """Create a Langfuse callback handler if credentials are configured."""
-    secret_key = os.getenv("LANGFUSE_SECRET_KEY")
-    public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
-    host = os.getenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
-
-    if not secret_key or not public_key:
-        logger.info("Langfuse credentials not set — tracing disabled")
+    if not (os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")):
+        logger.info("Langfuse credentials not set - tracing disabled")
         return None
 
+    from langfuse import Langfuse
     from langfuse.langchain import CallbackHandler
 
-    # v4+: credentials read from LANGFUSE_SECRET_KEY / LANGFUSE_HOST env vars automatically
-    handler = CallbackHandler(public_key=public_key)
+    # v4: the CallbackHandler only binds to a global Langfuse client singleton, so it
+    # must be initialized first. Langfuse() reads keys + LANGFUSE_BASE_URL from env.
+    Langfuse()
     logger.info("Langfuse tracing enabled")
-    return handler
+    return CallbackHandler()
 
 
 def _make_planner_node(llm_with_tools):
@@ -82,10 +78,10 @@ def _make_planner_node(llm_with_tools):
             f"RECOMMENDATION: {state['current_thesis'].recommendation}\n\n"
             f"USER FEEDBACK:\n{feedback_str}\n\n"
             f"Tool selection guide:\n"
-            f"- refine_thesis: content needs changing (missing trends, vague signals, "
-            f"too many risks, too broad, weak evidence)\n"
-            f"- score_opportunity: ONLY if user explicitly says score is wrong\n"
-            f"- structure_thesis: ONLY if themes/risks/signals need reorganising"
+            f"- refine_thesis: rewrite the thesis to address the feedback - missing "
+            f"trends, vague signals, too many risks, too broad, weak evidence, or a "
+            f"score the user disputes (strengthen signals / trim weak risks). The "
+            f"opportunity score is recomputed automatically from the revised content."
         )
 
         messages = state.get("messages", []) + [HumanMessage(content=prompt)]
@@ -106,22 +102,94 @@ def _make_planner_node(llm_with_tools):
     return planner_node
 
 
-def _make_assemble_node(scoring_service: OpportunityScoringService):
+def _resolve_components(tool_name: str, result: dict, current: StructuredThesis):
+    """Resolve thesis components for a recognized tool, or None if unknown.
+
+    refine_thesis takes its new content from the tool result; scoring itself
+    is handled downstream by _score_and_build.
+
+    Returns:
+        Tuple (key_themes, risks, investment_signals, sources, raw_output),
+        or None when the tool name is not recognized.
+    """
+    if tool_name == "refine_thesis":
+        return (
+            result.get("key_themes", current.key_themes),
+            result.get("risks", current.risks),
+            result.get("investment_signals", current.investment_signals),
+            result.get("sources", current.sources),
+            result.get("raw_output", current.raw_output),
+        )
+    return None
+
+
+def _score_and_build(components, current: StructuredThesis) -> StructuredThesis:
+    """Re-assemble a StructuredThesis after refinement.
+
+    Every number is FROZEN - score, recommendation, confidence and the
+    confidence as-of date all reflect the retrieved evidence and the Gold
+    snapshot, neither of which a refinement changes, so they are carried forward
+    from the current thesis. Only the refined content (narrative + displayed
+    tags) is swapped in; key risks follow the refined risk list.
+
+    components is (key_themes, risks, investment_signals, sources, raw_output).
+    """
+    key_themes, risks, investment_signals, sources, raw_output = components
+    return StructuredThesis(
+        key_themes=key_themes,
+        risks=risks,
+        investment_signals=investment_signals,
+        sources=sources,
+        raw_output=raw_output,
+        opportunity_score=current.opportunity_score,
+        confidence_level=current.confidence_level,
+        confidence_as_of=current.confidence_as_of,
+        recommendation=current.recommendation,
+        key_risk_factors=risks[:min(3, len(risks))],
+    )
+
+
+def _diff_thesis(current: StructuredThesis, new: StructuredThesis) -> List[str]:
+    """Short, plain lines describing what a refinement changed.
+
+    The numbers are frozen by design, so this surfaces the narrative rewrite and
+    the per-dimension added/removed tags, then states plainly that the numbers
+    held - so a reader who asked to "raise the score" can see why it did not move.
+    """
+    changes: List[str] = []
+    if (new.raw_output or "") != (current.raw_output or ""):
+        changes.append("Narrative rewritten")
+    for label, before, after in (
+        ("Themes", current.key_themes, new.key_themes),
+        ("Risks", current.risks, new.risks),
+        ("Signals", current.investment_signals, new.investment_signals),
+    ):
+        added = [t for t in after if t not in before]
+        removed = [t for t in before if t not in after]
+        parts = []
+        if added:
+            parts.append("+" + ", ".join(added))
+        if removed:
+            parts.append("-" + ", ".join(removed))
+        if parts:
+            changes.append(f"{label}: " + "  ".join(parts))
+    changes.append("Score, confidence, recommendation unchanged")
+    return changes
+
+
+def _make_assemble_node():
     """Return an assemble node that rebuilds StructuredThesis from tool output."""
 
     def assemble_node(state: ThesisRefinementState) -> dict:
-        # Find the last ToolMessage
-        tool_messages = [m for m in state["messages"] if isinstance(m, ToolMessage)]
-
         current = state["current_thesis"]
         execution_log = list(state.get("execution_log", []))
         new_refinement_count = state["refinement_count"] + 1
 
-        if not tool_messages:
-            logger.warning("assemble_node: no ToolMessage found, keeping current thesis")
+        def skip(tool_name: str, status: str) -> dict:
+            """Log a non-update and return state with the thesis unchanged."""
             execution_log.append({
-                "tool_name": "no_tool",
-                "status": "skipped",
+                "tool_name": tool_name,
+                "status": status,
                 "refinement_number": new_refinement_count,
             })
             return {
@@ -130,82 +198,42 @@ def _make_assemble_node(scoring_service: OpportunityScoringService):
                 "execution_log": execution_log,
             }
 
-        last_tool_msg = tool_messages[-1]
+        tool_messages = [m for m in state["messages"] if isinstance(m, ToolMessage)]
+        if not tool_messages:
+            last_message = state["messages"][-1] if state["messages"] else None
+            raw_content = getattr(last_message, "content", None)
+            logger.error(
+                "assemble_node: planner produced no tool call despite tool_choice='any' "
+                f"forcing one. Raw response: {raw_content!r}"
+            )
+            return skip("no_tool", "skipped")
+
         try:
-            result = json.loads(last_tool_msg.content)
+            result = json.loads(tool_messages[-1].content)
         except (json.JSONDecodeError, TypeError):
-            logger.error(f"assemble_node: could not parse tool result as JSON: {last_tool_msg.content[:200]}")
-            execution_log.append({
-                "tool_name": "unknown",
-                "status": "parse_error",
-                "refinement_number": new_refinement_count,
-            })
-            return {
-                "refinement_count": new_refinement_count,
-                "status": "refining",
-                "execution_log": execution_log,
-            }
+            logger.error(
+                f"assemble_node: could not parse tool result as JSON: "
+                f"{tool_messages[-1].content[:200]}"
+            )
+            return skip("unknown", "parse_error")
 
         tool_name = result.get("tool", "unknown")
-
-        if tool_name == "refine_thesis":
-            new_thesis = StructuredThesis(
-                key_themes=result.get("key_themes", current.key_themes),
-                risks=result.get("risks", current.risks),
-                investment_signals=result.get("investment_signals", current.investment_signals),
-                sources=result.get("sources", current.sources),
-                raw_output=result.get("raw_output", current.raw_output),
-                opportunity_score=result.get("opportunity_score", current.opportunity_score),
-                confidence_level=result.get("confidence_level", current.confidence_level),
-                recommendation=result.get("recommendation", current.recommendation),
-                key_risk_factors=result.get("key_risk_factors", current.key_risk_factors),
-            )
-
-        elif tool_name == "score_opportunity":
-            # Keep content, update score fields only
-            new_thesis = StructuredThesis(
-                key_themes=current.key_themes,
-                risks=current.risks,
-                investment_signals=current.investment_signals,
-                sources=current.sources,
-                raw_output=current.raw_output,
-                opportunity_score=result.get("opportunity_score", current.opportunity_score),
-                confidence_level=result.get("confidence_level", current.confidence_level),
-                recommendation=result.get("recommendation", current.recommendation),
-                key_risk_factors=result.get("key_risk_factors", current.key_risk_factors),
-            )
-
-        elif tool_name == "structure_thesis":
-            # Update structure, re-score with new components
-            key_themes = result.get("key_themes", current.key_themes)
-            risks = result.get("risks", current.risks)
-            investment_signals = result.get("investment_signals", current.investment_signals)
-            score_result = scoring_service.score_opportunity(
-                key_themes=key_themes,
-                risks=risks,
-                investment_signals=investment_signals,
-                sources=current.sources,
-            )
-            new_thesis = StructuredThesis(
-                key_themes=key_themes,
-                risks=risks,
-                investment_signals=investment_signals,
-                sources=current.sources,
-                raw_output=current.raw_output,
-                opportunity_score=score_result["score"],
-                confidence_level=score_result["confidence_level"],
-                recommendation=score_result["recommendation"],
-                key_risk_factors=score_result["key_risks"],
-            )
-
-        else:
+        components = _resolve_components(tool_name, result, current)
+        if components is None:
             logger.warning(f"assemble_node: unknown tool '{tool_name}', keeping current thesis")
-            new_thesis = current
+            return skip(tool_name, "skipped")
+
+        # Re-assemble the refined thesis. All numbers (score, recommendation,
+        # confidence, as-of) are frozen - carried forward from `current`, since
+        # they reflect the unchanged retrieved evidence and Gold snapshot. Only
+        # the narrative and displayed tags move.
+        new_thesis = _score_and_build(components, current)
 
         execution_log.append({
             "tool_name": tool_name,
             "status": "executed",
             "refinement_number": new_refinement_count,
+            "changes": _diff_thesis(current, new_thesis),
         })
 
         logger.info(
@@ -251,10 +279,10 @@ def _route_after_planner(state: ThesisRefinementState) -> str:
 
 def build_refinement_graph(
     thesis_service: ThesisGeneratorService,
-    structuring_service: IThesisStructurer,
-    scoring_service: OpportunityScoringService,
     gemini_api_key: str,
-    model_name: str = "gemini-2.0-flash",
+    model_name: str = "gemini-2.5-flash",
+    timeout: int = 120,
+    max_output_tokens: int = 4096,
 ) -> object:
     """Build and compile the LangGraph refinement graph with real tool calling.
 
@@ -265,27 +293,29 @@ def build_refinement_graph(
 
     Args:
         thesis_service: For LLM-driven thesis rewriting.
-        structuring_service: For keyword-based re-structuring.
-        scoring_service: For rule-based re-scoring.
         gemini_api_key: API key for the planner LLM.
         model_name: Gemini model to use for tool-call decisions.
+        timeout: Per-call timeout (seconds) for the planner LLM.
+        max_output_tokens: Per-call output token ceiling for the planner LLM.
 
     Returns:
         Tuple of (compiled graph, langfuse callback handler or None).
     """
-    tools = create_thesis_tools(thesis_service, structuring_service, scoring_service)
+    tools = create_thesis_tools(thesis_service)
 
     planner_llm = ChatGoogleGenerativeAI(
         model=model_name,
         temperature=0,
         google_api_key=gemini_api_key,
-    ).bind_tools(tools)
+        timeout=timeout,
+        max_output_tokens=max_output_tokens,
+    ).bind_tools(tools, tool_choice="any")
 
     graph = StateGraph(ThesisRefinementState)
 
     graph.add_node("planner", _make_planner_node(planner_llm))
     graph.add_node("tools", ToolNode(tools))
-    graph.add_node("assemble", _make_assemble_node(scoring_service))
+    graph.add_node("assemble", _make_assemble_node())
     graph.add_node("escalate", _escalate_node)
 
     graph.set_conditional_entry_point(

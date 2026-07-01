@@ -62,7 +62,7 @@ class TestServiceContainer:
         config.embedding.model_name = "test-embedding-model"
 
         config.vectorstore = Mock(spec=VectorStoreConfig)
-        config.vectorstore.provider = "faiss"
+        config.vectorstore.provider = "supabase"
         config.vectorstore.chunk_size = 800
         config.vectorstore.chunk_overlap = 100
 
@@ -82,7 +82,7 @@ class TestServiceContainer:
         """Test that container initializes with None (loads from env)."""
         with patch("dependency_injection.container.AppConfig.from_env") as mock_from_env:
             mock_from_env.return_value = Mock(spec=AppConfig)
-            container = ServiceContainer(None)
+            ServiceContainer(None)
             mock_from_env.assert_called_once()
 
     def test_container_stores_config(self, mock_config):
@@ -157,10 +157,10 @@ class TestServiceContainer:
 
     # === Vectorstore Provider Lookup ===
 
-    def test_get_vectorstore_provider_lookup_faiss(self, mock_config):
-        """Test that get_vectorstore looks up FAISS provider."""
-        # Just verify that faiss provider is recognized
-        assert mock_config.vectorstore.provider == "faiss"
+    def test_get_vectorstore_provider_lookup_supabase(self, mock_config):
+        """Test that get_vectorstore looks up the Supabase provider."""
+        # Just verify that the supabase provider is recognized
+        assert mock_config.vectorstore.provider == "supabase"
 
     def test_get_vectorstore_raises_error_for_unknown_provider(self, mock_config):
         """Test that get_vectorstore raises ValueError for unknown provider."""
@@ -185,7 +185,6 @@ class TestServiceContainer:
 
     def test_get_article_source_method_exists(self, mock_config):
         """Test that get_article_source method exists and returns IArticleSource."""
-        from core.interfaces.article_source import IArticleSource
 
         container = ServiceContainer(mock_config)
         assert hasattr(container, "get_article_source")
@@ -199,7 +198,6 @@ class TestServiceContainer:
 
     def test_get_thesis_service_creates_thesis_generator_service(self, mock_config):
         """Test that get_thesis_service returns ThesisGeneratorService."""
-        from core.services.thesis_generator_service import ThesisGeneratorService
 
         container = ServiceContainer(mock_config)
         assert hasattr(container, "get_thesis_service")

@@ -240,6 +240,8 @@ secrets.json
 *.sqlite
 *.sqlite3
 *.sql
+# but do track the committed schema DDL
+!sql/*.sql
 
 # Logs
 logs/
@@ -318,3 +320,10 @@ docker-compose.override.yml
 node_modules/
 package-lock.json
 yarn.lock
+
+# ============================================================================
+# Eval datasets
+# ============================================================================
+# Synthetic datasets and *.example.csv schema samples ARE committed.
+evals/data/*_real.csv
+evals/data/*_real.json

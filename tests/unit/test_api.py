@@ -103,12 +103,13 @@ class TestRowProxy:
             "id": "test2", "query": "q", "status": "pending",
             "thesis": None,
             "articles": [
-                {"title": "Test Article", "text": "Content here", "source": "techcrunch.com", "url": "https://example.com"},
+                {"title": "Test Article", "text": "Content here", "source": "techcrunch.com", "url": "https://example.com", "published_at": "2026-01-01T00:00:00+00:00"},
             ],
         }
         proxy = _RowProxy(row)
         assert len(proxy.articles) == 1
         assert proxy.articles[0].title == "Test Article"
+        assert proxy.articles[0].published_at.year == 2026
 
     def test_null_thesis_stays_none(self):
         """Test that null thesis in DB stays None."""

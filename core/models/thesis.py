@@ -1,6 +1,7 @@
 """Thesis data models."""
 
 from dataclasses import dataclass, field
+from datetime import date
 from typing import List, Optional
 
 
@@ -14,5 +15,7 @@ class StructuredThesis:
     raw_output: Optional[str] = None
     opportunity_score: float = 0.0
     confidence_level: float = 0.0
+    # Latest Gold week the confidence was computed against (data freshness).
+    confidence_as_of: Optional[date] = None
     recommendation: str = ""
     key_risk_factors: List[str] = field(default_factory=list)

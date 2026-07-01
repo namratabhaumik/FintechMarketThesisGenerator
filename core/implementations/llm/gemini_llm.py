@@ -8,8 +8,8 @@ from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage
 
 from config.settings import LLMConfig
-from core.agents.tool_registry import get_tools_description
 from core.interfaces.llm import ILanguageModel
+from core.utils.text_utils import wrap_untrusted
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,9 @@ class GeminiLanguageModel(ILanguageModel):
         self._llm = ChatGoogleGenerativeAI(
             model=config.model_name,
             temperature=config.temperature,
-            google_api_key=config.api_key
+            google_api_key=config.api_key,
+            timeout=config.timeout,
+            max_output_tokens=config.max_output_tokens,
         )
 
     def summarize(self, documents: List[Document]) -> str:
@@ -52,7 +54,7 @@ class GeminiLanguageModel(ILanguageModel):
 
             prompt = f"""Provide a concise summary of the following documents:
 
-{doc_content}
+{wrap_untrusted(doc_content, label="documents")}
 
 Summary:"""
 
@@ -89,33 +91,23 @@ Summary:"""
         # Concatenate document content for context
         doc_content = "\n\n".join(doc.page_content for doc in documents)
 
-        # Build the refinement prompt with tool constraints to prevent hallucination
-        tools_description = get_tools_description()
-        prompt = f"""You are a fintech market analyst. The user has reviewed an investment thesis
-and provided specific feedback. Your task is to revise the thesis to directly address their concerns.
+        # the LLM writes the narrative; no tool text is injected here
+        prompt = f"""You are a fintech market analyst. Revise the investment thesis below to
+address the reader's feedback, staying grounded in the source documents.
 
-AVAILABLE TOOLS (only mention these):
-{tools_description}
+Write a clear, concise narrative analysis in prose. Do NOT use headings, bullet
+lists, JSON, just paragraphs.
 
-IMPORTANT: Do NOT mention, reference, or claim to use any tools or functions other than those listed above.
-Do NOT invent or hallucinate tool names. Only use the available tools listed.
-
-ORIGINAL THESIS:
+CURRENT THESIS:
 {current_thesis_text}
 
-USER FEEDBACK (things to improve):
+READER FEEDBACK (address each point):
 {feedback_str}
 
 SOURCE DOCUMENTS (for context):
-{doc_content}
+{wrap_untrusted(doc_content, label="documents")}
 
-Please produce a revised thesis that:
-1. Directly addresses the user's feedback points
-2. Maintains the same structured format as the original
-3. Uses evidence from the source documents
-4. Provides actionable insights
-
-Refined Thesis:"""
+Revised thesis:"""
 
         try:
             logger.info("Refining thesis with Gemini based on user feedback")

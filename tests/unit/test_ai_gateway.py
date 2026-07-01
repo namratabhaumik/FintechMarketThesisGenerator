@@ -2,7 +2,7 @@
 
 import pytest
 from datetime import datetime
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import Mock
 from langchain_core.documents import Document
 
 from core.implementations.llm.cache_manager import CacheManager
@@ -103,9 +103,9 @@ class TestCostTracker:
         """Test cost calculation for Gemini."""
         tracker = CostTracker()
 
-        # Gemini pricing: $0.075 per 1M input, $0.30 per 1M output
-        cost = tracker.calculate_cost("gemini", "gemini-2.0-flash", 1_000_000, 1_000_000)
-        assert cost == pytest.approx(0.375, rel=0.01)  # 0.075 + 0.30
+        # Gemini 2.5 Flash pricing: $0.30 per 1M input, $2.50 per 1M output
+        cost = tracker.calculate_cost("gemini", "gemini-2.5-flash", 1_000_000, 1_000_000)
+        assert cost == pytest.approx(2.80, rel=0.01)  # 0.30 + 2.50
 
     def test_cost_calculation_local(self):
         """Test cost calculation for local model (free)."""
@@ -120,7 +120,7 @@ class TestCostTracker:
 
         cost = tracker.record_call(
             provider="gemini",
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             input_tokens=1000,
             output_tokens=500,
             latency_ms=1500.0,
@@ -155,7 +155,7 @@ class TestCostTracker:
         # Add a call for today
         tracker.record_call(
             provider="gemini",
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             input_tokens=1_000_000,
             output_tokens=1_000_000,
             latency_ms=1000.0,

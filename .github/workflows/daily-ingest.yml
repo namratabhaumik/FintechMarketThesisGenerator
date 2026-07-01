@@ -1,0 +1,86 @@
+name: Daily Ingest
+
+# Runs the data pipeline once a day so the corpus accumulates a real history on
+# the published_at axis. Stages run in order and fail-fast: build_gold only
+# runs if build_silver succeeded, so trend coverage never goes stale silently.
+#
+# NOTE: the `schedule` trigger only fires from the DEFAULT branch (master). This
+# file must be merged to master before the daily run starts. Use the manual
+# "Run workflow" button (workflow_dispatch) to test it from any branch first.
+
+on:
+  schedule:
+    # 06:00 UTC daily.
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}
+
+# Don't let a slow run overlap the next day's run.
+concurrency:
+  group: daily-ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # --- Non-secret config (mirror local .env) ---
+      LLM_PROVIDER: local                 # ingestion never summarizes; no LLM key needed
+      EMBEDDING_PROVIDER: fastembed       # ONNX, runs on the runner CPU, no token
+      EMBEDDING_MODEL: jinaai/jina-embeddings-v2-small-en
+      VECTORSTORE_PROVIDER: supabase
+      CLASSIFIER_PROVIDER: ollama
+      CLASSIFIER_MODEL: gpt-oss:20b       # Ollama Cloud model (qwen2.5:7b isn't on cloud)
+      OLLAMA_BASE_URL: https://ollama.com # Ollama Cloud OpenAI-compatible endpoint
+      # --- Secrets ---
+      OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # The DI container imports the internal submodule, so it must be present.
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.FINTHESIS_APP_ID }}
+          private-key: ${{ secrets.FINTHESIS_APP_PRIVATE_KEY }}
+          repositories: ${{ secrets.FINTHESIS_INTERNAL_REPO }}
+
+      - name: Configure git to use token for private submodule
+        run: |
+          git config --global url."https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/".insteadOf "git@github.com:"
+
+      - name: Update private submodule
+        run: |
+          git submodule init
+          git submodule update --remote --recursive
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.14'
+
+      - name: Install dependencies
+        run: uv sync
+
+      # Stages run in order. Each is a separate step, so a failure stops the job
+      # and the later stages don't run.
+      - name: Bronze - land raw RSS entries
+        run: uv run python -m scripts.ingest_bronze
+
+      - name: Silver - classify, scrape, embed
+        run: uv run python -m scripts.build_silver
+
+      - name: Gold - recompute weekly trend metrics
+        run: uv run python -m scripts.build_gold

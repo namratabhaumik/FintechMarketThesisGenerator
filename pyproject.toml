@@ -11,14 +11,13 @@ dependencies = [
     "langchain-google-genai>=2.1.12",
     "langgraph==1.0.1",
     # Observability
-    "langfuse==2.60.0",
-    # Vector Store
-    "faiss-cpu==1.12.0",
+    "langfuse>=4,<5",
     # Embeddings
     "fastembed>=0.4.0",
+    "huggingface_hub==1.15.0",
     # Web Scraping
     "beautifulsoup4==4.12.3",
-    "requests==2.32.5",
+    "requests==2.34.2",
     "feedparser==6.0.12",
     # API
     "fastapi==0.135.2",
@@ -39,8 +38,7 @@ dev = [
     "mypy==1.7.1",
     "types-requests==2.32.4.20260107",
     "types-beautifulsoup4==4.12.0.20250516",
-    "ruff==0.1.7",
-    "black==23.12.1",
+    "ruff==0.15.17",
     "pre-commit==3.6.0",
 ]
 
@@ -63,7 +61,4 @@ ignore_missing_imports = true
 [tool.ruff]
 line-length = 88
 target-version = "py314"
-
-[tool.black]
-line-length = 88
-target-version = ["py314"]
+exclude = ["finthesis_internal"]
