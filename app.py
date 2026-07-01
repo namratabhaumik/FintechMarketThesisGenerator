@@ -175,7 +175,7 @@ def _load_job_into_session(job, job_id: str) -> None:
         "refinement_supported": True,
     }
     st.session_state["execution_log"] = job.execution_log
-    st.session_state["refinement_history"] = []
+    st.session_state["refinement_history"] = job.thesis_history
     st.session_state["thesis_count"] = 1
     st.session_state["approved_at"] = job.approved_at
     st.session_state["related_theses"] = _compute_related(job.query_embedding, job_id)
@@ -284,7 +284,10 @@ def show_approved_state(refinement_supported: bool):
     history = st.session_state.get("refinement_history", [])
     if history and refinement_supported:
         st.divider()
-        show_history(history)
+        feedback_history = st.session_state.get("refinement_state", {}).get(
+            "feedback_history", []
+        )
+        show_history(history, feedback_history)
 
 
 def show_escalation_message():
@@ -331,11 +334,13 @@ def show_refinement_controls(refinement_count: int) -> bool:
     return False
 
 
-def show_history(history: list):
-    """Display version history in expander.
+def show_history(history: list, feedback_history: list):
+    """Display version history, annotated with the feedback that refined each.
 
     Args:
-        history: List of previous StructuredThesis objects.
+        history: Previous StructuredThesis objects, oldest first.
+        feedback_history: Feedback selected each round; feedback_history[i] is
+            the feedback applied to history[i] to produce the next version.
     """
     with st.expander(f"📜 Previous versions ({len(history)})"):
         for i, prev_thesis in enumerate(history):
@@ -344,6 +349,13 @@ def show_history(history: list):
                 f"Score: {prev_thesis.opportunity_score}/5 | "
                 f"Recommendation: {prev_thesis.recommendation}"
             )
+            # Pair from the end: the most recent version goes with the most
+            # recent feedback, so a length gap (feedback_history may carry more
+            # entries than history) can't shift annotations onto wrong versions.
+            j = i + (len(feedback_history) - len(history))
+            feedback = feedback_history[j] if 0 <= j < len(feedback_history) else []
+            if feedback:
+                st.caption("↳ Refined with: " + ", ".join(feedback))
 
 
 def show_related_theses(related: list) -> None:
@@ -439,7 +451,7 @@ def display_refinement_panel():
     history = st.session_state.get("refinement_history", [])
     if history and refinement_supported:
         st.divider()
-        show_history(history)
+        show_history(history, ref_state.get("feedback_history", []))
 
 
 def _run_refinement_step(selected_feedback: list):
@@ -519,6 +531,7 @@ def _run_refinement_step(selected_feedback: list):
     _checkpoint(
         st.session_state.get("job_id"),
         thesis=refined_thesis,
+        thesis_history=st.session_state.get("refinement_history", []),
         refinement_count=result_state["refinement_count"],
         refinement_status=result_state["status"],
         feedback_history=result_state["feedback_history"],

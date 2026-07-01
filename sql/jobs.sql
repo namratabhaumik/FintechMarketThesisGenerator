@@ -14,6 +14,10 @@ create table if not exists jobs (
     feedback_history    jsonb not null default '[]'::jsonb,
     execution_log       jsonb not null default '[]'::jsonb,
     retrieved_docs      jsonb not null default '[]'::jsonb,
+    -- Prior thesis versions (one per completed refinement round), so the UI's
+    -- "Previous versions" history survives a refresh/resume, paired with
+    -- feedback_history. Serialized StructuredThesis dicts, oldest first.
+    thesis_history      jsonb not null default '[]'::jsonb,
     -- Approval timestamp (episodic memory): NULL = not approved, else the
     -- time a human approved the thesis.
     approved_at         timestamptz,
@@ -31,5 +35,6 @@ alter table jobs enable row level security;
 -- Migration for an existing table (created before approval/recall columns existed):
 --   alter table jobs add column if not exists approved_at timestamptz;
 --   alter table jobs add column if not exists query_embedding jsonb;
+--   alter table jobs add column if not exists thesis_history jsonb not null default '[]'::jsonb;
 -- Migration for a table created with the earlier allow-all anon policy:
 --   drop policy if exists "Allow all access via anon key" on jobs;

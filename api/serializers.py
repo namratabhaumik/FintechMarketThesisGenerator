@@ -142,6 +142,8 @@ def serialise_job_fields(**fields) -> Dict[str, Any]:
     for key, value in fields.items():
         if key == "thesis" and value is not None:
             payload[key] = serialise_thesis(value)
+        elif key == "thesis_history":
+            payload[key] = [serialise_thesis(t) for t in value]
         elif key == "articles":
             payload[key] = serialise_articles(value)
         elif key == "status" and isinstance(value, JobStatus):
