@@ -47,10 +47,14 @@ class TestKeywordCountScoringStrategy:
         )
         assert result["Cat"] == 3
 
-    def test_partial_keyword_match_counts(self, strategy):
-        """Substring matching: 'pay' matches inside 'payment'."""
+    def test_partial_keyword_does_not_match(self, strategy):
+        """Word-boundary matching: 'pay' does NOT match inside 'payment'.
+
+        This is the guard for the substring-bleed fix (e.g. 'ai' matching
+        'email', 'ban' matching 'bank') - keywords match whole words only.
+        """
         result = strategy.score("payment processing", {"Cat": ["pay"]})
-        assert result["Cat"] == 1
+        assert result["Cat"] == 0
 
     # === Multiple categories ===
 
