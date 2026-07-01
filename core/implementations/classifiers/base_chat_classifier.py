@@ -6,6 +6,7 @@ Ollama, ...).
 """
 
 import logging
+import re
 from abc import abstractmethod
 from typing import List
 
@@ -13,6 +14,10 @@ from core.interfaces.relevance_classifier import IRelevanceClassifier
 from core.utils.text_utils import wrap_untrusted
 
 logger = logging.getLogger(__name__)
+
+# for some reasoning models who inline their chain-of-thought as a <think>...</think>
+# block in the reply. Strip it so the YES/NO check sees only the final answer.
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 # The instruction we send to the chat model. It pins down what counts as
 # fintech and demands a one-word YES/NO answer.
@@ -46,9 +51,11 @@ class BaseChatClassifier(IRelevanceClassifier):
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": article_block},
         ]
-        # Ask the backend, then normalize: None --> "", trim whitespace,
-        # uppercase, so the YES/NO check is robust to spacing and case.
-        answer = (self._chat(messages) or "").strip().upper()
+        # Ask the backend, then normalize: None --> "", drop any inline
+        # <think> block, trim whitespace, uppercase, so the YES/NO check is
+        # robust to reasoning models, spacing, and case.
+        reply = _THINK_BLOCK.sub("", self._chat(messages) or "")
+        answer = reply.strip().upper()
         # Treat only a leading "YES" as fintech. Anything else (including a
         # failed/empty reply) --> not relevant.
         is_fintech = answer.startswith("YES")

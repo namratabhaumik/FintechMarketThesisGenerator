@@ -222,6 +222,9 @@ class AppConfig:
         # Ollama (no token); HF_TOKEN is required only for the huggingface provider.
         classifier_provider = os.getenv("CLASSIFIER_PROVIDER", "ollama").lower()
         hf_token = os.getenv("HF_TOKEN", "")
+        # Bearer token for a hosted Ollama endpoint (e.g. Ollama Cloud). Empty
+        # for a local server, which needs no auth.
+        ollama_api_key = os.getenv("OLLAMA_API_KEY", "")
         ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         # Default model differs by backend (Ollama tag vs HF repo id).
         default_model = (
@@ -278,8 +281,9 @@ class AppConfig:
             ),
             classifier=ClassifierConfig(
                 provider=classifier_provider,
+                # HF uses the HF token; Ollama uses the cloud bearer token.
                 model=classifier_model,
-                api_key=hf_token,
+                api_key=(hf_token if classifier_provider == "huggingface" else ollama_api_key),
                 base_url=ollama_base_url,
             ),
             vectorstore=VectorStoreConfig(provider=vs_provider),

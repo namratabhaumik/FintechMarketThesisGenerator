@@ -69,6 +69,34 @@ def test_base_url_trailing_slash_is_normalized(monkeypatch):
     assert url == "http://localhost:11434/v1/chat/completions"
 
 
+def test_sends_bearer_header_when_api_key_set(monkeypatch):
+    """A hosted endpoint (e.g. Ollama Cloud) gets an Authorization header."""
+    mock_post = _patch_post(monkeypatch, content="YES")
+    classifier = OllamaFintechClassifier(
+        ClassifierConfig(
+            provider="ollama", model="gpt-oss:20b",
+            api_key="sk-test", base_url="https://ollama.com",
+        )
+    )
+    classifier.is_relevant("x", "y")
+    assert mock_post.call_args.kwargs["headers"] == {"Authorization": "Bearer sk-test"}
+
+
+def test_no_auth_header_for_local_server(monkeypatch):
+    """A local server (no api_key) sends no Authorization header."""
+    mock_post = _patch_post(monkeypatch, content="YES")
+    classifier = OllamaFintechClassifier(ClassifierConfig(provider="ollama", model="qwen2.5:7b"))
+    classifier.is_relevant("x", "y")
+    assert mock_post.call_args.kwargs["headers"] == {}
+
+
+def test_strips_reasoning_block_before_parsing(monkeypatch):
+    """An inline <think> block is stripped so the YES/NO check sees the answer."""
+    _patch_post(monkeypatch, content="<think>Stripe is payments, so fintech.</think>YES")
+    classifier = OllamaFintechClassifier(ClassifierConfig(provider="ollama", model="deepseek-r1"))
+    assert classifier.is_relevant("Stripe payments", "digital payments") is True
+
+
 def test_raises_when_ollama_unreachable(monkeypatch):
     """If Ollama is down the error propagates; Silver skips and retries 
     rather than freezing a guessed verdict."""

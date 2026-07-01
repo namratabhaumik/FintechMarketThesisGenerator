@@ -231,6 +231,20 @@ class TestAppConfigFromEnv:
         assert config.classifier.provider == "huggingface"
         assert config.classifier.api_key == "hf_secret_123"
 
+    def test_ollama_api_key_loaded_into_classifier_config(self):
+        """OLLAMA_API_KEY is loaded as the ollama classifier's bearer token."""
+        os.environ["LLM_PROVIDER"] = "local"
+        os.environ["EMBEDDING_PROVIDER"] = "fastembed"
+        os.environ["EMBEDDING_MODEL"] = "jinaai/jina-embeddings-v2-small-en"
+        os.environ["CLASSIFIER_PROVIDER"] = "ollama"
+        os.environ["OLLAMA_API_KEY"] = "ollama_cloud_key"
+        os.environ.pop("HF_TOKEN", None)
+
+        config = AppConfig.from_env()
+
+        assert config.classifier.provider == "ollama"
+        assert config.classifier.api_key == "ollama_cloud_key"
+
     def test_multiple_missing_vars_in_error_message(self):
         """Test that all missing vars are listed in error message."""
         os.environ.pop("LLM_PROVIDER", None)
