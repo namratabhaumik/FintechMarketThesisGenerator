@@ -7,6 +7,7 @@ import requests
 from bs4 import BeautifulSoup, Tag
 
 from config.settings import ScraperConfig
+from core.exceptions import TransientScrapeError
 from core.interfaces.scraper import IWebScraper
 
 logger = logging.getLogger(__name__)
@@ -112,8 +113,19 @@ class BeautifulSoupScraper(IWebScraper):
             logger.debug(f"Successfully scraped {len(blocks)} text blocks from {url}")
             return text
 
+        except (requests.Timeout, requests.ConnectionError) as e:
+            # Network-level hiccup - the page may well succeed next run.
+            raise TransientScrapeError(f"{url}: {e}") from e
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status == 429 or (status is not None and 500 <= status < 600):
+                # Rate-limited or server error - transient, retry later.
+                raise TransientScrapeError(f"{url}: {e}") from e
+            # 4xx (404/403/410...): the page won't appear on retry - terminal.
+            logger.warning(f"Failed to scrape {url}: {e}")
+            return ""
         except Exception as e:
-            # Any failure (network error, bad status, parse issue) --> log and
-            # return "" so the caller can fall back to the RSS description.
+            # Parse/other error on a fetched page - retrying won't help. Return
+            # "" so the caller quarantines rather than retrying forever.
             logger.warning(f"Failed to scrape {url}: {e}")
             return ""

@@ -22,7 +22,16 @@ Each thesis includes:
 **Medallion pipeline (Bronze → Silver → Gold).** Ingestion is a three-stage medallion, run daily so the corpus accumulates real history:
 
 - **Bronze** lands raw RSS entries verbatim into `articles_raw`, deduped by URL - no classifying, scraping, or embedding. It just accumulates articles on the published-at axis (RSS only carries recent items, so depth comes from polling forward over time).
-- **Silver** does all the enrichment: it classifies each Bronze article's fintech relevance (LLM), and for the accepted ones scrapes the full text, tags it (themes / risks / signals, matched on word boundaries against a fintech taxonomy), and embeds it into Supabase pgvector via FastEmbed (ONNX). Only the fintech-accepted subset is scraped and embedded; each verdict is frozen point-in-time.
+- **Silver** does all the enrichment: it classifies each Bronze article's fintech relevance (LLM), and for the accepted ones scrapes the full text, tags it (themes / risks / signals, matched on word boundaries against a fintech taxonomy), and embeds it (the article **title + full scraped body**, split into chunks; the thin RSS summary is only used for classification) into Supabase pgvector via FastEmbed (ONNX). Only the fintech-accepted subset is scraped and embedded; each verdict is frozen point-in-time. Every article ends in one bucket:
+
+  ```
+  classify ─ error ──────────────▶ errored      (retry next run - classifier failure)
+           ├ not fintech ────────▶ verdict NO   (frozen)
+           └ fintech ─ scrape ─── fail ──▶ errored      (retry next run - scraper failure)
+                                ├ fail ──▶ quarantined  (dead-letter, no retry)
+                                └ success ─▶ verdict YES + document (frozen)
+  ```
+
 - **Gold** aggregates the accepted corpus into per-(week, category) trend metrics across all three tag dimensions - coverage volume over time, the trend signal.
 
 **Retrieval → generation.** A query runs MMR retrieval over the Silver embeddings and passes the selected chunks to Gemini for summarization and structuring. The opportunity **score** is derived from the Silver tag strengths; the **confidence** is grounded in Gold trend coverage for the thesis's categories; and the **recommendation** (Pursue / Investigate / Skip) follows from the score via fixed thresholds.

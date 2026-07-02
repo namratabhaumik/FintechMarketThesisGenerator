@@ -7,7 +7,7 @@ on exactly once (a verdict is recorded), so later runs never re-classify it.
 import logging
 from typing import Dict, List, NamedTuple
 
-from core.exceptions import ClassifierOutageError
+from core.exceptions import ClassifierOutageError, TransientScrapeError
 from core.interfaces.article_content_repository import IArticleContentRepository
 from core.interfaces.article_repository import IArticleRepository
 from core.interfaces.quarantine_repository import IQuarantineRepository
@@ -52,7 +52,8 @@ class _Batch(NamedTuple):
     verdicts: list       # One SilverVerdict per decided article (accepted or rejected).
     quarantined: list    # QuarantineRecords for scrape/validation failures.
     new_content: list    # Newly scraped Articles to persist to article_content.
-    errored: list        # URLs whose classification threw; left pending for a retry.
+    errored: list        # URLs left pending for a retry: a classifier error or a
+                         # transient (retryable) scrape failure.
 
 
 class SilverService:
@@ -161,9 +162,17 @@ class SilverService:
             # real YES -> enrich + embed
             article = persisted.get(raw.url)
             if article is None:
-                article = self._enrich(raw, batch.quarantined)
+                try:
+                    article = self._enrich(raw, batch.quarantined)
+                except TransientScrapeError as e:
+                    # Retryable scrape failure (timeout / 5xx / 429): leave the
+                    # URL pending like a classifier error so a later run retries
+                    # it. Not counted toward the classifier-outage breaker.
+                    logger.warning(f"Scrape deferred for {raw.url}, left pending: {e}")
+                    batch.errored.append(raw.url)
+                    continue
                 if article is None:
-                    continue  # scrape failed or invalid -> quarantined
+                    continue  # terminal scrape failure or invalid -> quarantined
                 batch.new_content.append(article)
 
             # Tag the full text on all three dimensions once, then reuse the
@@ -221,7 +230,7 @@ class SilverService:
             f"({fintech} fintech, {classified - fintech} rejected), "
             f"{len(batch.new_content)} scraped, "
             f"{len(batch.quarantined)} quarantined (scrape failed), "
-            f"{len(batch.errored)} errored (classify failed)"
+            f"{len(batch.errored)} errored (classify fail / scrape retry)"
         )
         return fintech
 

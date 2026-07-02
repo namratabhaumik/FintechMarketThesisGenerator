@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from core.exceptions import ClassifierOutageError
+from core.exceptions import ClassifierOutageError, TransientScrapeError
 from core.interfaces.relevance_classifier import IRelevanceClassifier
 from core.interfaces.scraper import IWebScraper
 from core.models.article import Article
@@ -118,6 +118,13 @@ class _BoomScraper(IWebScraper):
 
     def scrape(self, url: str) -> str:
         raise AssertionError("scrape must not be called when text is persisted")
+
+
+class _TransientScraper(IWebScraper):
+    """Mimics a retryable scrape failure (timeout / 5xx / 429)."""
+
+    def scrape(self, url: str) -> str:
+        raise TransientScrapeError(f"{url}: simulated timeout")
 
 
 class _FakeVectorStore:
@@ -250,6 +257,24 @@ def test_quarantined_urls_are_skipped():
     assert embedded == 0
     assert vs.built == []
     assert quarantine_repo.added == []  # not reprocessed
+
+
+def test_transient_scrape_failure_is_deferred_not_quarantined():
+    # A fintech article whose scrape fails transiently is left pending (no
+    # verdict, not quarantined), so a later run retries it.
+    raw = [_raw("Fintech A", "https://x/1")]
+    silver_repo = _FakeSilverRepo()
+    quarantine_repo = _FakeQuarantineRepo()
+    vs = _FakeVectorStore()
+
+    embedded = _service(
+        raw, silver_repo, vs, quarantine_repo, scraper=_TransientScraper()
+    ).build()
+
+    assert embedded == 0
+    assert silver_repo.recorded == []      # no verdict -> stays pending for retry
+    assert quarantine_repo.added == []     # NOT quarantined (that's for terminal)
+    assert vs.built == []
 
 
 def test_classifier_error_skips_without_verdict():
