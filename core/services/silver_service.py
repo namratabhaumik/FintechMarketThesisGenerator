@@ -7,6 +7,7 @@ on exactly once (a verdict is recorded), so later runs never re-classify it.
 import logging
 from typing import Dict, List, NamedTuple
 
+from core.exceptions import ClassifierOutageError, TransientScrapeError
 from core.interfaces.article_content_repository import IArticleContentRepository
 from core.interfaces.article_repository import IArticleRepository
 from core.interfaces.quarantine_repository import IQuarantineRepository
@@ -31,6 +32,11 @@ logger = logging.getLogger(__name__)
 # Upper bound on stored article text (~2000 words).
 MAX_ARTICLE_CHARS = 12_000
 
+# Circuit breaker: this many classifier failures in a row (a single success
+# resets the count) means the classifier is down, not a flaky article - so the
+# Silver build aborts rather than hammering a dead classifier through the batch.
+OUTAGE_ABORT_AFTER = 5
+
 
 class _Batch(NamedTuple):
     """Work collected from the articles.
@@ -46,7 +52,8 @@ class _Batch(NamedTuple):
     verdicts: list       # One SilverVerdict per decided article (accepted or rejected).
     quarantined: list    # QuarantineRecords for scrape/validation failures.
     new_content: list    # Newly scraped Articles to persist to article_content.
-    errored: list        # URLs whose classification threw; left pending for a retry.
+    errored: list        # URLs left pending for a retry: a classifier error or a
+                         # transient (retryable) scrape failure.
 
 
 class SilverService:
@@ -122,6 +129,7 @@ class SilverService:
         batch = _Batch(
             documents=[], verdicts=[], quarantined=[], new_content=[], errored=[]
         )
+        consecutive_errors = 0  # reset by any success; trips the outage breaker
         for raw in pending:
             try:
                 relevant = self._classifier.is_relevant(raw.title, raw.summary)
@@ -134,8 +142,19 @@ class SilverService:
                     f"later run: {e}"
                 )
                 batch.errored.append(raw.url)
+                # Outage circuit breaker: N failures in a row (no success between)
+                # means the classifier is down, not a flaky article. Abort now to
+                # bound wasted cloud calls and fail loud; untouched rows stay
+                # pending for the next run.
+                consecutive_errors += 1
+                if consecutive_errors >= OUTAGE_ABORT_AFTER:
+                    raise ClassifierOutageError(
+                        f"Classifier failed on {consecutive_errors} articles in a "
+                        f"row; aborting run. Last error: {e}"
+                    )
                 continue
 
+            consecutive_errors = 0  # a success breaks the failure streak
             if not relevant:  # real NO -> frozen rejected verdict
                 batch.verdicts.append(SilverVerdict(url=raw.url, fintech_relevant=False))
                 continue
@@ -143,9 +162,17 @@ class SilverService:
             # real YES -> enrich + embed
             article = persisted.get(raw.url)
             if article is None:
-                article = self._enrich(raw, batch.quarantined)
+                try:
+                    article = self._enrich(raw, batch.quarantined)
+                except TransientScrapeError as e:
+                    # Retryable scrape failure (timeout / 5xx / 429): leave the
+                    # URL pending like a classifier error so a later run retries
+                    # it. Not counted toward the classifier-outage breaker.
+                    logger.warning(f"Scrape deferred for {raw.url}, left pending: {e}")
+                    batch.errored.append(raw.url)
+                    continue
                 if article is None:
-                    continue  # scrape failed or invalid -> quarantined
+                    continue  # terminal scrape failure or invalid -> quarantined
                 batch.new_content.append(article)
 
             # Tag the full text on all three dimensions once, then reuse the
@@ -197,9 +224,13 @@ class SilverService:
         )
 
         fintech = len(batch.documents)
+        classified = len(batch.verdicts)  # got a fintech / not-fintech verdict
         logger.info(
-            f"Silver: {fintech} fintech of {total_pending} new articles processed; "
-            f"{len(batch.new_content)} newly scraped, {len(batch.quarantined)} quarantined"
+            f"Silver summary: {total_pending} new articles -> {classified} classified "
+            f"({fintech} fintech, {classified - fintech} rejected), "
+            f"{len(batch.new_content)} scraped, "
+            f"{len(batch.quarantined)} quarantined (scrape failed), "
+            f"{len(batch.errored)} errored (classify fail / scrape retry)"
         )
         return fintech
 

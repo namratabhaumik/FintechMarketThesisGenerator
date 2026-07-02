@@ -1,11 +1,13 @@
 """BeautifulSoup-based web scraper implementation."""
 
 import logging
+import re
 
 import requests
 from bs4 import BeautifulSoup, Tag
 
 from config.settings import ScraperConfig
+from core.exceptions import TransientScrapeError
 from core.interfaces.scraper import IWebScraper
 
 logger = logging.getLogger(__name__)
@@ -93,12 +95,15 @@ class BeautifulSoupScraper(IWebScraper):
             # blocks: the cleaned text of each body element inside root. We walk
             # paragraphs, subheadings, list items, and quotes (all article
             # content) and keep each element's trimmed text, dropping anything
-            # 1 char or shorter (stray markup, bullets).
-            blocks = [
-                el.get_text(strip=True)
-                for el in root.find_all(["p", "h2", "h3", "li", "blockquote"])
-                if len(el.get_text(strip=True)) > 1
-            ]
+            # 1 char or shorter (stray markup, bullets). separator=" " puts a
+            # space between adjacent inline elements (links, spans) so their text
+            # isn't fused ("Digital Bank" + "Grasshopper" -> "Digital
+            # BankGrasshopper"); \s+ then collapses any doubles it introduces.
+            blocks = []
+            for el in root.find_all(["p", "h2", "h3", "li", "blockquote"]):
+                block = re.sub(r"\s+", " ", el.get_text(separator=" ", strip=True)).strip()
+                if len(block) > 1:
+                    blocks.append(block)
 
             # Join with newlines, not spaces: downstream clean_article_text
             # strips boilerplate line-by-line (its patterns anchor on \n). A
@@ -108,8 +113,19 @@ class BeautifulSoupScraper(IWebScraper):
             logger.debug(f"Successfully scraped {len(blocks)} text blocks from {url}")
             return text
 
+        except (requests.Timeout, requests.ConnectionError) as e:
+            # Network-level hiccup - the page may well succeed next run.
+            raise TransientScrapeError(f"{url}: {e}") from e
+        except requests.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status == 429 or (status is not None and 500 <= status < 600):
+                # Rate-limited or server error - transient, retry later.
+                raise TransientScrapeError(f"{url}: {e}") from e
+            # 4xx (404/403/410...): the page won't appear on retry - terminal.
+            logger.warning(f"Failed to scrape {url}: {e}")
+            return ""
         except Exception as e:
-            # Any failure (network error, bad status, parse issue) --> log and
-            # return "" so the caller can fall back to the RSS description.
+            # Parse/other error on a fetched page - retrying won't help. Return
+            # "" so the caller quarantines rather than retrying forever.
             logger.warning(f"Failed to scrape {url}: {e}")
             return ""

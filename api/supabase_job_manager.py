@@ -116,5 +116,9 @@ class _RowProxy:
         self.approved_at: Optional[str] = data.get("approved_at")
         self.query_embedding: Optional[list] = data.get("query_embedding")
         self.thesis = rehydrate_thesis(data.get("thesis"))
+        self.thesis_history = [
+            t for t in (rehydrate_thesis(x) for x in data.get("thesis_history") or [])
+            if t is not None
+        ]
         self.articles = rehydrate_articles(data.get("articles", []))
         self.retrieved_docs = rehydrate_docs(data.get("retrieved_docs", []))
