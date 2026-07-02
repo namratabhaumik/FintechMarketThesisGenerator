@@ -10,9 +10,12 @@ to the document/chunk vector space.
 Recall is done in Python (sub-millisecond at this scale).
 """
 
-from typing import List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
+
+# 0.86 = same-topic + related sub-topics; drops same-domain-but-different-topic
+RECALL_MIN_SIMILARITY = 0.86
 
 
 def recall_similar(
@@ -20,7 +23,7 @@ def recall_similar(
     jobs,
     top_n: int = 3,
     min_score: float = 0.3,
-) -> List[Tuple[object, float]]:
+) -> List[Tuple[Any, float]]:
     """Rank `jobs` by cosine similarity of their stored query embedding.
 
     Args:
@@ -42,7 +45,7 @@ def recall_similar(
     if q_norm == 0:
         return []
 
-    scored: List[Tuple[object, float]] = []
+    scored: List[Tuple[Any, float]] = []
     for job in jobs:
         emb = getattr(job, "query_embedding", None)
         if not emb:
@@ -63,3 +66,36 @@ def recall_similar(
 
     scored.sort(key=lambda pair: pair[1], reverse=True)
     return scored[:top_n]
+
+
+def related_runs(
+    query_embedding,
+    jobs,
+    current_job_id,
+    top_n: int = 3,
+    min_score: float = RECALL_MIN_SIMILARITY,
+) -> List[Dict]:
+    """Rank past runs by query-to-query similarity; return display dicts.
+
+    The comparison is between the new query's embedding and each past run's
+    stored query embedding (via recall_similar) - thesis content plays no part.
+    Excludes the current run and any run without a generated thesis; jobs
+    without a stored embedding are skipped inside recall_similar.
+    """
+    if not query_embedding:
+        return []
+    candidates = [j for j in jobs if j.id != current_job_id and j.thesis]
+    return [
+        {
+            "job_id": job.id,
+            "query": job.query,
+            "created_at": job.created_at,
+            "score": job.thesis.opportunity_score,
+            "recommendation": job.thesis.recommendation,
+            "approved": bool(job.approved_at),
+            "similarity": round(score, 2),
+        }
+        for job, score in recall_similar(
+            query_embedding, candidates, top_n=top_n, min_score=min_score
+        )
+    ]

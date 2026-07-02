@@ -1,4 +1,10 @@
-"""Pydantic schemas for the FastAPI layer."""
+"""Pydantic schemas for the FastAPI layer.
+
+Response design follows REST conventions: one full resource representation
+(JobResponse) returned by create/get/refine/approve so clients always see a
+consistent shape, and a slim ThesisSummaryResponse for the list endpoint so
+collections stay lightweight (no docs, histories, or embeddings).
+"""
 
 from enum import Enum
 from typing import List, Optional
@@ -34,11 +40,11 @@ class RefinementRequest(BaseModel):
 
 # --- Response schemas ---
 
-class ArticleResponse(BaseModel):
-    """Article summary for API responses."""
-    title: str
-    source: str
+class SourceResponse(BaseModel):
+    """A source article behind the thesis (from retrieved-doc metadata)."""
+    title: str = "Untitled"
     url: Optional[str] = None
+    published_at: Optional[str] = None
 
 
 class ThesisResponse(BaseModel):
@@ -50,25 +56,56 @@ class ThesisResponse(BaseModel):
     raw_output: Optional[str] = None
     opportunity_score: float = 0.0
     confidence_level: float = 0.0
+    confidence_as_of: Optional[str] = None
     recommendation: str = ""
     key_risk_factors: List[str] = []
 
 
-class JobResponse(BaseModel):
-    """Job status and result."""
+class RelatedThesisResponse(BaseModel):
+    """A past run surfaced by episodic recall (query-to-query similarity)."""
     job_id: str
-    status: JobStatus
-    progress: Optional[str] = None
     query: str
-    thesis: Optional[ThesisResponse] = None
-    articles: List[ArticleResponse] = []
-    error: Optional[str] = None
+    created_at: Optional[str] = None
+    score: float
+    recommendation: str
+    approved: bool
+    similarity: float
 
 
-class RefinementResponse(BaseModel):
-    """Response after a refinement step."""
+class ThesisSummaryResponse(BaseModel):
+    """Slim list-item representation of a job."""
     job_id: str
-    refinement_count: int
-    status: str
-    thesis: ThesisResponse
+    query: str
+    status: JobStatus
+    created_at: Optional[str] = None
+    refinement_count: int = 0
+    refinement_status: str = "N/A"
+    approved_at: Optional[str] = None
+    opportunity_score: Optional[float] = None
+    recommendation: Optional[str] = None
+
+
+class JobResponse(BaseModel):
+    """Full job representation: status, result, and refinement state."""
+    job_id: str
+    query: str
+    status: JobStatus
+    created_at: Optional[str] = None
+    error: Optional[str] = None
+    thesis: Optional[ThesisResponse] = None
+    thesis_history: List[ThesisResponse] = []
+    refinement_count: int = 0
+    refinement_status: str = "N/A"
+    feedback_history: List[List[str]] = []
     execution_log: list = []
+    approved_at: Optional[str] = None
+    sources: List[SourceResponse] = []
+    related_theses: List[RelatedThesisResponse] = []
+    # Present only on refinement responses (transient, not stored).
+    hallucination: Optional[dict] = None
+
+
+class ErrorDetail(BaseModel):
+    """Machine-readable error payload carried in HTTPException detail."""
+    code: str
+    message: str

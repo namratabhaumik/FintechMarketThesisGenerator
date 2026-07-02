@@ -19,7 +19,7 @@ from api.supabase_job_manager import SupabaseJobManager
 from config.settings import AppConfig, FEEDBACK_OPTIONS
 from core.agents.hallucination_detector import HallucinationDetector
 from core.models.thesis import StructuredThesis
-from core.services.episodic_recall import recall_similar
+from core.services.episodic_recall import related_runs
 from core.utils.logging import setup_logging
 from dependency_injection.container import ServiceContainer
 
@@ -126,10 +126,6 @@ def _persist_approval_once() -> None:
         logger.exception("Failed to record approval")
 
 
-# 0.86 = same-topic + related sub-topics; drops same-domain-but-different-topic
-RECALL_MIN_SIMILARITY = 0.86
-
-
 def _compute_related(query_embedding, current_job_id, top_n: int = 3) -> list:
     """Rank past runs by query similarity to the current one (episodic recall).
 
@@ -139,24 +135,9 @@ def _compute_related(query_embedding, current_job_id, top_n: int = 3) -> list:
     if not query_embedding or not job_manager:
         return []
     try:
-        jobs = [
-            j for j in job_manager.list_jobs()
-            if j.id != current_job_id and j.thesis
-        ]
-        return [
-            {
-                "job_id": job.id,
-                "query": job.query,
-                "created_at": job.created_at,
-                "score": job.thesis.opportunity_score,
-                "recommendation": job.thesis.recommendation,
-                "approved": bool(job.approved_at),
-                "similarity": round(score, 2),
-            }
-            for job, score in recall_similar(
-                query_embedding, jobs, top_n=top_n, min_score=RECALL_MIN_SIMILARITY
-            )
-        ]
+        return related_runs(
+            query_embedding, job_manager.list_jobs(), current_job_id, top_n=top_n
+        )
     except Exception:
         logger.exception("Failed to compute related past theses")
         return []

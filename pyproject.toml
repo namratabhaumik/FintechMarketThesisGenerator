@@ -22,7 +22,6 @@ dependencies = [
     # API
     "fastapi==0.135.2",
     "uvicorn[standard]==0.42.0",
-    "sse-starlette==3.3.3",
     "supabase==2.30.0",
     # Utilities
     "python-dotenv==1.0.0",
