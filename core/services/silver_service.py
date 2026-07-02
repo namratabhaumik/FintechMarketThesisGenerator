@@ -215,9 +215,13 @@ class SilverService:
         )
 
         fintech = len(batch.documents)
+        classified = len(batch.verdicts)  # got a fintech / not-fintech verdict
         logger.info(
-            f"Silver: {fintech} fintech of {total_pending} new articles processed; "
-            f"{len(batch.new_content)} newly scraped, {len(batch.quarantined)} quarantined"
+            f"Silver summary: {total_pending} new articles -> {classified} classified "
+            f"({fintech} fintech, {classified - fintech} rejected), "
+            f"{len(batch.new_content)} scraped, "
+            f"{len(batch.quarantined)} quarantined (scrape failed), "
+            f"{len(batch.errored)} errored (classify failed)"
         )
         return fintech
 
