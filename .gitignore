@@ -327,3 +327,10 @@ yarn.lock
 # Synthetic datasets and *.example.csv schema samples ARE committed.
 evals/data/*_real.csv
 evals/data/*_real.json
+
+# ============================================================================
+# Frontend generated build artifacts
+# ============================================================================
+frontend/openapi.json
+frontend/src/types.gen.ts
+frontend/dist/
