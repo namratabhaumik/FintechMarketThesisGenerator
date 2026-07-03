@@ -133,7 +133,7 @@ def _get_job_or_404(jm: IJobManager, job_id: str):
 
 # --- Endpoints ---
 
-@router.post("/theses", status_code=201, response_model=JobResponse)
+@router.post("/theses", status_code=201, response_model=JobResponse, tags=["theses"])
 def create_thesis(
     request: ThesisRequest,
     response: Response,
@@ -202,7 +202,7 @@ def create_thesis(
     return _job_to_response(created, jm)
 
 
-@router.get("/theses", response_model=List[ThesisSummaryResponse])
+@router.get("/theses", response_model=List[ThesisSummaryResponse], tags=["theses"])
 def list_theses(
     limit: int = Query(20, ge=1, le=100),
     jm: IJobManager = Depends(get_job_manager),
@@ -224,14 +224,14 @@ def list_theses(
     ]
 
 
-@router.get("/theses/{job_id}", response_model=JobResponse)
+@router.get("/theses/{job_id}", response_model=JobResponse, tags=["theses"])
 def get_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
     """Full state of one thesis job (rehydrates everything the UI shows)."""
     job = _get_job_or_404(jm, job_id)
     return _job_to_response(job, jm)
 
 
-@router.post("/theses/{job_id}/refinements", response_model=JobResponse)
+@router.post("/theses/{job_id}/refinements", response_model=JobResponse, tags=["theses"])
 def create_refinement(
     job_id: str,
     request: RefinementRequest,
@@ -297,7 +297,7 @@ def create_refinement(
     return _job_to_response(updated, jm, hallucination=hallucination)
 
 
-@router.put("/theses/{job_id}/approval", response_model=JobResponse)
+@router.put("/theses/{job_id}/approval", response_model=JobResponse, tags=["theses"])
 def approve_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
     """Approve a thesis (idempotent: re-approving returns the existing state).
 
@@ -319,13 +319,13 @@ def approve_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
     return _job_to_response(job, jm)
 
 
-@router.get("/feedback-options", response_model=List[str])
+@router.get("/feedback-options", response_model=List[str], tags=["meta"])
 def get_feedback_options():
     """The fixed set of refinement feedback reasons the UI offers."""
     return FEEDBACK_OPTIONS
 
 
-@router.get("/health")
+@router.get("/health", tags=["meta"])
 def health_check():
     """Health check endpoint."""
     return {"status": "ok"}
