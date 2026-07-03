@@ -6,6 +6,7 @@ import os
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import logging  # noqa: E402
+from contextlib import asynccontextmanager  # noqa: E402
 
 from dotenv import load_dotenv  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
@@ -23,29 +24,53 @@ setup_logging()
 
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Wire dependencies on server startup, not at import.
+
+    Building the container and Supabase client at import time meant a bare
+    `import api.main` needed live credentials, which blocked dumping the OpenAPI
+    schema on a fresh clone (the TS type-gen step). Deferring to lifespan keeps
+    import side-effect-free: the schema can be introspected without a DB, and
+    the app only touches Supabase once a server actually starts.
+    """
+    config = AppConfig.from_env()
+    if not config.supabase.enabled:
+        raise RuntimeError(
+            "Supabase is required to run the API (the jobs table is the single "
+            "state carrier). Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
+        )
+
+    container = ServiceContainer(config)
+    job_manager = SupabaseJobManager(
+        url=config.supabase.url,
+        service_role_key=config.supabase.service_role_key,
+    )
+    init_dependencies(container, job_manager)
+    logger.info("FinThesis FastAPI app initialized (Supabase backend)")
+    yield
+
+
 app = FastAPI(
     title="FinThesis API",
     description="Fintech market thesis generation and refinement",
     version="0.2.0",
+    lifespan=lifespan,
 )
+
+# for the frontend to be deployed as a separate origin; the default covers local dev.
+_cors_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:3000").split(",")
+    if origin.strip()
+]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-config = AppConfig.from_env()
-container = ServiceContainer(config)
-
-job_manager = SupabaseJobManager(
-    url=config.supabase.url,
-    service_role_key=config.supabase.service_role_key,
-)
-
-init_dependencies(container, job_manager)
 app.include_router(router)
-
-logger.info("FinThesis FastAPI app initialized (Supabase backend)")
