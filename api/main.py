@@ -60,9 +60,10 @@ app = FastAPI(
 )
 
 # for the frontend to be deployed as a separate origin; the default covers local dev.
+_default_cors = "http://localhost:3000,http://127.0.0.1:3000"
 _cors_origins = [
     origin.strip()
-    for origin in os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:3000").split(",")
+    for origin in os.getenv("CORS_ALLOW_ORIGINS", _default_cors).split(",")
     if origin.strip()
 ]
 

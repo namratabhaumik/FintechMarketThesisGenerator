@@ -1,0 +1,74 @@
+// Typed client for the FinThesis API. Request/response shapes come from
+// types.gen.ts (generated from the FastAPI OpenAPI schema); this stays in
+// lockstep with the backend. Errors carry the backend's {code, message}.
+
+import { API_BASE } from "./config";
+import type { components } from "./types.gen";
+
+type JobResponse = components["schemas"]["JobResponse"];
+type ThesisRequest = components["schemas"]["ThesisRequest"];
+
+/** An API error carrying the backend's machine-readable code (see routes.py). */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+  constructor(status: number, code: string, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+interface CodeMessage {
+  code: string;
+  message: string;
+}
+
+function isCodeMessage(detail: unknown): detail is CodeMessage {
+  return (
+    typeof detail === "object" &&
+    detail !== null &&
+    "code" in detail &&
+    "message" in detail
+  );
+}
+
+/** Turn a non-2xx Response into an ApiError, parsing both error shapes. */
+async function toApiError(res: Response): Promise<ApiError> {
+  let code = "error";
+  let message = res.statusText || `Request failed (${res.status})`;
+  try {
+    const body: unknown = await res.json();
+    const detail = (body as { detail?: unknown } | null)?.detail;
+    if (isCodeMessage(detail)) {
+      // Our custom errors: {detail: {code, message}}
+      code = detail.code;
+      message = detail.message;
+    } else if (Array.isArray(detail) && detail.length > 0) {
+      // FastAPI/pydantic 422: {detail: [{msg, ...}]}
+      code = "validation_error";
+      message = detail
+        .map((d) => (d as { msg?: string }).msg)
+        .filter(Boolean)
+        .join("; ");
+    }
+  } catch {
+    // Non-JSON error body; keep the status-based defaults.
+  }
+  return new ApiError(res.status, code, message);
+}
+
+/** Generate a thesis synchronously. Resolves once the job is persisted. */
+export async function createThesis(query: string): Promise<JobResponse> {
+  const payload: ThesisRequest = { query };
+  const res = await fetch(`${API_BASE}/api/theses`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw await toApiError(res);
+  }
+  return (await res.json()) as JobResponse;
+}
