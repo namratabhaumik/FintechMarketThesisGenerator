@@ -3,6 +3,7 @@
 
 import {
   ApiError,
+  approveThesis,
   createRefinement,
   createThesis,
   getFeedbackOptions,
@@ -28,6 +29,7 @@ interface HallucinationAnalysis {
 }
 
 type RefineHandler = (jobId: string, feedback: string[]) => void;
+type ApproveHandler = (jobId: string) => void;
 
 const MAX_REFINEMENTS = 3;
 
@@ -283,7 +285,28 @@ function renderExecutionTrace(log: unknown[]): HTMLElement | null {
 
 // --- Full-job render (thesis + refinement affordances) ---
 
-function renderJob(container: HTMLElement, job: JobResponse, onRefine: RefineHandler): void {
+// --- Approval (mirrors show_approval_toggle / show_approved_state) ---
+// Terminal and one-way, so an approved job shows a confirmation instead of the
+// toggle, and its refinement controls are hidden.
+
+function renderApproval(job: JobResponse, onApprove: ApproveHandler): HTMLElement {
+  const wrap = el("div");
+  wrap.className = "approval";
+  const button = el("button", "Approve");
+  button.addEventListener("click", () => {
+    button.disabled = true; // prevent double-submit; re-render replaces it
+    onApprove(job.job_id);
+  });
+  wrap.append(button);
+  return wrap;
+}
+
+function renderJob(
+  container: HTMLElement,
+  job: JobResponse,
+  onRefine: RefineHandler,
+  onApprove: ApproveHandler,
+): void {
   container.replaceChildren();
 
   const sources = renderSources(job.sources);
@@ -309,7 +332,16 @@ function renderJob(container: HTMLElement, job: JobResponse, onRefine: RefineHan
 
   container.append(el("p", "Structured thesis generated successfully"));
   container.append(renderThesis(thesis));
-  container.append(renderRefinementPanel(job, onRefine));
+
+  // Approval first (matches app.py). When approved, no refinement controls.
+  if (job.approved_at) {
+    container.append(
+      el("p", "This thesis has been approved. No further refinements needed."),
+    );
+  } else {
+    container.append(renderApproval(job, onApprove));
+    container.append(renderRefinementPanel(job, onRefine));
+  }
 
   const history = renderHistory(job.thesis_history, job.feedback_history);
   if (history) container.append(history);
@@ -352,7 +384,7 @@ function main(): void {
         const job = await createRefinement(jobId, feedback);
         currentJob = job;
         status.textContent = "";
-        renderJob(results, job, handleRefine);
+        renderJob(results, job, handleRefine, handleApprove);
       } catch (err) {
         if (err instanceof ApiError) {
           status.textContent = `Refinement failed: ${err.message}`;
@@ -361,7 +393,28 @@ function main(): void {
           status.textContent = "An unexpected error occurred during refinement.";
         }
         // Restore an interactive panel (the clicked button was disabled).
-        if (currentJob) renderJob(results, currentJob, handleRefine);
+        if (currentJob) renderJob(results, currentJob, handleRefine, handleApprove);
+      }
+    })();
+  }
+
+  function handleApprove(jobId: string): void {
+    status.textContent = "Approving thesis...";
+    void (async () => {
+      try {
+        const job = await approveThesis(jobId);
+        currentJob = job;
+        status.textContent = "";
+        renderJob(results, job, handleRefine, handleApprove);
+      } catch (err) {
+        if (err instanceof ApiError) {
+          status.textContent = `Approval failed: ${err.message}`;
+        } else {
+          console.error("Approval request failed", err);
+          status.textContent = "An unexpected error occurred during approval.";
+        }
+        // Restore an interactive panel (the clicked button was disabled).
+        if (currentJob) renderJob(results, currentJob, handleRefine, handleApprove);
       }
     })();
   }
@@ -382,7 +435,7 @@ function main(): void {
       await ensureFeedbackOptions();
       status.textContent = "";
       try {
-        renderJob(results, job, handleRefine);
+        renderJob(results, job, handleRefine, handleApprove);
       } catch (renderErr) {
         console.error("Failed to render thesis", renderErr);
         results.replaceChildren();

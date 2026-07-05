@@ -94,6 +94,18 @@ export async function createRefinement(
   return (await res.json()) as JobResponse;
 }
 
+/** Approve a thesis (terminal, idempotent). Returns its updated state. */
+export async function approveThesis(jobId: string): Promise<JobResponse> {
+  const res = await fetch(
+    `${API_BASE}/api/theses/${encodeURIComponent(jobId)}/approval`,
+    { method: "PUT" },
+  );
+  if (!res.ok) {
+    throw await toApiError(res);
+  }
+  return (await res.json()) as JobResponse;
+}
+
 /** The fixed set of refinement feedback reasons the UI offers. */
 export async function getFeedbackOptions(): Promise<string[]> {
   const res = await fetch(`${API_BASE}/api/feedback-options`);
