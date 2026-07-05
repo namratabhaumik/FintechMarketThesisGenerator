@@ -1,11 +1,43 @@
 // Frontend entry point.
 
-import { ApiError, createThesis } from "./api";
+
+import {
+  ApiError,
+  createRefinement,
+  createThesis,
+  getFeedbackOptions,
+} from "./api";
 import type { components } from "./types.gen";
 
 type JobResponse = components["schemas"]["JobResponse"];
 type ThesisResponse = components["schemas"]["ThesisResponse"];
 type SourceResponse = components["schemas"]["SourceResponse"];
+
+// Loosely-typed backend payloads (execution_log is unknown[], hallucination is
+// an open dict); narrow them to just the fields we render.
+interface ExecutionEvent {
+  tool_name?: string;
+  status?: string;
+  refinement_number?: number;
+  reason?: string;
+  changes?: string[];
+}
+interface HallucinationAnalysis {
+  invalid_tools?: string[];
+  summary?: string;
+}
+
+type RefineHandler = (jobId: string, feedback: string[]) => void;
+
+const MAX_REFINEMENTS = 3;
+
+// Cached once; the option list is fixed server-side (see /api/feedback-options).
+let feedbackOptions: string[] = [];
+async function ensureFeedbackOptions(): Promise<void> {
+  if (feedbackOptions.length === 0) {
+    feedbackOptions = await getFeedbackOptions();
+  }
+}
 
 // --- Small DOM helpers ---
 
@@ -129,33 +161,164 @@ function renderThesis(thesis: ThesisResponse): HTMLElement {
   return section;
 }
 
-// --- Result orchestration ---
+// --- Refinement panel (mirrors show_refinement_controls / escalation) ---
 
-function renderResult(results: HTMLElement, job: JobResponse): void {
-  results.replaceChildren();
+function renderRefinementPanel(job: JobResponse, onRefine: RefineHandler): HTMLElement {
+  const section = el("section");
+  section.className = "refinement";
+
+  if (job.refinement_status === "escalated") {
+    section.append(
+      el(
+        "p",
+        `Max refinements reached (${MAX_REFINEMENTS}/${MAX_REFINEMENTS}). ` +
+          "Please refine your original query for a fresh analysis.",
+      ),
+    );
+    return section;
+  }
+
+  section.append(
+    el("h3", `Refine Thesis (refinement ${job.refinement_count}/${MAX_REFINEMENTS})`),
+  );
+
+  const options = el("div");
+  options.className = "feedback-options";
+  const boxes: HTMLInputElement[] = [];
+  for (const opt of feedbackOptions) {
+    const label = el("label");
+    const box = el("input");
+    box.type = "checkbox";
+    box.value = opt;
+    label.append(box, document.createTextNode(` ${opt}`));
+    options.append(label);
+    boxes.push(box);
+  }
+  section.append(options);
+
+  const button = el("button", "Refine Thesis");
+  button.disabled = true;
+  const syncButton = () => {
+    button.disabled = !boxes.some((b) => b.checked);
+  };
+  for (const b of boxes) b.addEventListener("change", syncButton);
+
+  button.addEventListener("click", () => {
+    const selected = boxes.filter((b) => b.checked).map((b) => b.value);
+    if (selected.length === 0) return;
+    button.disabled = true; // prevent double-submit; re-render replaces it
+    onRefine(job.job_id, selected);
+  });
+
+  section.append(button);
+  section.append(el("small", `Refinements left: ${MAX_REFINEMENTS - job.refinement_count}`));
+  return section;
+}
+
+// --- Version history (mirrors show_history's end-anchored feedback pairing) ---
+
+function renderHistory(
+  history: ThesisResponse[],
+  feedbackHistory: string[][],
+): HTMLElement | null {
+  if (history.length === 0) return null;
+  const details = el("details");
+  details.append(el("summary", `Previous versions (${history.length})`));
+  history.forEach((prev, i) => {
+    const item = el("div");
+    item.append(el("p", `Version ${i + 1}`));
+    item.append(
+      el("p", `Score: ${prev.opportunity_score}/5 | Recommendation: ${prev.recommendation}`),
+    );
+    // Pair from the end so a longer feedback_history can't shift annotations.
+    const j = i + (feedbackHistory.length - history.length);
+    const feedback = j >= 0 && j < feedbackHistory.length ? feedbackHistory[j] : [];
+    if (feedback && feedback.length > 0) {
+      item.append(el("small", `Refined with: ${feedback.join(", ")}`));
+    }
+    details.append(item);
+  });
+  return details;
+}
+
+// --- Hallucination analysis (only when invalid tools were found) ---
+
+function renderHallucination(raw: JobResponse["hallucination"]): HTMLElement | null {
+  const h = raw as HallucinationAnalysis | null | undefined;
+  if (!h || !h.invalid_tools || h.invalid_tools.length === 0) return null;
+  const section = el("section");
+  section.className = "hallucination";
+  section.append(el("p", "Hallucinations Detected"));
+  const details = el("details");
+  details.open = true;
+  details.append(el("summary", "Tool Call Analysis"));
+  if (h.summary) details.append(el("pre", h.summary));
+  details.append(el("p", `Invalid tools (do not exist): ${h.invalid_tools.join(", ")}`));
+  section.append(details);
+  return section;
+}
+
+// --- Execution trace (mirrors show_execution_trace, icons dropped) ---
+
+function renderExecutionTrace(log: unknown[]): HTMLElement | null {
+  if (log.length === 0) return null;
+  const details = el("details");
+  details.append(el("summary", "Execution Trace"));
+  details.append(el("p", "Tools that actually executed during refinement:"));
+  log.forEach((raw, idx) => {
+    const event = raw as ExecutionEvent;
+    const item = el("div");
+    item.append(
+      el("p", `${idx + 1}. ${event.tool_name ?? "unknown"} - ${event.status ?? "unknown"}`),
+    );
+    if (event.refinement_number) {
+      item.append(el("small", `Refinement #${event.refinement_number}`));
+    }
+    if (event.reason) item.append(el("small", `Reason: ${event.reason}`));
+    for (const change of event.changes ?? []) item.append(el("small", change));
+    details.append(item);
+  });
+  return details;
+}
+
+// --- Full-job render (thesis + refinement affordances) ---
+
+function renderJob(container: HTMLElement, job: JobResponse, onRefine: RefineHandler): void {
+  container.replaceChildren();
 
   const sources = renderSources(job.sources);
-  if (sources) results.append(sources);
+  if (sources) container.append(sources);
 
   const thesis = job.thesis;
   if (!thesis) {
-    results.append(el("p", "No thesis was returned."));
+    container.append(el("p", "No thesis was returned."));
     return;
   }
 
   if (thesis.raw_output) {
-    results.append(el("h3", "Raw Summary"));
-    results.append(el("pre", thesis.raw_output));
+    container.append(el("h3", "Raw Summary"));
+    container.append(el("pre", thesis.raw_output));
   }
 
-  if (thesis.key_themes.length > 0) {
-    results.append(el("p", "Structured thesis generated successfully"));
-    results.append(renderThesis(thesis));
-  } else {
-    results.append(
+  if (thesis.key_themes.length === 0) {
+    container.append(
       el("p", "Could not parse structured output. See raw output above."),
     );
+    return;
   }
+
+  container.append(el("p", "Structured thesis generated successfully"));
+  container.append(renderThesis(thesis));
+  container.append(renderRefinementPanel(job, onRefine));
+
+  const history = renderHistory(job.thesis_history, job.feedback_history);
+  if (history) container.append(history);
+
+  const hallucination = renderHallucination(job.hallucination);
+  if (hallucination) container.append(hallucination);
+
+  const trace = renderExecutionTrace(job.execution_log);
+  if (trace) container.append(trace);
 }
 
 // --- Page shell + wiring ---
@@ -178,6 +341,31 @@ function main(): void {
 
   app.append(input, button, status, results);
 
+  // The current job in view; refinement POSTs against it and re-renders. Also
+  // used to restore the panel after a failed refinement.
+  let currentJob: JobResponse | null = null;
+
+  function handleRefine(jobId: string, feedback: string[]): void {
+    status.textContent = "Refining thesis based on your feedback...";
+    void (async () => {
+      try {
+        const job = await createRefinement(jobId, feedback);
+        currentJob = job;
+        status.textContent = "";
+        renderJob(results, job, handleRefine);
+      } catch (err) {
+        if (err instanceof ApiError) {
+          status.textContent = `Refinement failed: ${err.message}`;
+        } else {
+          console.error("Refinement request failed", err);
+          status.textContent = "An unexpected error occurred during refinement.";
+        }
+        // Restore an interactive panel (the clicked button was disabled).
+        if (currentJob) renderJob(results, currentJob, handleRefine);
+      }
+    })();
+  }
+
   async function generate(): Promise<void> {
     const query = input.value.trim();
     if (!query) {
@@ -189,11 +377,12 @@ function main(): void {
     status.textContent = "Retrieving context and generating thesis...";
     try {
       const job = await createThesis(query);
+      currentJob = job;
+      // Feedback options power the refinement panel; ensure them before render.
+      await ensureFeedbackOptions();
       status.textContent = "";
-      // Rendering failures are distinct from network failures: an unexpected
-      // response shape shouldn't look like the API being down.
       try {
-        renderResult(results, job);
+        renderJob(results, job, handleRefine);
       } catch (renderErr) {
         console.error("Failed to render thesis", renderErr);
         results.replaceChildren();
