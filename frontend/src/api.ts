@@ -8,6 +8,7 @@ import type { components } from "./types.gen";
 type JobResponse = components["schemas"]["JobResponse"];
 type ThesisRequest = components["schemas"]["ThesisRequest"];
 type RefinementRequest = components["schemas"]["RefinementRequest"];
+type ThesisSummaryResponse = components["schemas"]["ThesisSummaryResponse"];
 
 /** An API error carrying the backend's machine-readable code (see routes.py). */
 export class ApiError extends Error {
@@ -104,6 +105,24 @@ export async function approveThesis(jobId: string): Promise<JobResponse> {
     throw await toApiError(res);
   }
   return (await res.json()) as JobResponse;
+}
+
+/** Full state of one thesis job (for ?job_id restore and resume). */
+export async function getThesis(jobId: string): Promise<JobResponse> {
+  const res = await fetch(`${API_BASE}/api/theses/${encodeURIComponent(jobId)}`);
+  if (!res.ok) {
+    throw await toApiError(res);
+  }
+  return (await res.json()) as JobResponse;
+}
+
+/** Slim list of past jobs, most recent first (for the resume picker). */
+export async function listTheses(limit = 20): Promise<ThesisSummaryResponse[]> {
+  const res = await fetch(`${API_BASE}/api/theses?limit=${limit}`);
+  if (!res.ok) {
+    throw await toApiError(res);
+  }
+  return (await res.json()) as ThesisSummaryResponse[];
 }
 
 /** The fixed set of refinement feedback reasons the UI offers. */

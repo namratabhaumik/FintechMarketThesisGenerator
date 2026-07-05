@@ -7,12 +7,16 @@ import {
   createRefinement,
   createThesis,
   getFeedbackOptions,
+  getThesis,
+  listTheses,
 } from "./api";
 import type { components } from "./types.gen";
 
 type JobResponse = components["schemas"]["JobResponse"];
 type ThesisResponse = components["schemas"]["ThesisResponse"];
 type SourceResponse = components["schemas"]["SourceResponse"];
+type RelatedThesisResponse = components["schemas"]["RelatedThesisResponse"];
+type ThesisSummaryResponse = components["schemas"]["ThesisSummaryResponse"];
 
 // Loosely-typed backend payloads (execution_log is unknown[], hallucination is
 // an open dict); narrow them to just the fields we render.
@@ -285,6 +289,30 @@ function renderExecutionTrace(log: unknown[]): HTMLElement | null {
 
 // --- Full-job render (thesis + refinement affordances) ---
 
+// --- Related past theses (episodic recall; mirrors show_related_theses) ---
+// Each links back to its run via ?job_id, which the on-load restore rehydrates.
+
+function renderRelated(related: RelatedThesisResponse[]): HTMLElement | null {
+  if (related.length === 0) return null;
+  const details = el("details");
+  details.append(el("summary", `Related past theses (${related.length})`));
+  for (const r of related) {
+    const item = el("div");
+    const link = el("a", r.query);
+    link.href = `?job_id=${encodeURIComponent(r.job_id)}`;
+    item.append(link);
+
+    const date = (r.created_at ?? "").slice(0, 10);
+    const parts = [`score ${r.score}/5`, r.recommendation, date].filter(Boolean);
+    let meta = parts.join(" - ");
+    if (r.approved) meta += " - approved";
+    item.append(el("p", meta));
+    item.append(el("small", `similarity ${r.similarity}`));
+    details.append(item);
+  }
+  return details;
+}
+
 // --- Approval (mirrors show_approval_toggle / show_approved_state) ---
 // Terminal and one-way, so an approved job shows a confirmation instead of the
 // toggle, and its refinement controls are hidden.
@@ -333,6 +361,9 @@ function renderJob(
   container.append(el("p", "Structured thesis generated successfully"));
   container.append(renderThesis(thesis));
 
+  const related = renderRelated(job.related_theses);
+  if (related) container.append(related);
+
   // Approval first (matches app.py). When approved, no refinement controls.
   if (job.approved_at) {
     container.append(
@@ -361,6 +392,9 @@ function main(): void {
 
   app.append(el("h1", "FinThesis: Fintech Market Research Assistant"));
 
+  // Resume picker lives above the query input (mirrors app.py's ordering).
+  const pickerContainer = el("div");
+
   const input = el("input");
   input.type = "text";
   input.placeholder = "e.g., Future of Digital Lending in Asia";
@@ -371,7 +405,7 @@ function main(): void {
   status.className = "status";
   const results = el("section");
 
-  app.append(input, button, status, results);
+  app.append(pickerContainer, input, button, status, results);
 
   // The current job in view; refinement POSTs against it and re-renders. Also
   // used to restore the panel after a failed refinement.
@@ -419,6 +453,81 @@ function main(): void {
     })();
   }
 
+  // Load a persisted job by id, render it, and set it as the current job.
+  // Returns whether it loaded, so the resume picker can update the URL and
+  // re-enable its button; the ?job_id-restore path ignores the result.
+  async function restoreJob(jobId: string): Promise<boolean> {
+    status.textContent = "Loading saved thesis...";
+    try {
+      await ensureFeedbackOptions();
+      const job = await getThesis(jobId);
+      currentJob = job;
+      status.textContent = "";
+      renderJob(results, job, handleRefine, handleApprove);
+      return true;
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        status.textContent = "That saved thesis was not found.";
+      } else if (err instanceof ApiError) {
+        status.textContent = `Error: ${err.message}`;
+      } else {
+        console.error("Failed to restore saved thesis", err);
+        status.textContent = "An unexpected error occurred loading the saved thesis.";
+      }
+      return false;
+    }
+  }
+
+  // Show WHICH runs are resumable; the picker PERSISTS after a resume so you 
+  // can switch sessions without a reload (unline app.py). The list is fetched 
+  // once here, so same-tab state changes aren't reflected until reload.
+  async function showResumePicker(): Promise<void> {
+    let jobs: ThesisSummaryResponse[];
+    try {
+      jobs = await listTheses();
+    } catch (err) {
+      console.error("Failed to load resumable sessions", err);
+      pickerContainer.replaceChildren(
+        el("small", "Could not load previous sessions."),
+      );
+      return;
+    }
+    const resumable = jobs.filter((j) => j.refinement_status === "refining");
+    if (resumable.length === 0) return;
+
+    const details = el("details");
+    details.append(
+      el("summary", `Resume a previous session (${resumable.length} available)`),
+    );
+
+    const select = el("select");
+    for (const j of resumable) {
+      const created = (j.created_at ?? "").slice(0, 19);
+      const option = el(
+        "option",
+        `${j.query} - round ${j.refinement_count}/3 (${j.refinement_status}) - ${created}`,
+      );
+      option.value = j.job_id;
+      select.append(option);
+    }
+
+    const resumeBtn = el("button", "Resume");
+    resumeBtn.addEventListener("click", () => {
+      const jobId = select.value;
+      if (!jobId) return;
+      resumeBtn.disabled = true;
+      void (async () => {
+        if (await restoreJob(jobId)) {
+          history.replaceState(null, "", `?job_id=${encodeURIComponent(jobId)}`);
+        }
+        resumeBtn.disabled = false; // keep the picker usable for switching
+      })();
+    });
+
+    details.append(select, resumeBtn);
+    pickerContainer.replaceChildren(details);
+  }
+
   async function generate(): Promise<void> {
     const query = input.value.trim();
     if (!query) {
@@ -431,6 +540,9 @@ function main(): void {
     try {
       const job = await createThesis(query);
       currentJob = job;
+      // A ?job_id URL makes the run restorable on refresh/new tab. The resume
+      // picker is intentionally left in place so you can still switch sessions.
+      history.replaceState(null, "", `?job_id=${encodeURIComponent(job.job_id)}`);
       // Feedback options power the refinement panel; ensure them before render.
       await ensureFeedbackOptions();
       status.textContent = "";
@@ -459,6 +571,12 @@ function main(): void {
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") void generate();
   });
+
+  // On load: always offer the resume picker (if any resumable runs exist), and
+  // additionally restore a specific run when the URL carries ?job_id.
+  void showResumePicker();
+  const restoreId = new URLSearchParams(location.search).get("job_id");
+  if (restoreId) void restoreJob(restoreId);
 }
 
 // Guard bootstrap so a startup error surfaces in the console instead of a
