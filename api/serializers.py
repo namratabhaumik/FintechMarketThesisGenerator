@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 from langchain_core.documents import Document
 
-from api.schemas import JobStatus
+from api.schemas import JobStatus, RefinementStatus
 from core.models.article import Article
 from core.models.thesis import StructuredThesis
 
@@ -147,6 +147,8 @@ def serialise_job_fields(**fields) -> Dict[str, Any]:
         elif key == "articles":
             payload[key] = serialise_articles(value)
         elif key == "status" and isinstance(value, JobStatus):
+            payload[key] = value.value
+        elif key == "refinement_status" and isinstance(value, RefinementStatus):
             payload[key] = value.value
         elif key == "retrieved_docs":
             payload[key] = serialise_docs(value)

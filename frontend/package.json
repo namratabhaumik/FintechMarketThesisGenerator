@@ -9,7 +9,7 @@
     "gen:types": "openapi-typescript openapi.json -o src/types.gen.ts",
     "generate": "npm run dump:schema && npm run gen:types",
     "typecheck": "tsc --noEmit",
-    "build": "esbuild src/main.ts --bundle --minify --format=esm --outfile=dist/main.js && cp index.html dist/",
+    "build": "node build.mjs",
     "dev": "npm run build && esbuild src/main.ts --bundle --format=esm --outfile=dist/main.js --servedir=dist --serve=127.0.0.1:3000"
   },
   "devDependencies": {

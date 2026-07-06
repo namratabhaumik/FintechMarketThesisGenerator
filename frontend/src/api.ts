@@ -3,12 +3,21 @@
 // lockstep with the backend. Errors carry the backend's {code, message}.
 
 import { API_BASE } from "./config";
-import type { components } from "./types.gen";
+import type {
+  JobResponse,
+  RefinementRequest,
+  ThesisRequest,
+  ThesisSummaryResponse,
+} from "./types";
 
-type JobResponse = components["schemas"]["JobResponse"];
-type ThesisRequest = components["schemas"]["ThesisRequest"];
-type RefinementRequest = components["schemas"]["RefinementRequest"];
-type ThesisSummaryResponse = components["schemas"]["ThesisSummaryResponse"];
+/**
+ * Machine-readable error codes the UI special-cases. Values must match the
+ * codes emitted by the backend's `_error()` calls in routes.py. Codes not
+ * listed here still surface via ApiError.message.
+ */
+export const ErrorCode = {
+  NoRelevantDocuments: "no_relevant_documents",
+} as const;
 
 /** An API error carrying the backend's machine-readable code (see routes.py). */
 export class ApiError extends Error {

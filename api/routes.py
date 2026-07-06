@@ -20,6 +20,7 @@ from api.schemas import (
     JobResponse,
     JobStatus,
     RefinementRequest,
+    RefinementStatus,
     RelatedThesisResponse,
     SourceResponse,
     ThesisRequest,
@@ -186,7 +187,7 @@ def create_thesis(
             thesis=thesis,
             retrieved_docs=docs,
             refinement_count=0,
-            refinement_status="N/A",  # becomes "refining" only once the user refines
+            refinement_status=RefinementStatus.NOT_APPLICABLE,  # until the user refines
             feedback_history=[],
             execution_log=[],
             thesis_history=[],
@@ -244,7 +245,7 @@ def create_refinement(
         raise _error(409, "thesis_not_generated", "Thesis not yet generated")
     if job.approved_at:
         raise _error(409, "already_approved", "An approved thesis cannot be refined")
-    if job.refinement_status == "escalated":
+    if job.refinement_status == RefinementStatus.ESCALATED:
         raise _error(409, "max_refinements_reached", "Max refinements reached")
 
     try:
@@ -310,7 +311,7 @@ def approve_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
     if not job.approved_at:
         ts = datetime.now(timezone.utc).isoformat()
         try:
-            jm.update_job(job_id, approved_at=ts, refinement_status="refined")
+            jm.update_job(job_id, approved_at=ts, refinement_status=RefinementStatus.REFINED)
             job = jm.get_job(job_id)
         except Exception:
             logger.exception("Failed to record approval")

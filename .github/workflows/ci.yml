@@ -52,3 +52,20 @@ jobs:
 
     - name: Run tests
       run: uv run python run_tests.py
+
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Install frontend dependencies
+      working-directory: frontend
+      run: npm ci
+
+    - name: Generate API types from the OpenAPI schema
+      working-directory: frontend
+      run: npm run generate
+
+    - name: Typecheck frontend against the generated types
+      working-directory: frontend
+      run: npm run typecheck

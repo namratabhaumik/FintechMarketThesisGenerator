@@ -26,6 +26,15 @@ class JobStatus(str, Enum):
     FAILED = "failed"
 
 
+class RefinementStatus(str, Enum):
+    """Refinement lifecycle of a thesis job. Single source of truth for the
+    `refinement_status` values the API emits (and the frontend branches on)."""
+    NOT_APPLICABLE = "N/A"  # generated, never refined
+    REFINING = "refining"   # mid-refinement; the only resumable state
+    ESCALATED = "escalated"  # max refinements reached; terminal
+    REFINED = "refined"     # approved; terminal
+
+
 # --- Request schemas ---
 
 class ThesisRequest(BaseModel):
@@ -79,7 +88,7 @@ class ThesisSummaryResponse(BaseModel):
     status: JobStatus
     created_at: Optional[str] = None
     refinement_count: int = 0
-    refinement_status: str = "N/A"
+    refinement_status: RefinementStatus = RefinementStatus.NOT_APPLICABLE
     approved_at: Optional[str] = None
     opportunity_score: Optional[float] = None
     recommendation: Optional[str] = None
@@ -95,7 +104,7 @@ class JobResponse(BaseModel):
     thesis: Optional[ThesisResponse] = None
     thesis_history: List[ThesisResponse] = []
     refinement_count: int = 0
-    refinement_status: str = "N/A"
+    refinement_status: RefinementStatus = RefinementStatus.NOT_APPLICABLE
     feedback_history: List[List[str]] = []
     execution_log: list = []
     approved_at: Optional[str] = None

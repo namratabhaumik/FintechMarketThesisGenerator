@@ -72,6 +72,8 @@ app.add_middleware(
     allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
+    # lets cross-origin browser JS read the Location set on POST /theses (201).
+    expose_headers=["Location"],
 )
 
 app.include_router(router)
