@@ -206,9 +206,17 @@ def create_thesis(
 @router.get("/theses", response_model=List[ThesisSummaryResponse], tags=["theses"])
 def list_theses(
     limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    status: Optional[RefinementStatus] = Query(
+        None, description="Filter by refinement_status (e.g. 'refining' for the resume picker)"
+    ),
     jm: IJobManager = Depends(get_job_manager),
 ):
-    """List thesis jobs, most recent first (slim representations)."""
+    """List thesis jobs, most recent first (slim representations).
+
+    Pagination + optional status filter applied in db
+    """
+    status_value = status.value if status else None
     return [
         ThesisSummaryResponse(
             job_id=j.id,
@@ -221,7 +229,7 @@ def list_theses(
             opportunity_score=j.thesis.opportunity_score if j.thesis else None,
             recommendation=j.thesis.recommendation if j.thesis else None,
         )
-        for j in jm.list_jobs()[:limit]
+        for j in jm.list_jobs(limit=limit, offset=offset, status=status_value)
     ]
 
 

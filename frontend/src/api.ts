@@ -125,9 +125,15 @@ export async function getThesis(jobId: string): Promise<JobResponse> {
   return (await res.json()) as JobResponse;
 }
 
-/** Slim list of past jobs, most recent first (for the resume picker). */
-export async function listTheses(limit = 20): Promise<ThesisSummaryResponse[]> {
-  const res = await fetch(`${API_BASE}/api/theses?limit=${limit}`);
+/** Slim list of past jobs, most recent first (optionally filter by
+ * refinement_status server-side ). */
+export async function listTheses(
+  limit = 20,
+  status?: string,
+): Promise<ThesisSummaryResponse[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (status) params.set("status", status);
+  const res = await fetch(`${API_BASE}/api/theses?${params.toString()}`);
   if (!res.ok) {
     throw await toApiError(res);
   }

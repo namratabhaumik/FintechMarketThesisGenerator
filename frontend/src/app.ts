@@ -219,7 +219,7 @@ export class FinThesisApp {
   private async showResumePicker(): Promise<void> {
     let jobs: ThesisSummaryResponse[];
     try {
-      jobs = await listTheses();
+      jobs = await listTheses(20, RefinementStatus.Refining);
     } catch (err) {
       console.error("Failed to load resumable sessions", err);
       this.pickerContainer.replaceChildren(
@@ -227,10 +227,7 @@ export class FinThesisApp {
       );
       return;
     }
-    const resumable = jobs.filter(
-      (j) => j.refinement_status === RefinementStatus.Refining,
-    );
-    if (resumable.length === 0) return;
-    this.pickerContainer.replaceChildren(renderResumePicker(resumable, this.onResume));
+    if (jobs.length === 0) return;
+    this.pickerContainer.replaceChildren(renderResumePicker(jobs, this.onResume));
   }
 }

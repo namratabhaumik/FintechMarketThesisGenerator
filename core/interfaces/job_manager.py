@@ -37,6 +37,16 @@ class IJobManager(ABC):
         pass
 
     @abstractmethod
-    def list_jobs(self) -> list:
-        """List all jobs, most recent first."""
+    def list_jobs(
+        self,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        status: Optional[str] = None,
+    ) -> list:
+        """List jobs, most recent first.
+
+        limit/offset paginate at the storage layer (limit=None returns all);
+        status filters by refinement_status. Callers that need the full set for
+        ranking (e.g. episodic recall) call with no arguments.
+        """
         pass

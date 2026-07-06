@@ -82,14 +82,24 @@ class SupabaseJobManager(IJobManager):
         if payload:
             self._client.table(TABLE).update(payload).eq("id", job_id).execute()
 
-    def list_jobs(self) -> list:
-        """List all jobs, most recent first."""
-        resp = (
-            self._client.table(TABLE)
-            .select("*")
-            .order("created_at", desc=True)
-            .execute()
-        )
+    def list_jobs(
+        self,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        status: Optional[str] = None,
+    ) -> list:
+        """List jobs, most recent first, filtering/paginating at the DB.
+
+        limit=None returns all rows (episodic recall needs the full set);
+        status filters on refinement_status.
+        """
+        query = self._client.table(TABLE).select("*").order("created_at", desc=True)
+        if status is not None:
+            query = query.eq("refinement_status", status)
+        if limit is not None:
+            # Supabase range() is inclusive on both ends, 0-indexed.
+            query = query.range(offset, offset + limit - 1)
+        resp = query.execute()
         return [_RowProxy(row) for row in resp.data]
 
 
