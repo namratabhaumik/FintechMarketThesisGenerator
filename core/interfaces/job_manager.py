@@ -46,7 +46,18 @@ class IJobManager(ABC):
         """List jobs, most recent first.
 
         limit/offset paginate at the storage layer (limit=None returns all);
-        status filters by refinement_status. Callers that need the full set for
-        ranking (e.g. episodic recall) call with no arguments.
+        status filters by refinement_status.
+        """
+        pass
+
+    @abstractmethod
+    def match_jobs(
+        self,
+        query_embedding: Any,
+        exclude_id: str,
+        top_n: int = 3,
+        min_similarity: float = 0.86,
+    ) -> list:
+        """Past runs most similar to query_embedding, ranked in the storage layer.
         """
         pass

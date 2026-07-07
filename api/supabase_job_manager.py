@@ -16,6 +16,7 @@ from api.schemas import JobStatus
 from api.serializers import (
     rehydrate_articles,
     rehydrate_docs,
+    rehydrate_query_embedding,
     rehydrate_thesis,
     serialise_job_fields,
 )
@@ -102,6 +103,29 @@ class SupabaseJobManager(IJobManager):
         resp = query.execute()
         return [_RowProxy(row) for row in resp.data]
 
+    def match_jobs(
+        self,
+        query_embedding: Any,
+        exclude_id: str,
+        top_n: int = 3,
+        min_similarity: float = 0.86,
+    ) -> list:
+        """Past runs most similar to query_embedding, ranked in the DB.
+
+        Delegates cosine ranking, the similarity floor, and exclusion of the
+        current run + run-less rows to the match_jobs pgvector RPC (episodic
+        recall never pulls the whole jobs table into Python).
+        """
+        # arg name = query_vec; param = query_embedding
+        params = {
+            "query_vec": query_embedding,
+            "exclude_id": exclude_id,
+            "match_count": top_n,
+            "min_similarity": min_similarity,
+        }
+        resp = self._client.rpc("match_jobs", params).execute()
+        return resp.data or []
+
 
 class _RowProxy:
     """Exposes a Supabase row dict as attributes so route handlers can use
@@ -124,7 +148,9 @@ class _RowProxy:
         self.feedback_history: list = data.get("feedback_history", [])
         self.execution_log: list = data.get("execution_log", [])
         self.approved_at: Optional[str] = data.get("approved_at")
-        self.query_embedding: Optional[list] = data.get("query_embedding")
+        self.query_embedding: Optional[list] = rehydrate_query_embedding(
+            data.get("query_embedding")
+        )
         self.thesis = rehydrate_thesis(data.get("thesis"))
         self.thesis_history = [
             t for t in (rehydrate_thesis(x) for x in data.get("thesis_history") or [])

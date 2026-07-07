@@ -30,7 +30,7 @@ from api.schemas import (
 from config.settings import FEEDBACK_OPTIONS
 from core.agents.hallucination_detector import HallucinationDetector
 from core.interfaces.job_manager import IJobManager
-from core.services.episodic_recall import related_runs
+from core.services.episodic_recall import RECALL_MIN_SIMILARITY
 from dependency_injection.container import ServiceContainer
 
 logger = logging.getLogger(__name__)
@@ -90,14 +90,17 @@ def _sources_from_docs(docs) -> List[SourceResponse]:
 
 
 def _related_for(job, jm: IJobManager) -> List[RelatedThesisResponse]:
-    """Episodic recall for a job, from its stored query embedding. Never raises."""
+    """Episodic recall for a job, from its stored query embedding. Never raises.
+
+    Ranking happens in the DB (match_jobs / pgvector).
+    """
     embedding = getattr(job, "query_embedding", None)
     if not embedding:
         return []
     try:
         return [
             RelatedThesisResponse(**r)
-            for r in related_runs(embedding, jm.list_jobs(), job.id)
+            for r in jm.match_jobs(embedding, job.id, min_similarity=RECALL_MIN_SIMILARITY)
         ]
     except Exception:
         logger.exception("Failed to compute related past theses")
