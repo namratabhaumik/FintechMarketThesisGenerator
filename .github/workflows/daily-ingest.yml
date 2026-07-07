@@ -92,3 +92,9 @@ jobs:
 
       - name: Gold - recompute weekly trend metrics
         run: uv run python -m scripts.build_gold
+
+      # diagnostic snapshot of similarity distribution in corpus; probe failure 
+      # continues the ci on error (requires sql/corpus_probe.sql applied in Supabase).
+      - name: Probe - snapshot retrieval similarity distribution
+        continue-on-error: true
+        run: uv run python -m scripts.inspect_corpus
