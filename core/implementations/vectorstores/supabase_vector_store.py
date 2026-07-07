@@ -109,11 +109,12 @@ class SupabaseVectorStoreImpl(IVectorStore):
         lambda_mult: float,
         window_days: Optional[int] = None,
         query_embedding: Optional[List[float]] = None,
+        min_similarity: float = 0.0,
     ) -> List[Document]:
         """Date-windowed MMR retrieval.
 
         Pull `fetch_k` candidates from pgvector (within the last `window_days`
-        when set), then MMR-select `k`.
+        when set), drop any below `min_similarity`, then MMR-select `k`.
 
         Reuse `query_embedding` when the caller already computed it (so the
         query is embedded once per run); otherwise embed `query` here.
@@ -127,6 +128,10 @@ class SupabaseVectorStoreImpl(IVectorStore):
         if window_days and window_days > 0:
             params["window_days"] = window_days
         rows = self._client.rpc(QUERY_NAME, params).execute().data or []
+
+        # Relevance floor: an off-topic query returns fewer/zero docs
+        if min_similarity > 0.0:
+            rows = [r for r in rows if float(r.get("similarity") or 0.0) >= min_similarity]
         if not rows:
             return []
 

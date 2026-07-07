@@ -106,11 +106,16 @@ class RetrievalConfig:
     that moves as time advances). The corpus is sparse and historic, so the
     default is a broad year. Set it to 0 to disable the filter and search the
     whole corpus.
+
+    `min_similarity` cosine floor applied to `fetch_k` candidates before
+    MMR. Chunks scoring below it are dropped (value specific to EMBEDDING_MODEL & corpus):
+    ~0.67 off-topic .. ~0.84 on-topic.
     """
     k: int = 5
     fetch_k: int = 20
     lambda_mult: float = 0.5
     window_days: int = 365
+    min_similarity: float = 0.72
 
 
 @dataclass
@@ -250,6 +255,7 @@ class AppConfig:
             fetch_k=int(os.getenv("RETRIEVAL_FETCH_K", "20")),
             lambda_mult=float(os.getenv("RETRIEVAL_LAMBDA_MULT", "0.5")),
             window_days=int(os.getenv("RETRIEVAL_WINDOW_DAYS", "365")),
+            min_similarity=float(os.getenv("RETRIEVAL_MIN_SIMILARITY", "0.72")),
         )
 
         # Supabase configuration (optional — falls back to in-memory if not set)

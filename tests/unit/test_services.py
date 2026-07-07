@@ -134,6 +134,7 @@ class _RecordingVectorStore:
         lambda_mult,
         window_days=None,
         query_embedding=None,
+        min_similarity=0.0,
     ):
         self.retrieve_args = {
             "query": query,
@@ -142,6 +143,7 @@ class _RecordingVectorStore:
             "lambda_mult": lambda_mult,
             "window_days": window_days,
             "query_embedding": query_embedding,
+            "min_similarity": min_similarity,
         }
         return [Document(page_content="r", metadata={"url": "u"})]
 
@@ -189,6 +191,8 @@ class TestDocumentRetrievalService:
         assert vs.retrieve_args["k"] == 5
         assert vs.retrieve_args["fetch_k"] == 20
         assert vs.retrieve_args["lambda_mult"] == 0.5
+        # The configured relevance floor must reach the vector store.
+        assert vs.retrieve_args["min_similarity"] == 0.72
         assert len(docs) == 1
 
     def test_retrieve_passes_window_days(self):

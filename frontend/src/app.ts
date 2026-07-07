@@ -134,7 +134,9 @@ export class FinThesisApp {
       this.render(job);
     } catch (err) {
       if (err instanceof ApiError && err.code === ErrorCode.NoRelevantDocuments) {
-        this.setStatus("No relevant documents found in the corpus for this query.");
+        this.setStatus(
+          "No relevant documents found for this query. Try a broader or different fintech topic.",
+        );
       } else {
         this.reportError(err, "An unexpected error occurred. Is the API running?", "Error");
       }
