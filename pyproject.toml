@@ -27,6 +27,7 @@ dependencies = [
     "python-dotenv==1.0.0",
     # Data
     "pandas==2.3.3",
+    "slowapi>=0.1.10",
 ]
 
 [dependency-groups]

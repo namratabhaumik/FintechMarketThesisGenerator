@@ -13,9 +13,15 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from api.deps import get_container, get_job_manager
+from api.security import (
+    GENERATE_LIMIT,
+    REFINE_LIMIT,
+    limiter,
+    require_api_key,
+)
 from api.schemas import (
     JobResponse,
     JobStatus,
@@ -137,9 +143,17 @@ def _get_job_or_404(jm: IJobManager, job_id: str):
 
 # --- Endpoints ---
 
-@router.post("/theses", status_code=201, response_model=JobResponse, tags=["theses"])
+@router.post(
+    "/theses",
+    status_code=201,
+    response_model=JobResponse,
+    dependencies=[Depends(require_api_key)],
+    tags=["theses"],
+)
+@limiter.limit(GENERATE_LIMIT)
 def create_thesis(
-    request: ThesisRequest,
+    request: Request,
+    payload: ThesisRequest,
     response: Response,
     container: ServiceContainer = Depends(get_container),
     jm: IJobManager = Depends(get_job_manager),
@@ -149,7 +163,7 @@ def create_thesis(
     The job row is created only after generation succeeds, so failures
     surface as HTTP errors rather than stranded rows.
     """
-    query = request.query
+    query = payload.query
 
     # Embed the query once and reuse it: MMR retrieval searches the corpus
     # with it, and episodic recall stores it to rank past runs. On failure,
@@ -243,10 +257,17 @@ def get_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
     return _job_to_response(job, jm)
 
 
-@router.post("/theses/{job_id}/refinements", response_model=JobResponse, tags=["theses"])
+@router.post(
+    "/theses/{job_id}/refinements",
+    response_model=JobResponse,
+    dependencies=[Depends(require_api_key)],
+    tags=["theses"],
+)
+@limiter.limit(REFINE_LIMIT)
 def create_refinement(
+    request: Request,
     job_id: str,
-    request: RefinementRequest,
+    payload: RefinementRequest,
     container: ServiceContainer = Depends(get_container),
     jm: IJobManager = Depends(get_job_manager),
 ):
@@ -272,7 +293,7 @@ def create_refinement(
         "topic": job.query,
         "documents": job.retrieved_docs,
         "current_thesis": job.thesis,
-        "feedback_history": job.feedback_history + [request.feedback],
+        "feedback_history": job.feedback_history + [payload.feedback],
         "refinement_count": job.refinement_count,
         "status": "refining",
         "execution_log": job.execution_log,
@@ -309,7 +330,12 @@ def create_refinement(
     return _job_to_response(updated, jm, hallucination=hallucination)
 
 
-@router.put("/theses/{job_id}/approval", response_model=JobResponse, tags=["theses"])
+@router.put(
+    "/theses/{job_id}/approval",
+    response_model=JobResponse,
+    dependencies=[Depends(require_api_key)],
+    tags=["theses"],
+)
 def approve_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
     """Approve a thesis (idempotent: re-approving returns the existing state).
 
@@ -338,6 +364,8 @@ def get_feedback_options():
 
 
 @router.get("/health", tags=["meta"])
+@limiter.exempt
 def health_check():
-    """Health check endpoint."""
+    """Health check endpoint. Exempt from limits so a global ceiling
+    (RATE_LIMIT_DEFAULT) never trips the platform's health probes."""
     return {"status": "ok"}

@@ -5,21 +5,30 @@ import os
 # Must be set before any imports that touch FAISS / ONNX Runtime.
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv()
+
 import logging  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
 
-from dotenv import load_dotenv  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from slowapi.errors import RateLimitExceeded  # noqa: E402
+from slowapi.middleware import SlowAPIMiddleware  # noqa: E402
 
 from api.deps import init_dependencies  # noqa: E402
 from api.routes import router  # noqa: E402
+from api.security import (  # noqa: E402
+    GLOBAL_RATE_LIMIT_ENABLED,
+    limiter,
+    rate_limit_handler,
+)
 from api.supabase_job_manager import SupabaseJobManager  # noqa: E402
 from config.settings import AppConfig  # noqa: E402
 from core.utils.logging import setup_logging  # noqa: E402
 from dependency_injection.container import ServiceContainer  # noqa: E402
 
-load_dotenv()
 setup_logging()
 
 logger = logging.getLogger(__name__)
@@ -75,5 +84,12 @@ app.add_middleware(
     # lets cross-origin browser JS read the Location set on POST /theses (201).
     expose_headers=["Location"],
 )
+
+# Rate limiting: per-route limits (see routes.py) always apply; the global
+# ceiling is opt-in via RATE_LIMIT_DEFAULT and only then needs the middleware.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
+if GLOBAL_RATE_LIMIT_ENABLED:
+    app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(router)
