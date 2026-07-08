@@ -1,6 +1,7 @@
 """FastEmbed embeddings implementation (ONNX-based, no PyTorch dependency)."""
 
 import logging
+import os
 
 from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_core.embeddings import Embeddings
@@ -21,9 +22,13 @@ class FastEmbedEmbeddingModel(IEmbeddingModel):
             config: Embedding configuration with model name.
         """
         self._config = config
-        logger.info(f"Loading FastEmbed model: {config.model_name}")
+        # Persistent cache_dir so the ONNX model survives OS temp-dir purges
+        # (the library default caches under the temp dir).
+        cache_dir = os.path.expanduser(config.cache_dir)
+        logger.info(f"Loading FastEmbed model: {config.model_name} (cache: {cache_dir})")
         self._embeddings = FastEmbedEmbeddings(
-            model_name=config.model_name
+            model_name=config.model_name,
+            cache_dir=cache_dir,
         )
 
     def get_embeddings(self) -> Embeddings:

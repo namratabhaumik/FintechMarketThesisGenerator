@@ -69,6 +69,9 @@ class EmbeddingConfig:
     """Embedding model configuration."""
     provider: str
     model_name: str
+    # FastEmbed's ONNX model cache dir. Defaults to the HuggingFace cache (the
+    # models are HF-hosted) so it matches the daily-ingest actions/cache path.
+    cache_dir: str = "~/.cache/huggingface"
 
 
 @dataclass
@@ -284,6 +287,7 @@ class AppConfig:
             embedding=EmbeddingConfig(
                 provider=embed_provider,
                 model_name=embed_model,
+                cache_dir=os.getenv("FASTEMBED_CACHE_DIR", "~/.cache/huggingface"),
             ),
             classifier=ClassifierConfig(
                 provider=classifier_provider,
