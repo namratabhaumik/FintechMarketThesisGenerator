@@ -1,32 +1,39 @@
 """Unit tests for the FastAPI layer with Supabase-backed job manager."""
 
+import asyncio
+
 import pytest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 from api.schemas import JobStatus, ThesisRequest, RefinementRequest
 
 
 class TestSupabaseJobManager:
-    """Tests for SupabaseJobManager with mocked Supabase client."""
+    """Tests for SupabaseJobManager with a mocked async Supabase client.
+
+    Methods are async now, so the terminal .execute() is an AsyncMock and the
+    coroutines are driven with asyncio.run (no pytest-asyncio dependency).
+    """
 
     @pytest.fixture
     def mock_client(self):
-        """Create a mock Supabase client."""
+        """Create a mock async Supabase client."""
         client = MagicMock()
-        # Chain: client.table(TABLE).insert(row).execute()
-        client.table.return_value.insert.return_value.execute.return_value = Mock(data=None)
+        # Chain: await client.table(TABLE).insert(row).execute()
+        client.table.return_value.insert.return_value.execute = AsyncMock(
+            return_value=Mock(data=None)
+        )
         return client
 
     @pytest.fixture
     def jm(self, mock_client):
-        """Create a SupabaseJobManager with mocked client."""
-        with patch("api.supabase_job_manager.create_client", return_value=mock_client):
-            from api.supabase_job_manager import SupabaseJobManager
-            return SupabaseJobManager(url="https://fake.supabase.co", service_role_key="fake-key")
+        """Create a SupabaseJobManager with the mocked async client injected."""
+        from api.supabase_job_manager import SupabaseJobManager
+        return SupabaseJobManager(mock_client)
 
     def test_create_job(self, jm, mock_client):
         """Test creating a new job inserts a row and returns a proxy."""
-        job = jm.create_job("digital lending")
+        job = asyncio.run(jm.create_job("digital lending"))
         assert job.id is not None
         assert len(job.id) == 12
         assert job.query == "digital lending"
@@ -35,22 +42,29 @@ class TestSupabaseJobManager:
 
     def test_get_job_found(self, jm, mock_client):
         """Test retrieving an existing job."""
-        mock_client.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = Mock(
-            data={"id": "abc123", "query": "neobanking", "status": "completed", "progress": "Done", "thesis": None, "articles": [], "error": None}
+        mock_client.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute = AsyncMock(
+            return_value=Mock(
+                data={"id": "abc123", "query": "neobanking", "status": "completed", "progress": "Done", "thesis": None, "articles": [], "error": None}
+            )
         )
-        job = jm.get_job("abc123")
+        job = asyncio.run(jm.get_job("abc123"))
         assert job is not None
         assert job.id == "abc123"
         assert job.status == JobStatus.COMPLETED
 
     def test_get_job_not_found(self, jm, mock_client):
         """Test that missing job returns None."""
-        mock_client.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute.return_value = Mock(data=None)
-        assert jm.get_job("nonexistent") is None
+        mock_client.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute = AsyncMock(
+            return_value=Mock(data=None)
+        )
+        assert asyncio.run(jm.get_job("nonexistent")) is None
 
     def test_update_status(self, jm, mock_client):
         """Test updating job status calls update on the table."""
-        jm.update_status("abc123", JobStatus.GENERATING, "Generating thesis...")
+        mock_client.table.return_value.update.return_value.eq.return_value.execute = AsyncMock(
+            return_value=Mock(data=None)
+        )
+        asyncio.run(jm.update_status("abc123", JobStatus.GENERATING, "Generating thesis..."))
         mock_client.table.return_value.update.assert_called_once_with(
             {"status": "generating", "progress": "Generating thesis..."}
         )
@@ -58,21 +72,26 @@ class TestSupabaseJobManager:
     def test_update_job_serialises_thesis(self, jm, mock_client):
         """Test that update_job serialises StructuredThesis to dict."""
         from core.models.thesis import StructuredThesis
+        mock_client.table.return_value.update.return_value.eq.return_value.execute = AsyncMock(
+            return_value=Mock(data=None)
+        )
         thesis = StructuredThesis(key_themes=["AI"], risks=["Regulatory"])
-        jm.update_job("abc123", thesis=thesis)
+        asyncio.run(jm.update_job("abc123", thesis=thesis))
         call_args = mock_client.table.return_value.update.call_args[0][0]
         assert call_args["thesis"]["key_themes"] == ["AI"]
         assert call_args["thesis"]["risks"] == ["Regulatory"]
 
     def test_list_jobs(self, jm, mock_client):
         """Test listing jobs returns proxies ordered by created_at desc."""
-        mock_client.table.return_value.select.return_value.order.return_value.execute.return_value = Mock(
-            data=[
-                {"id": "job2", "query": "second", "status": "pending", "articles": []},
-                {"id": "job1", "query": "first", "status": "completed", "articles": []},
-            ]
+        mock_client.table.return_value.select.return_value.order.return_value.execute = AsyncMock(
+            return_value=Mock(
+                data=[
+                    {"id": "job2", "query": "second", "status": "pending", "articles": []},
+                    {"id": "job1", "query": "first", "status": "completed", "articles": []},
+                ]
+            )
         )
-        jobs = jm.list_jobs()
+        jobs = asyncio.run(jm.list_jobs())
         assert len(jobs) == 2
         assert jobs[0].id == "job2"
         assert jobs[1].id == "job1"
@@ -203,9 +222,13 @@ class TestAPIEndpoints:
         from api.deps import get_container, get_job_manager
         from fastapi import FastAPI
 
+        # Job manager methods are async now -> AsyncMock so `await jm.x()` works.
         mock_jm = MagicMock()
-        mock_jm.get_job.return_value = None
-        mock_jm.list_jobs.return_value = []
+        mock_jm.get_job = AsyncMock(return_value=None)
+        mock_jm.list_jobs = AsyncMock(return_value=[])
+        mock_jm.create_job = AsyncMock()
+        mock_jm.update_job = AsyncMock()
+        mock_jm.match_jobs = AsyncMock(return_value=[])
 
         mock_container = MagicMock()
 

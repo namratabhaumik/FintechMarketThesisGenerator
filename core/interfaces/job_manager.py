@@ -15,29 +15,29 @@ class IJobManager(ABC):
     """
 
     @abstractmethod
-    def create_job(self, query: str) -> Any:
+    async def create_job(self, query: str) -> Any:
         """Create a new job and return a job-like object."""
         pass
 
     @abstractmethod
-    def get_job(self, job_id: str) -> Optional[Any]:
+    async def get_job(self, job_id: str) -> Optional[Any]:
         """Fetch a job by ID. Returns None if not found."""
         pass
 
     @abstractmethod
-    def update_status(
+    async def update_status(
         self, job_id: str, status: JobStatus, progress: Optional[str] = None
     ) -> None:
         """Update job status and optional progress message."""
         pass
 
     @abstractmethod
-    def update_job(self, job_id: str, **fields) -> None:
+    async def update_job(self, job_id: str, **fields) -> None:
         """Persist arbitrary field updates on the job."""
         pass
 
     @abstractmethod
-    def list_jobs(
+    async def list_jobs(
         self,
         limit: Optional[int] = None,
         offset: int = 0,
@@ -51,7 +51,7 @@ class IJobManager(ABC):
         pass
 
     @abstractmethod
-    def match_jobs(
+    async def match_jobs(
         self,
         query_embedding: Any,
         exclude_id: str,

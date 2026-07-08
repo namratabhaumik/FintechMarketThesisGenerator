@@ -9,6 +9,7 @@ state never reaches the DB, so a crash cannot strand a job.
 of one thesis. Errors carry {code, message} in the detail.
 """
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -95,7 +96,7 @@ def _sources_from_docs(docs) -> List[SourceResponse]:
     return sources
 
 
-def _related_for(job, jm: IJobManager) -> List[RelatedThesisResponse]:
+async def _related_for(job, jm: IJobManager) -> List[RelatedThesisResponse]:
     """Episodic recall for a job, from its stored query embedding. Never raises.
 
     Ranking happens in the DB (match_jobs / pgvector).
@@ -104,16 +105,16 @@ def _related_for(job, jm: IJobManager) -> List[RelatedThesisResponse]:
     if not embedding:
         return []
     try:
-        return [
-            RelatedThesisResponse(**r)
-            for r in jm.match_jobs(embedding, job.id, min_similarity=RECALL_MIN_SIMILARITY)
-        ]
+        rows = await jm.match_jobs(embedding, job.id, min_similarity=RECALL_MIN_SIMILARITY)
+        return [RelatedThesisResponse(**r) for r in rows]
     except Exception:
         logger.exception("Failed to compute related past theses")
         return []
 
 
-def _job_to_response(job, jm: IJobManager, hallucination: Optional[dict] = None) -> JobResponse:
+async def _job_to_response(
+    job, jm: IJobManager, hallucination: Optional[dict] = None
+) -> JobResponse:
     """Convert internal job to the full API representation."""
     return JobResponse(
         job_id=job.id,
@@ -129,13 +130,13 @@ def _job_to_response(job, jm: IJobManager, hallucination: Optional[dict] = None)
         execution_log=job.execution_log,
         approved_at=job.approved_at,
         sources=_sources_from_docs(job.retrieved_docs),
-        related_theses=_related_for(job, jm),
+        related_theses=await _related_for(job, jm),
         hallucination=hallucination,
     )
 
 
-def _get_job_or_404(jm: IJobManager, job_id: str):
-    job = jm.get_job(job_id)
+async def _get_job_or_404(jm: IJobManager, job_id: str):
+    job = await jm.get_job(job_id)
     if not job:
         raise _error(404, "job_not_found", f"No thesis job with id '{job_id}'")
     return job
@@ -151,7 +152,7 @@ def _get_job_or_404(jm: IJobManager, job_id: str):
     tags=["theses"],
 )
 @limiter.limit(GENERATE_LIMIT)
-def create_thesis(
+async def create_thesis(
     request: Request,
     payload: ThesisRequest,
     response: Response,
@@ -161,7 +162,9 @@ def create_thesis(
     """Generate a thesis synchronously and persist the completed job.
 
     The job row is created only after generation succeeds, so failures
-    surface as HTTP errors rather than stranded rows.
+    surface as HTTP errors rather than stranded rows. The blocking pipeline
+    (embed / retrieve / generate) runs in a worker thread via asyncio.to_thread
+    so it never blocks the event loop.
     """
     query = payload.query
 
@@ -170,15 +173,18 @@ def create_thesis(
     # retrieval re-embeds internally and recall is skipped.
     query_embedding = None
     try:
-        query_embedding = (
-            container.get_embedding_model().get_embeddings().embed_query(query)
+        query_embedding = await asyncio.to_thread(
+            lambda: container.get_embedding_model().get_embeddings().embed_query(query)
         )
     except Exception:
         logger.exception("Failed to embed query; retrieval will re-embed")
 
     try:
-        retrieval_service = container.get_retrieval_service()
-        docs = retrieval_service.retrieve(query, k=5, query_embedding=query_embedding)
+        docs = await asyncio.to_thread(
+            lambda: container.get_retrieval_service().retrieve(
+                query, k=5, query_embedding=query_embedding
+            )
+        )
     except Exception:
         logger.exception("Retrieval failed")
         raise _error(500, "retrieval_failed", "Could not retrieve documents from the corpus")
@@ -190,15 +196,16 @@ def create_thesis(
         )
 
     try:
-        thesis_service = container.get_thesis_service()
-        thesis = thesis_service.generate_thesis(query, docs)
+        thesis = await asyncio.to_thread(
+            lambda: container.get_thesis_service().generate_thesis(query, docs)
+        )
     except Exception:
         logger.exception("Thesis generation failed")
         raise _error(502, "generation_failed", "The language model failed to generate a thesis")
 
     try:
-        job = jm.create_job(query)
-        jm.update_job(
+        job = await jm.create_job(query)
+        await jm.update_job(
             job.id,
             status=JobStatus.COMPLETED,
             thesis=thesis,
@@ -211,17 +218,17 @@ def create_thesis(
             query_embedding=query_embedding,
         )
         # Re-fetch so the response carries DB-populated fields (created_at).
-        created = jm.get_job(job.id)
+        created = await jm.get_job(job.id)
     except Exception:
         logger.exception("Failed to persist thesis job")
         raise _error(500, "persistence_failed", "Thesis was generated but could not be saved")
 
     response.headers["Location"] = f"/api/theses/{job.id}"
-    return _job_to_response(created, jm)
+    return await _job_to_response(created, jm)
 
 
 @router.get("/theses", response_model=List[ThesisSummaryResponse], tags=["theses"])
-def list_theses(
+async def list_theses(
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
     status: Optional[RefinementStatus] = Query(
@@ -234,6 +241,7 @@ def list_theses(
     Pagination + optional status filter applied in db
     """
     status_value = status.value if status else None
+    jobs = await jm.list_jobs(limit=limit, offset=offset, status=status_value)
     return [
         ThesisSummaryResponse(
             job_id=j.id,
@@ -246,15 +254,15 @@ def list_theses(
             opportunity_score=j.thesis.opportunity_score if j.thesis else None,
             recommendation=j.thesis.recommendation if j.thesis else None,
         )
-        for j in jm.list_jobs(limit=limit, offset=offset, status=status_value)
+        for j in jobs
     ]
 
 
 @router.get("/theses/{job_id}", response_model=JobResponse, tags=["theses"])
-def get_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
+async def get_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
     """Full state of one thesis job (rehydrates everything the UI shows)."""
-    job = _get_job_or_404(jm, job_id)
-    return _job_to_response(job, jm)
+    job = await _get_job_or_404(jm, job_id)
+    return await _job_to_response(job, jm)
 
 
 @router.post(
@@ -264,15 +272,19 @@ def get_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
     tags=["theses"],
 )
 @limiter.limit(REFINE_LIMIT)
-def create_refinement(
+async def create_refinement(
     request: Request,
     job_id: str,
     payload: RefinementRequest,
     container: ServiceContainer = Depends(get_container),
     jm: IJobManager = Depends(get_job_manager),
 ):
-    """Run one refinement round and return the updated thesis state."""
-    job = _get_job_or_404(jm, job_id)
+    """Run one refinement round and return the updated thesis state.
+
+    The LangGraph agent invocation is offloaded to a worker thread so its
+    blocking LLM calls don't block the event loop.
+    """
+    job = await _get_job_or_404(jm, job_id)
     if not job.thesis:
         raise _error(409, "thesis_not_generated", "Thesis not yet generated")
     if job.approved_at:
@@ -281,7 +293,7 @@ def create_refinement(
         raise _error(409, "max_refinements_reached", "Max refinements reached")
 
     try:
-        graph, langfuse_handler = container.get_refinement_graph()
+        graph, langfuse_handler = await asyncio.to_thread(container.get_refinement_graph)
     except NotImplementedError as e:
         raise _error(501, "refinement_not_supported", str(e))
 
@@ -302,7 +314,9 @@ def create_refinement(
 
     invoke_config = {"callbacks": [langfuse_handler]} if langfuse_handler else {}
     try:
-        result_state = graph.invoke(langgraph_state, config=invoke_config)
+        result_state = await asyncio.to_thread(
+            graph.invoke, langgraph_state, config=invoke_config
+        )
     except NotImplementedError as e:
         raise _error(501, "refinement_not_supported", str(e))
     except Exception:
@@ -313,7 +327,7 @@ def create_refinement(
     hallucination = detector.analyze(result_state.get("messages", []))
 
     try:
-        jm.update_job(
+        await jm.update_job(
             job_id,
             thesis=result_state["current_thesis"],
             thesis_history=thesis_history,
@@ -322,12 +336,12 @@ def create_refinement(
             feedback_history=result_state["feedback_history"],
             execution_log=result_state.get("execution_log", []),
         )
-        updated = jm.get_job(job_id)
+        updated = await jm.get_job(job_id)
     except Exception:
         logger.exception("Failed to persist refinement")
         raise _error(500, "persistence_failed", "Refinement ran but could not be saved")
 
-    return _job_to_response(updated, jm, hallucination=hallucination)
+    return await _job_to_response(updated, jm, hallucination=hallucination)
 
 
 @router.put(
@@ -336,25 +350,27 @@ def create_refinement(
     dependencies=[Depends(require_api_key)],
     tags=["theses"],
 )
-def approve_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
+async def approve_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
     """Approve a thesis (idempotent: re-approving returns the existing state).
 
     Approval is terminal: the approval time is stamped and the run is marked
     "refined" so it no longer appears as resumable.
     """
-    job = _get_job_or_404(jm, job_id)
+    job = await _get_job_or_404(jm, job_id)
     if not job.thesis:
         raise _error(409, "thesis_not_generated", "Thesis not yet generated")
     if not job.approved_at:
         ts = datetime.now(timezone.utc).isoformat()
         try:
-            jm.update_job(job_id, approved_at=ts, refinement_status=RefinementStatus.REFINED)
-            job = jm.get_job(job_id)
+            await jm.update_job(
+                job_id, approved_at=ts, refinement_status=RefinementStatus.REFINED
+            )
+            job = await jm.get_job(job_id)
         except Exception:
             logger.exception("Failed to record approval")
             raise _error(500, "persistence_failed", "Approval could not be saved")
         logger.info(f"Thesis approved at {ts} (job {job_id})")
-    return _job_to_response(job, jm)
+    return await _job_to_response(job, jm)
 
 
 @router.get("/feedback-options", response_model=List[str], tags=["meta"])

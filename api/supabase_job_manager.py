@@ -10,7 +10,7 @@ import logging
 import uuid
 from typing import Any, Dict, Optional
 
-from supabase import Client, create_client
+from supabase import AsyncClient
 
 from api.schemas import JobStatus
 from api.serializers import (
@@ -28,13 +28,17 @@ TABLE = "jobs"
 
 
 class SupabaseJobManager(IJobManager):
-    """Persistent job store backed by Supabase."""
+    """Persistent job store backed by Supabase (async client).
 
-    def __init__(self, url: str, service_role_key: str):
-        self._client: Client = create_client(url, service_role_key)
+    One client on the single event loop, requests never share 
+    an HTTP/2 connection across threads.
+    """
+
+    def __init__(self, client: AsyncClient):
+        self._client = client
         logger.info("SupabaseJobManager connected")
 
-    def create_job(self, query: str):
+    async def create_job(self, query: str):
         """Create a new job row and return it."""
         job_id = uuid.uuid4().hex[:12]
         row: Dict[str, Any] = {
@@ -51,14 +55,14 @@ class SupabaseJobManager(IJobManager):
             "execution_log": [],
             "retrieved_docs": [],
         }
-        self._client.table(TABLE).insert(row).execute()
+        await self._client.table(TABLE).insert(row).execute()
         logger.info(f"Job created in Supabase: {job_id} for query: {query!r}")
         return _RowProxy(row)
 
-    def get_job(self, job_id: str):
+    async def get_job(self, job_id: str):
         """Fetch a job by ID. Returns None if not found."""
         resp = (
-            self._client.table(TABLE)
+            await self._client.table(TABLE)
             .select("*")
             .eq("id", job_id)
             .maybe_single()
@@ -68,22 +72,22 @@ class SupabaseJobManager(IJobManager):
             return None
         return _RowProxy(resp.data)
 
-    def update_status(
+    async def update_status(
         self, job_id: str, status: JobStatus, progress: Optional[str] = None
     ):
         """Update job status and optional progress message."""
         update: Dict[str, Any] = {"status": status.value}
         if progress is not None:
             update["progress"] = progress
-        self._client.table(TABLE).update(update).eq("id", job_id).execute()
+        await self._client.table(TABLE).update(update).eq("id", job_id).execute()
 
-    def update_job(self, job_id: str, **fields):
+    async def update_job(self, job_id: str, **fields):
         """Persist arbitrary field updates to the job row."""
         payload = serialise_job_fields(**fields)
         if payload:
-            self._client.table(TABLE).update(payload).eq("id", job_id).execute()
+            await self._client.table(TABLE).update(payload).eq("id", job_id).execute()
 
-    def list_jobs(
+    async def list_jobs(
         self,
         limit: Optional[int] = None,
         offset: int = 0,
@@ -100,10 +104,10 @@ class SupabaseJobManager(IJobManager):
         if limit is not None:
             # Supabase range() is inclusive on both ends, 0-indexed.
             query = query.range(offset, offset + limit - 1)
-        resp = query.execute()
+        resp = await query.execute()
         return [_RowProxy(row) for row in resp.data]
 
-    def match_jobs(
+    async def match_jobs(
         self,
         query_embedding: Any,
         exclude_id: str,
@@ -123,7 +127,7 @@ class SupabaseJobManager(IJobManager):
             "match_count": top_n,
             "min_similarity": min_similarity,
         }
-        resp = self._client.rpc("match_jobs", params).execute()
+        resp = await self._client.rpc("match_jobs", params).execute()
         return resp.data or []
 
 
