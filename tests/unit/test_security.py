@@ -1,7 +1,7 @@
 """Tests for the API security layer: the shared-key gate and rate limiting."""
 
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
@@ -82,7 +82,7 @@ class TestGateWiredToRoutes:
         not 401, since the job does not exist)."""
         monkeypatch.setenv(API_KEY_ENV, "s3cret")
         mock_jm = MagicMock()
-        mock_jm.get_job.return_value = None
+        mock_jm.get_job = AsyncMock(return_value=None)  # handler awaits this
         res = _client(mock_jm).put(
             "/api/theses/x/approval", headers={"X-API-Key": "s3cret"})
         assert res.status_code == 404
@@ -92,7 +92,7 @@ class TestGateWiredToRoutes:
         """Reads are intentionally ungated (deferred RBAC)."""
         monkeypatch.setenv(API_KEY_ENV, "s3cret")
         mock_jm = MagicMock()
-        mock_jm.list_jobs.return_value = []
+        mock_jm.list_jobs = AsyncMock(return_value=[])  # handler awaits this
         client = _client(mock_jm)
         assert client.get("/api/theses").status_code == 200
         assert client.get("/api/feedback-options").status_code == 200

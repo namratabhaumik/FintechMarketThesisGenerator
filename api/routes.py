@@ -37,12 +37,16 @@ from api.schemas import (
 from config.settings import FEEDBACK_OPTIONS
 from core.agents.hallucination_detector import HallucinationDetector
 from core.interfaces.job_manager import IJobManager
-from core.services.episodic_recall import RECALL_MIN_SIMILARITY
 from dependency_injection.container import ServiceContainer
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
+
+# Cosine-similarity floor for episodic recall (passed to the match_jobs RPC).
+# Query-to-query comparison, so it depends on the embedding model only:
+# 0.86 = same-topic + related sub-topics, drops same-domain-different-topic.
+RECALL_MIN_SIMILARITY = 0.86
 
 
 # --- Helpers ---

@@ -45,7 +45,7 @@ Each thesis includes:
 - **Execution trace in the UI.** Each tool invocation is logged to `execution_log` in graph state and rendered in the UI (tool name, status, refinement round). The agent's behavior is inspectable, not a black box.
 - **Fixed feedback reasons.** Each reason maps directly to a tool, keeping the agent's decision space narrow and its routing predictable.
 
-**Approval.** Once a thesis is right, the user flips an approval toggle. Approval is terminal: it stamps the time, freezes the run, and drops it out of the resume picker (nothing left to refine).
+**Approval.** Once a thesis is right, the user clicks Approve. Approval is terminal: it stamps the time, freezes the run, and drops it out of the resume picker (nothing left to refine).
 
 **Session persistence and resume.** Every run is checkpointed to a Supabase job row - the thesis, retrieved docs, refinement count and status, feedback history, execution log, and query embedding - after generation, after each refinement round, and on approval. This makes a run recoverable across a refresh, a new tab, or a server restart. There are three ways back into a past run:
 
@@ -53,7 +53,7 @@ Each thesis includes:
 - **Resume picker.** When you don't have the exact URL, a dropdown lists runs still mid-refinement so you can pick one and continue.
 - **From a related thesis.** Clicking a recalled past thesis (see below) opens it via its `job_id`.
 
-With no Supabase configured, the app runs entirely in browser session state and the resume paths are simply unavailable.
+Supabase is required: the jobs table is the single state carrier, so generation, refinement, approval, and all three resume paths run through it.
 
 **Episodic recall.** On each run the query embedding is compared against past runs, and the most similar prior theses are surfaced in a "Related past theses" panel (with score, recommendation, and similarity). It links back to those runs so prior analysis on a similar topic is one click away.
 
