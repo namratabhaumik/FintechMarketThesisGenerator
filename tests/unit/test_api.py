@@ -146,6 +146,29 @@ class TestSchemas:
         assert JobStatus.GENERATING == "generating"
         assert JobStatus.REFINING == "refining"
 
+    def test_refinement_status_coerces_and_rejects(self):
+        """refinement_status is a str-enum: valid strings from storage coerce to
+        the enum and serialise back to the wire string; unknown values reject."""
+        from api.schemas import JobResponse, RefinementStatus
+        job = JobResponse(job_id="j", query="q", status=JobStatus.COMPLETED,
+                          refinement_status="refining")
+        assert job.refinement_status == RefinementStatus.REFINING
+        assert job.model_dump(mode="json")["refinement_status"] == "refining"
+        with pytest.raises(Exception):
+            JobResponse(job_id="j", query="q", status=JobStatus.COMPLETED,
+                        refinement_status="bogus")
+
+
+class TestSerializers:
+    """Tests for serialise_job_fields enum unwrapping."""
+
+    def test_refinement_status_enum_unwrapped_for_storage(self):
+        """A RefinementStatus enum is stored as its string value, like status."""
+        from api.schemas import RefinementStatus
+        from api.serializers import serialise_job_fields
+        payload = serialise_job_fields(refinement_status=RefinementStatus.REFINED)
+        assert payload["refinement_status"] == "refined"
+
 
 def _row(job_id="test123", query="digital lending", **overrides):
     """A completed job row dict in the stored (Supabase) shape."""
@@ -316,3 +339,15 @@ class TestAPIEndpoints:
         response = client.get("/api/feedback-options")
         assert response.status_code == 200
         assert response.json() == FEEDBACK_OPTIONS
+
+    def test_list_theses_status_filter_forwarded(self, client):
+        """A valid status filter is forwarded to the job manager query."""
+        self._mock_jm.list_jobs.return_value = []
+        response = client.get("/api/theses?status=refining")
+        assert response.status_code == 200
+        assert self._mock_jm.list_jobs.call_args.kwargs["status"] == "refining"
+
+    def test_list_theses_rejects_unknown_status(self, client):
+        """An unknown status value is rejected by enum validation (422)."""
+        response = client.get("/api/theses?status=bogus")
+        assert response.status_code == 422
