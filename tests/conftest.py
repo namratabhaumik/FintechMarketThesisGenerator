@@ -40,7 +40,7 @@ class MockArticleSource(IArticleSource):
 class MockLanguageModel(ILanguageModel):
     """Mock LLM for testing."""
 
-    def summarize(self, documents) -> str:
+    async def summarize(self, documents) -> str:
         """Return mock summary."""
         return "Mock summary: " + " ".join([d.page_content[:50] for d in documents])
 

@@ -166,9 +166,10 @@ async def create_thesis(
     """Generate a thesis synchronously and persist the completed job.
 
     The job row is created only after generation succeeds, so failures
-    surface as HTTP errors rather than stranded rows. The blocking pipeline
-    (embed / retrieve / generate) runs in a worker thread via asyncio.to_thread
-    so it never blocks the event loop.
+    surface as HTTP errors rather than stranded rows. Embed/retrieve are
+    CPU-bound (ONNX embeddings, in-process vector search) and run in a worker
+    thread via asyncio.to_thread; generation calls Gemini natively via
+    async LLM clients, so it awaits directly without occupying a thread.
     """
     query = payload.query
 
@@ -200,9 +201,7 @@ async def create_thesis(
         )
 
     try:
-        thesis = await asyncio.to_thread(
-            lambda: container.get_thesis_service().generate_thesis(query, docs)
-        )
+        thesis = await container.get_thesis_service().generate_thesis(query, docs)
     except Exception:
         logger.exception("Thesis generation failed")
         raise _error(502, "generation_failed", "The language model failed to generate a thesis")
@@ -285,8 +284,8 @@ async def create_refinement(
 ):
     """Run one refinement round and return the updated thesis state.
 
-    The LangGraph agent invocation is offloaded to a worker thread so its
-    blocking LLM calls don't block the event loop.
+    The LangGraph agent runs via ainvoke: its LLM calls use async Gemini
+    clients natively, so the graph awaits directly without blocking a thread.
     """
     job = await _get_job_or_404(jm, job_id)
     if not job.thesis:
@@ -318,9 +317,7 @@ async def create_refinement(
 
     invoke_config = {"callbacks": [langfuse_handler]} if langfuse_handler else {}
     try:
-        result_state = await asyncio.to_thread(
-            graph.invoke, langgraph_state, config=invoke_config
-        )
+        result_state = await graph.ainvoke(langgraph_state, config=invoke_config)
     except NotImplementedError as e:
         raise _error(501, "refinement_not_supported", str(e))
     except Exception:

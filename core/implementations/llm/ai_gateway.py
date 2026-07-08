@@ -91,7 +91,7 @@ class AIGateway(ILanguageModel):
         else:
             return provider, self._fallback_llm
 
-    def summarize(self, documents: List[Document]) -> str:
+    async def summarize(self, documents: List[Document]) -> str:
         """Summarize documents with caching, cost optimization, and routing.
 
         Flow:
@@ -144,7 +144,7 @@ class AIGateway(ILanguageModel):
             # Use fallback to avoid charges
             try:
                 logger.info("Using fallback LLM due to cost limit")
-                result = self._fallback_llm.summarize(documents)
+                result = await self._fallback_llm.summarize(documents)
                 latency_ms = (time.time() - start_time) * 1000
                 if self._config.track_metrics:
                     self._cost_tracker.record_call(
@@ -165,7 +165,7 @@ class AIGateway(ILanguageModel):
         # Step 4: Call selected provider
         try:
             logger.info(f"Calling {provider} LLM for summarization")
-            result = llm.summarize(documents)
+            result = await llm.summarize(documents)
 
             # Step 5: Cache result
             if self._config.cache_enabled:
@@ -202,7 +202,7 @@ class AIGateway(ILanguageModel):
             # Try fallback
             try:
                 logger.info("Attempting fallback LLM after primary failure")
-                result = self._fallback_llm.summarize(documents)
+                result = await self._fallback_llm.summarize(documents)
 
                 if self._config.track_metrics:
                     latency_ms = (time.time() - start_time) * 1000
@@ -219,7 +219,7 @@ class AIGateway(ILanguageModel):
                 logger.error(f"Fallback LLM also failed: {fallback_error}")
                 raise
 
-    def refine(
+    async def refine(
         self,
         documents: List[Document],
         current_thesis_text: str,
@@ -272,7 +272,7 @@ class AIGateway(ILanguageModel):
             # Use fallback to avoid charges
             try:
                 logger.info("Using fallback LLM due to cost limit")
-                result = self._fallback_llm.refine(
+                result = await self._fallback_llm.refine(
                     documents, current_thesis_text, feedback_items
                 )
                 latency_ms = (time.time() - start_time) * 1000
@@ -295,7 +295,7 @@ class AIGateway(ILanguageModel):
         # Step 4: Call selected provider
         try:
             logger.info(f"Calling {provider} LLM for refinement")
-            result = llm.refine(documents, current_thesis_text, feedback_items)
+            result = await llm.refine(documents, current_thesis_text, feedback_items)
 
             # Step 5: Cache result
             if self._config.cache_enabled:
@@ -331,7 +331,7 @@ class AIGateway(ILanguageModel):
             # Try fallback
             try:
                 logger.info("Attempting fallback LLM after primary failure")
-                result = self._fallback_llm.refine(
+                result = await self._fallback_llm.refine(
                     documents, current_thesis_text, feedback_items
                 )
 

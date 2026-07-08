@@ -1,5 +1,6 @@
 """Unit tests for service layer."""
 
+import asyncio
 from datetime import date
 from unittest.mock import Mock
 
@@ -227,7 +228,7 @@ class TestThesisGeneratorService:
         service = ThesisGeneratorService(mock_llm, scoring_service, _empty_trend())
 
         docs = [Document(page_content="Test content", metadata={"url": "http://test.com"})]
-        thesis = service.generate_thesis("Digital Banking", docs)
+        thesis = asyncio.run(service.generate_thesis("Digital Banking", docs))
 
         assert thesis.key_themes is not None
         assert thesis.risks is not None
@@ -242,7 +243,7 @@ class TestThesisGeneratorService:
         service = ThesisGeneratorService(mock_llm, scoring_service, _empty_trend())
 
         docs = [Document(page_content="Digital banking is the future", metadata={"url": "http://test.com"})]
-        thesis = service.generate_thesis("Digital Banking", docs)
+        thesis = asyncio.run(service.generate_thesis("Digital Banking", docs))
 
         assert thesis.raw_output is not None
         assert thesis.sources == ["http://test.com"]
@@ -258,7 +259,7 @@ class TestThesisGeneratorService:
             Document(page_content="Digital banking innovation", metadata={"url": "http://test.com"}),
             Document(page_content="Payment systems growth", metadata={"url": "http://test2.com"}),
         ]
-        thesis = service.generate_thesis("Digital Banking", docs)
+        thesis = asyncio.run(service.generate_thesis("Digital Banking", docs))
 
         assert hasattr(thesis, "opportunity_score")
         assert hasattr(thesis, "confidence_level")
@@ -276,7 +277,7 @@ class TestThesisGeneratorService:
         service = ThesisGeneratorService(mock_llm, scoring_service, _empty_trend())
 
         docs = [Document(page_content="Test", metadata={"url": "http://test.com"})]
-        thesis = service.generate_thesis("Test Query", docs)
+        thesis = asyncio.run(service.generate_thesis("Test Query", docs))
 
         # Verify recommendation is consistent with score
         if thesis.opportunity_score >= 3.75:
@@ -374,7 +375,7 @@ class TestGroundedTagDerivation:
             ),
             self._doc(themes=["Digital Payments"], url="u2"),
         ]
-        thesis = service.generate_thesis("payments", docs)
+        thesis = asyncio.run(service.generate_thesis("payments", docs))
 
         assert thesis.key_themes == ["Digital Payments"]
         assert thesis.risks == ["Regulatory Risk"]

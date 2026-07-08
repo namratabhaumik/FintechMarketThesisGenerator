@@ -1,7 +1,9 @@
 """Unit tests for LLMWrapper retry and fallback functionality."""
 
+import asyncio
+
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 from langchain_core.documents import Document
 
 from core.implementations.llm.llm_wrapper import LLMWrapper
@@ -46,7 +48,7 @@ class TestLLMWrapperSuccess:
             max_retries=2
         )
 
-        result = wrapper.summarize(test_documents)
+        result = asyncio.run(wrapper.summarize(test_documents))
 
         assert result == "Primary summary"
         assert mock_primary_llm.summarize.call_count == 1
@@ -78,7 +80,7 @@ class TestLLMWrapperFallback:
             max_retries=1
         )
 
-        result = wrapper.summarize(test_documents)
+        result = asyncio.run(wrapper.summarize(test_documents))
 
         assert result == "Fallback summary"
         # 1 attempt + 1 retry = 2 calls to primary
@@ -97,7 +99,7 @@ class TestLLMWrapperFallback:
         )
 
         with pytest.raises(RuntimeError, match="Fallback Error"):
-            wrapper.summarize(test_documents)
+            asyncio.run(wrapper.summarize(test_documents))
 
         assert mock_primary_llm.summarize.call_count == 2
         assert mock_fallback_llm.summarize.call_count == 1
@@ -121,13 +123,13 @@ class TestLLMWrapperRetry:
             initial_delay_seconds=0.01
         )
 
-        result = wrapper.summarize(test_documents)
+        result = asyncio.run(wrapper.summarize(test_documents))
 
         assert result == "Success on attempt 3"
         assert mock_primary_llm.summarize.call_count == 3
         assert mock_fallback_llm.summarize.call_count == 0
 
-    @patch('time.sleep')
+    @patch('asyncio.sleep', new_callable=AsyncMock)
     def test_exponential_backoff(self, mock_sleep, test_documents, mock_primary_llm, mock_fallback_llm):
         """Uses exponential backoff between retries."""
         mock_primary_llm.summarize.side_effect = RuntimeError("Always fails")
@@ -140,7 +142,7 @@ class TestLLMWrapperRetry:
             initial_delay_seconds=1.0
         )
 
-        wrapper.summarize(test_documents)
+        asyncio.run(wrapper.summarize(test_documents))
 
         # Should sleep with exponential backoff: 1.0s, then 2.0s
         assert mock_sleep.call_count == 2
@@ -159,7 +161,7 @@ class TestLLMWrapperRetry:
             initial_delay_seconds=0.01
         )
 
-        wrapper.summarize(test_documents)
+        asyncio.run(wrapper.summarize(test_documents))
 
         # max_retries=3 means 1 initial attempt + 3 retries = 4 total attempts
         assert mock_primary_llm.summarize.call_count == 4
@@ -179,7 +181,7 @@ class TestLLMWrapperEdgeCases:
             max_retries=0
         )
 
-        result = wrapper.summarize(test_documents)
+        result = asyncio.run(wrapper.summarize(test_documents))
 
         assert result == "Fallback summary"
         assert mock_primary_llm.summarize.call_count == 1
@@ -194,7 +196,7 @@ class TestLLMWrapperEdgeCases:
             fallback_llm=mock_fallback_llm
         )
 
-        result = wrapper.summarize([])
+        result = asyncio.run(wrapper.summarize([]))
 
         assert result == "Empty summary"
         mock_primary_llm.summarize.assert_called_once_with([])
@@ -215,7 +217,7 @@ class TestLLMWrapperEdgeCases:
             initial_delay_seconds=0.01
         )
 
-        result = wrapper.summarize(test_documents)
+        result = asyncio.run(wrapper.summarize(test_documents))
 
         assert result == "Fallback summary"
         assert mock_primary_llm.summarize.call_count == 3

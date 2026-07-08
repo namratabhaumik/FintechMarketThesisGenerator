@@ -13,6 +13,7 @@ Run from the repo root:
     python -m evals.thesis_narrative_eval
 """
 
+import asyncio
 import os
 from typing import List, Tuple
 
@@ -115,7 +116,7 @@ def build_task(llm):
     def task(*, item, **kwargs) -> dict:
         topic = item["input"]["topic"]
         docs = FIXTURES[topic]
-        summary = llm.summarize(docs)
+        summary = asyncio.run(llm.summarize(docs))
         return {
             "summary": summary,
             "docs_text": "\n".join(d.page_content for d in docs),

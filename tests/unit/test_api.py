@@ -264,8 +264,8 @@ class TestAPIEndpoints:
         self._mock_container.get_retrieval_service.return_value \
             .retrieve.return_value = [Document(page_content="chunk", metadata={})]
         self._mock_container.get_thesis_service.return_value \
-            .generate_thesis.return_value = StructuredThesis(
-                key_themes=["Fintech"], recommendation="Pursue")
+            .generate_thesis = AsyncMock(return_value=StructuredThesis(
+                key_themes=["Fintech"], recommendation="Pursue"))
 
         self._mock_jm.create_job.return_value = _RowProxy(
             _row(thesis=None, retrieved_docs=[], status="pending"))

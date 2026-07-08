@@ -5,7 +5,7 @@ from typing import List
 
 from langchain_core.documents import Document
 from tenacity import (
-    Retrying,
+    AsyncRetrying,
     before_sleep_log,
     retry_if_not_exception_type,
     stop_after_attempt,
@@ -49,8 +49,8 @@ class LLMWrapper(ILanguageModel):
             f"max_retries={max_retries}"
         )
 
-    def _make_retrying(self, **kwargs) -> Retrying:
-        return Retrying(
+    def _make_retrying(self, **kwargs) -> AsyncRetrying:
+        return AsyncRetrying(
             stop=stop_after_attempt(self._max_retries + 1),
             wait=wait_exponential(
                 multiplier=self._initial_delay_seconds,
@@ -62,7 +62,7 @@ class LLMWrapper(ILanguageModel):
             **kwargs,
         )
 
-    def summarize(self, documents: List[Document]) -> str:
+    async def summarize(self, documents: List[Document]) -> str:
         """Summarize documents with retry logic and fallback.
 
         Args:
@@ -75,9 +75,9 @@ class LLMWrapper(ILanguageModel):
             f"Attempting summarization with primary LLM ({self._primary_llm.get_model_name()})"
         )
         try:
-            for attempt in self._make_retrying():
+            async for attempt in self._make_retrying():
                 with attempt:
-                    result = self._primary_llm.summarize(documents)
+                    result = await self._primary_llm.summarize(documents)
             logger.info("Primary LLM summarization succeeded")
             return result
         except Exception:
@@ -86,7 +86,7 @@ class LLMWrapper(ILanguageModel):
                 f"Falling back to {self._fallback_llm.get_model_name()}"
             )
             try:
-                result = self._fallback_llm.summarize(documents)
+                result = await self._fallback_llm.summarize(documents)
                 logger.info("Fallback LLM summarization succeeded")
                 return result
             except Exception as e:
@@ -97,7 +97,7 @@ class LLMWrapper(ILanguageModel):
         """Return the primary model identifier (the billable model on the success path)."""
         return self._primary_llm.get_model_name()
 
-    def refine(
+    async def refine(
         self,
         documents: List[Document],
         current_thesis_text: str,
@@ -119,11 +119,11 @@ class LLMWrapper(ILanguageModel):
             f"Attempting refinement with primary LLM ({self._primary_llm.get_model_name()})"
         )
         try:
-            for attempt in self._make_retrying(
+            async for attempt in self._make_retrying(
                 retry=retry_if_not_exception_type(NotImplementedError)
             ):
                 with attempt:
-                    result = self._primary_llm.refine(
+                    result = await self._primary_llm.refine(
                         documents, current_thesis_text, feedback_items
                     )
             logger.info("Primary LLM refinement succeeded")
@@ -139,7 +139,7 @@ class LLMWrapper(ILanguageModel):
                 f"Falling back to {self._fallback_llm.get_model_name()}"
             )
             try:
-                result = self._fallback_llm.refine(
+                result = await self._fallback_llm.refine(
                     documents, current_thesis_text, feedback_items
                 )
                 logger.info("Fallback LLM refinement succeeded")

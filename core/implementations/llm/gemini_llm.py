@@ -34,7 +34,7 @@ class GeminiLanguageModel(ILanguageModel):
             max_output_tokens=config.max_output_tokens,
         )
 
-    def summarize(self, documents: List[Document]) -> str:
+    async def summarize(self, documents: List[Document]) -> str:
         """Generate summary from documents using Gemini.
 
         Args:
@@ -58,7 +58,7 @@ class GeminiLanguageModel(ILanguageModel):
 
 Summary:"""
 
-            result = self._llm.invoke([HumanMessage(content=prompt)])
+            result = await self._llm.ainvoke([HumanMessage(content=prompt)])
             return result.content
 
         except Exception as e:
@@ -69,7 +69,7 @@ Summary:"""
         """Get model identifier."""
         return self._config.model_name
 
-    def refine(
+    async def refine(
         self,
         documents: List[Document],
         current_thesis_text: str,
@@ -111,7 +111,7 @@ Revised thesis:"""
 
         try:
             logger.info("Refining thesis with Gemini based on user feedback")
-            result = self._llm.invoke([HumanMessage(content=prompt)])
+            result = await self._llm.ainvoke([HumanMessage(content=prompt)])
             logger.info("Thesis refinement complete")
             return result.content
         except Exception as e:

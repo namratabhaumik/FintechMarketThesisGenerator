@@ -29,7 +29,7 @@ def create_thesis_tools(
     """
 
     @tool
-    def refine_thesis(
+    async def refine_thesis(
         feedback_focus: str,
         theme_delta: Annotated[int, Field(ge=-1, le=1)],
         risk_delta: Annotated[int, Field(ge=-1, le=1)],
@@ -68,7 +68,7 @@ def create_thesis_tools(
             f"deltas=(theme={theme_delta}, risk={risk_delta}, signal={signal_delta})"
         )
 
-        refined = thesis_service.refine_thesis(
+        refined = await thesis_service.refine_thesis(
             topic=topic,
             documents=documents,
             current_thesis=current_thesis,
