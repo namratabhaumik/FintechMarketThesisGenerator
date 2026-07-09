@@ -7,8 +7,14 @@
 
 import esbuild from "esbuild";
 import { copyFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 
 const apiBase = process.env.API_BASE ?? "http://localhost:8000";
+
+execSync(
+  "npx @tailwindcss/cli -i src/styles.css -o dist/styles.css --minify",
+  { stdio: "inherit" },
+);
 
 await esbuild.build({
   entryPoints: ["src/main.ts"],
