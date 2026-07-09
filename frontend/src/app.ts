@@ -18,6 +18,12 @@ import { renderJob, renderResumePicker } from "./render";
 import { RefinementStatus } from "./types";
 import type { JobResponse, ThesisSummaryResponse } from "./types";
 
+/** Signed-in user info + sign-out handler, passed in by the auth gate (main.ts). */
+export interface AuthInfo {
+  email?: string | null;
+  onSignOut: () => void;
+}
+
 export class FinThesisApp {
   private currentJob: JobResponse | null = null;
   private feedbackOptions: string[] = [];
@@ -28,7 +34,7 @@ export class FinThesisApp {
   private readonly status: HTMLElement;
   private readonly results: HTMLElement;
 
-  private constructor(root: HTMLElement) {
+  private constructor(root: HTMLElement, auth?: AuthInfo) {
     const header = el(
       "header",
       undefined,
@@ -66,7 +72,7 @@ export class FinThesisApp {
       document.createTextNode("System active"),
     );
 
-    headerInner.append(brand, systemStatus);
+    headerInner.append(brand, auth ? this.buildUserMenu(auth) : systemStatus);
     header.append(headerInner);
 
     const main = el("section", undefined, "max-w-5xl mx-auto px-6 pt-12 pb-8");
@@ -115,7 +121,7 @@ export class FinThesisApp {
     inputRow.append(this.input, this.generateButton);
     main.append(inputRow, this.pickerContainer, this.status);
 
-    root.append(header, main, this.results);
+    root.replaceChildren(header, main, this.results);
 
     this.generateButton.addEventListener("click", () => void this.generate());
     this.input.addEventListener("input", () => this.syncGenerateButton());
@@ -129,11 +135,23 @@ export class FinThesisApp {
     this.generateButton.disabled = this.input.value.trim().length === 0;
   }
 
+  // Signed-in header: user email + sign-out, replacing the "System active" chip.
+  private buildUserMenu(auth: AuthInfo): HTMLElement {
+    const menu = el("div", undefined, "flex items-center gap-3 text-xs");
+    if (auth.email) {
+      menu.append(el("span", auth.email, "text-base-content/60 font-mono hidden sm:block"));
+    }
+    const signOut = el("button", "Sign out", "btn btn-ghost btn-xs");
+    signOut.addEventListener("click", () => auth.onSignOut());
+    menu.append(signOut);
+    return menu;
+  }
+
   /** Build the app in the given root element and start it. */
-  static mount(selector: string): void {
+  static mount(selector: string, auth?: AuthInfo): void {
     const root = document.querySelector<HTMLElement>(selector);
     if (!root) return;
-    new FinThesisApp(root).init();
+    new FinThesisApp(root, auth).init();
   }
 
   private init(): void {

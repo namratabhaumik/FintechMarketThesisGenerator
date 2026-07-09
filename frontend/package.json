@@ -19,5 +19,8 @@
     "openapi-typescript": "^7.4.0",
     "tailwindcss": "^4.3.2",
     "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.110.2"
   }
 }

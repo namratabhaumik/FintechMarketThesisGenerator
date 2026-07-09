@@ -2,6 +2,7 @@
 // types.gen.ts (generated from the FastAPI OpenAPI schema); this stays in
 // lockstep with the backend. Errors carry the backend's {code, message}.
 
+import { getAccessToken } from "./auth";
 import { API_BASE } from "./config";
 import type {
   JobResponse,
@@ -9,6 +10,16 @@ import type {
   ThesisRequest,
   ThesisSummaryResponse,
 } from "./types";
+
+/** fetch() with the Supabase access token attached as a Bearer header when the
+ * user is signed in. Sent on every call so per-user scoping works once the
+ * backend enforces it; harmless while the backend still ignores it. */
+async function authedFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  const token = await getAccessToken();
+  const headers = new Headers(init.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  return fetch(url, { ...init, headers });
+}
 
 /**
  * Machine-readable error codes the UI special-cases. Values must match the
@@ -73,7 +84,7 @@ async function toApiError(res: Response): Promise<ApiError> {
 /** Generate a thesis synchronously. Resolves once the job is persisted. */
 export async function createThesis(query: string): Promise<JobResponse> {
   const payload: ThesisRequest = { query };
-  const res = await fetch(`${API_BASE}/api/theses`, {
+  const res = await authedFetch(`${API_BASE}/api/theses`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -90,7 +101,7 @@ export async function createRefinement(
   feedback: string[],
 ): Promise<JobResponse> {
   const payload: RefinementRequest = { feedback };
-  const res = await fetch(
+  const res = await authedFetch(
     `${API_BASE}/api/theses/${encodeURIComponent(jobId)}/refinements`,
     {
       method: "POST",
@@ -106,7 +117,7 @@ export async function createRefinement(
 
 /** Approve a thesis (terminal, idempotent). Returns its updated state. */
 export async function approveThesis(jobId: string): Promise<JobResponse> {
-  const res = await fetch(
+  const res = await authedFetch(
     `${API_BASE}/api/theses/${encodeURIComponent(jobId)}/approval`,
     { method: "PUT" },
   );
@@ -118,7 +129,7 @@ export async function approveThesis(jobId: string): Promise<JobResponse> {
 
 /** Full state of one thesis job (for ?job_id restore and resume). */
 export async function getThesis(jobId: string): Promise<JobResponse> {
-  const res = await fetch(`${API_BASE}/api/theses/${encodeURIComponent(jobId)}`);
+  const res = await authedFetch(`${API_BASE}/api/theses/${encodeURIComponent(jobId)}`);
   if (!res.ok) {
     throw await toApiError(res);
   }
@@ -133,7 +144,7 @@ export async function listTheses(
 ): Promise<ThesisSummaryResponse[]> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (status) params.set("status", status);
-  const res = await fetch(`${API_BASE}/api/theses?${params.toString()}`);
+  const res = await authedFetch(`${API_BASE}/api/theses?${params.toString()}`);
   if (!res.ok) {
     throw await toApiError(res);
   }
@@ -142,7 +153,7 @@ export async function listTheses(
 
 /** The fixed set of refinement feedback reasons the UI offers. */
 export async function getFeedbackOptions(): Promise<string[]> {
-  const res = await fetch(`${API_BASE}/api/feedback-options`);
+  const res = await authedFetch(`${API_BASE}/api/feedback-options`);
   if (!res.ok) {
     throw await toApiError(res);
   }
