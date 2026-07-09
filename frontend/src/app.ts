@@ -91,8 +91,7 @@ export class FinThesisApp {
     );
     main.append(hero);
 
-    // Resume picker lives above the query input (mirrors app.py's ordering).
-    this.pickerContainer = el("div", undefined, "mb-4");
+    this.pickerContainer = el("div", undefined, "mt-4");
 
     this.input = el(
       "input",
@@ -106,21 +105,28 @@ export class FinThesisApp {
     this.generateButton = el(
       "button",
       "Generate Thesis",
-      "btn btn-primary disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-50",
+      "btn btn-primary disabled:pointer-events-auto disabled:cursor-not-allowed disabled:bg-primary! disabled:text-primary-content! disabled:border-primary! disabled:opacity-40!",
     );
+    this.generateButton.disabled = true; // empty query bar on first load
     this.status = el("p", undefined, "text-xs text-base-content/60 font-mono mt-3");
     this.results = el("section", undefined, "max-w-5xl mx-auto px-6 pb-16 space-y-4");
 
     const inputRow = el("div", undefined, "flex gap-3");
     inputRow.append(this.input, this.generateButton);
-    main.append(this.pickerContainer, inputRow, this.status);
+    main.append(inputRow, this.pickerContainer, this.status);
 
     root.append(header, main, this.results);
 
     this.generateButton.addEventListener("click", () => void this.generate());
+    this.input.addEventListener("input", () => this.syncGenerateButton());
     this.input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") void this.generate();
     });
+  }
+
+  // Keeps the button disabled while the query bar is empty.
+  private syncGenerateButton(): void {
+    this.generateButton.disabled = this.input.value.trim().length === 0;
   }
 
   /** Build the app in the given root element and start it. */
@@ -259,6 +265,7 @@ export class FinThesisApp {
       this.currentJob = job;
       // Sync the query bar to the loaded run
       this.input.value = job.query;
+      this.syncGenerateButton();
       this.setStatus("");
       this.render(job);
       return true;

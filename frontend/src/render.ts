@@ -43,7 +43,7 @@ function collapsible(summaryText: string, body: HTMLElement, open = false, boxed
       "summary",
       summaryText,
       boxed
-        ? "collapse-title text-xs font-semibold uppercase tracking-widest"
+        ? "collapse-title text-xs font-semibold uppercase tracking-widest text-base-content/60 hover:text-base-content transition-colors"
         : "collapse-title text-xs text-base-content/60 min-h-0 py-0",
     ),
   );
@@ -54,10 +54,10 @@ function collapsible(summaryText: string, body: HTMLElement, open = false, boxed
 }
 
 function recommendationBadgeClass(rec: string): string {
-  const base = "badge font-semibold";
-  if (rec === "Pursue") return `${base} badge-primary`;
-  if (rec === "Skip") return `${base} badge-error`;
-  return `${base} badge-warning`; // Investigate and any other value
+  const base = "inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold border";
+  if (rec === "Pursue") return `${base} bg-primary/15 text-primary border-primary/30`;
+  if (rec === "Skip") return `${base} bg-error/15 text-error border-error/30`;
+  return `${base} bg-accent/15 text-accent border-accent/30`; // Investigate and any other value
 }
 
 // --- Source articles ---
@@ -68,7 +68,7 @@ function renderSourceItem(s: SourceResponse): HTMLElement {
     const a = el(
       "a",
       s.title,
-      "text-primary hover:text-primary/80 underline underline-offset-2",
+      "text-xs text-primary hover:text-primary/80 underline underline-offset-2 decoration-primary/30 leading-relaxed transition-colors",
     );
     a.href = s.url;
     a.target = "_blank";
@@ -125,13 +125,21 @@ function renderMetricsStrip(thesis: ThesisResponse): HTMLElement {
     el("span", "%", "text-sm text-base-content/60 mb-0.5 font-mono"),
   );
   confidenceBox.append(confidenceValue);
-  const progress = el("progress", undefined, "progress progress-accent w-full h-1.5");
-  progress.max = 100;
-  progress.value = pct;
-  confidenceBox.append(progress);
+  const barTrack = el("div", undefined, "h-1.5 w-full bg-base-300 rounded-full overflow-hidden");
+  const barFill = el("div", undefined, "h-full rounded-full bg-accent");
+  barFill.style.width = `${pct}%`;
+  barTrack.setAttribute("role", "progressbar");
+  barTrack.setAttribute("aria-valuenow", String(pct));
+  barTrack.setAttribute("aria-valuemax", "100");
+  barTrack.append(barFill);
+  confidenceBox.append(barTrack);
   if (thesis.confidence_as_of) {
     confidenceBox.append(
-      el("p", `trends as of ${thesis.confidence_as_of}`, "text-[10px] text-base-content/60 font-mono mt-1"),
+      el(
+        "p",
+        `trends as of ${fmtDate(thesis.confidence_as_of)}`,
+        "text-[10px] text-base-content/60 font-mono mt-1",
+      ),
     );
   }
   metrics.append(confidenceBox);
@@ -192,7 +200,7 @@ function renderRelated(related: RelatedThesisResponse[]): HTMLElement | null {
     link.href = `?job_id=${encodeURIComponent(r.job_id)}`;
     left.append(link);
 
-    const date = (r.created_at ?? "").slice(0, 10);
+    const date = r.created_at ? fmtDate(r.created_at) : "";
     const parts = [`score ${r.score}/5`, date].filter(Boolean);
     let meta = parts.join(" · ");
     if (r.approved) meta += " · approved";
@@ -257,7 +265,7 @@ function renderActionBar(
   const approveButton = el(
     "button",
     "Approve",
-    "btn btn-primary btn-sm disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-50",
+    "btn btn-primary btn-sm disabled:pointer-events-auto disabled:cursor-not-allowed disabled:bg-primary! disabled:text-primary-content! disabled:border-primary! disabled:opacity-40!",
   );
   approveButton.addEventListener("click", () => {
     approveButton.disabled = true; // prevent double-submit; re-render replaces it
@@ -298,7 +306,7 @@ function renderActionBar(
     const refineButton = el(
       "button",
       "Refine Thesis",
-      "btn btn-outline btn-sm disabled:pointer-events-auto disabled:cursor-not-allowed disabled:opacity-50",
+      "btn btn-outline btn-sm disabled:pointer-events-auto disabled:cursor-not-allowed disabled:bg-transparent! disabled:text-base-content! disabled:border-base-content! disabled:opacity-40!",
     );
     refineButton.disabled = true;
     const syncButton = () => {
@@ -338,13 +346,19 @@ function renderHistory(
     const item = el("div", undefined, "text-xs px-3 py-2.5 bg-base-300/30 rounded-field");
     item.append(el("p", `Version ${i + 1}`, "font-medium mb-0.5"));
     item.append(
-      el("p", `Score: ${prev.opportunity_score}/5 · Recommendation: ${prev.recommendation}`),
+      el(
+        "p",
+        `Score: ${prev.opportunity_score}/5 · Recommendation: ${prev.recommendation}`,
+        "text-base-content/60",
+      ),
     );
     // Pair from the end so a longer feedback_history can't shift annotations.
     const j = i + (feedbackHistory.length - history.length);
     const feedback = j >= 0 && j < feedbackHistory.length ? feedbackHistory[j] : [];
     if (feedback && feedback.length > 0) {
-      item.append(el("p", `Refined with: ${feedback.join(", ")}`, "mt-0.5 text-[10px]"));
+      item.append(
+        el("p", `Refined with: ${feedback.join(", ")}`, "mt-0.5 text-[10px] text-base-content/60"),
+      );
     }
     wrap.append(item);
   });
@@ -387,11 +401,15 @@ function renderExecutionTrace(log: unknown[]): HTMLElement | null {
     );
     list.append(item);
     if (event.refinement_number) {
-      list.append(el("li", `Refinement #${event.refinement_number}`, "text-[10px] font-mono"));
+      list.append(
+        el("li", `Refinement #${event.refinement_number}`, "text-[10px] font-mono text-base-content/60"),
+      );
     }
-    if (event.reason) list.append(el("li", `Reason: ${event.reason}`, "text-[10px] font-mono"));
+    if (event.reason) {
+      list.append(el("li", `Reason: ${event.reason}`, "text-[10px] font-mono text-base-content/60"));
+    }
     for (const change of event.changes ?? []) {
-      list.append(el("li", change, "text-[10px] font-mono"));
+      list.append(el("li", change, "text-[10px] font-mono text-base-content/60"));
     }
   });
   body.append(list);
@@ -404,6 +422,24 @@ export function renderResumePicker(
   jobs: ThesisSummaryResponse[],
   onResume: ResumeHandler,
 ): HTMLElement {
+  const details = el("details", undefined, "group");
+
+  const summary = el(
+    "summary",
+    undefined,
+    "flex items-center gap-1.5 text-xs text-base-content/60 hover:text-base-content transition-colors cursor-pointer list-none [&::-webkit-details-marker]:hidden",
+  );
+  // Static, hardcoded chevron markup (not user/LLM data) - safe as innerHTML.
+  const chevron = el("span", undefined, "transition-transform group-open:rotate-90");
+  chevron.innerHTML =
+    '<svg class="w-3 h-3" viewBox="0 0 12 12" fill="none" aria-hidden="true">' +
+    '<path d="M4.5 2.5L8 6l-3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>';
+  summary.append(
+    chevron,
+    document.createTextNode(`Resume a previous refinement (${jobs.length} available)`),
+  );
+  details.append(summary);
+
   const row = el("div", undefined, "mt-3 flex gap-3 items-center");
 
   const select = el(
@@ -412,16 +448,16 @@ export function renderResumePicker(
     "select select-sm bg-base-200 border-base-300 flex-1 text-xs",
   );
   for (const j of jobs) {
-    const created = (j.created_at ?? "").slice(0, 19);
+    const created = j.created_at ? fmtDate(j.created_at) : "";
     const option = el(
       "option",
-      `${j.query} - round ${j.refinement_count}/3 (${j.refinement_status}) - ${created}`,
+      `${j.query} - round ${j.refinement_count}/3 - ${created}`,
     );
     option.value = j.job_id;
     select.append(option);
   }
 
-  const button = el("button", "Resume", "btn btn-outline btn-sm");
+  const button = el("button", "Resume", "btn btn-sm bg-base-300 hover:bg-base-300/70 border-none text-base-content");
   const resume = () => {
     const jobId = select.value;
     if (!jobId) return;
@@ -439,7 +475,8 @@ export function renderResumePicker(
   });
 
   row.append(select, button);
-  return collapsible(`Resume a previous session (${jobs.length} available)`, row);
+  details.append(row);
+  return details;
 }
 
 // --- Full-job composition ---
@@ -477,7 +514,11 @@ export function renderJob(
   if (sources) card.append(sources);
 
   if (thesis.raw_output) {
-    const raw = el("pre", thesis.raw_output, "text-sm text-base-content/80 whitespace-pre-wrap");
+    const raw = el(
+      "p",
+      thesis.raw_output,
+      "text-sm text-base-content/60 leading-relaxed whitespace-pre-wrap",
+    );
     card.append(collapsible("Raw Summary", raw, true));
   }
 
