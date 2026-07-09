@@ -318,7 +318,6 @@ docker-compose.override.yml
 
 # Node modules (if using any JS tooling)
 node_modules/
-package-lock.json
 yarn.lock
 
 # ============================================================================
@@ -327,3 +326,10 @@ yarn.lock
 # Synthetic datasets and *.example.csv schema samples ARE committed.
 evals/data/*_real.csv
 evals/data/*_real.json
+
+# ============================================================================
+# Frontend generated build artifacts
+# ============================================================================
+frontend/openapi.json
+frontend/src/types.gen.ts
+frontend/dist/

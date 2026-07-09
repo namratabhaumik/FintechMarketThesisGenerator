@@ -1,9 +1,10 @@
 """Unit tests for the refinement graph: component resolution, frozen-number
 assembly, the assemble node orchestration, and the tool registry shape."""
 
+import asyncio
 import json
 from datetime import date
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from langchain_core.documents import Document
@@ -200,7 +201,7 @@ class TestRefineThesisContentOnly:
 
     def test_refine_returns_content_without_scoring(self):
         llm = Mock()
-        llm.refine.return_value = SIGNAL_RICH
+        llm.refine = AsyncMock(return_value=SIGNAL_RICH)
         service = ThesisGeneratorService(
             llm=llm,
             scoring_service=OpportunityScoringService(),
@@ -208,12 +209,12 @@ class TestRefineThesisContentOnly:
         )
         current = StructuredThesis(raw_output="old", opportunity_score=4.0)
 
-        result = service.refine_thesis(
+        result = asyncio.run(service.refine_thesis(
             topic="x",
             documents=[Document(page_content="doc", metadata={"url": "u1"})],
             current_thesis=current,
             feedback_items=["more signals"],
-        )
+        ))
 
         assert result.raw_output == SIGNAL_RICH
         assert result.sources == ["u1"]

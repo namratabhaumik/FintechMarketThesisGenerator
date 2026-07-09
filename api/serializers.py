@@ -11,6 +11,7 @@ The only fields that need special handling are ones JSON cannot represent
 directly (datetimes, the JobStatus enum); the rest pass straight through.
 """
 
+import json
 import logging
 from dataclasses import asdict
 from datetime import date, datetime
@@ -18,7 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from langchain_core.documents import Document
 
-from api.schemas import JobStatus
+from api.schemas import JobStatus, RefinementStatus
 from core.models.article import Article
 from core.models.thesis import StructuredThesis
 
@@ -86,6 +87,22 @@ def rehydrate_docs(raw: Any) -> list:
     return result
 
 
+def rehydrate_query_embedding(raw: Any) -> Optional[list]:
+    """Parse a stored query embedding back into a list of floats.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return [float(x) for x in json.loads(raw)]
+        except (ValueError, TypeError):
+            logger.warning("Skipping malformed query_embedding")
+            return None
+    return None
+
+
 def serialise_thesis(thesis: StructuredThesis) -> dict:
     """Convert a StructuredThesis to a JSON-safe dict.
 
@@ -130,6 +147,16 @@ def serialise_docs(docs: list) -> list:
     return result
 
 
+def serialise_query_embedding(embedding: Any) -> Optional[str]:
+    """Format a query embedding for the `jobs.query_embedding` vector(512) column.
+    """
+    if embedding is None:
+        return None
+    if isinstance(embedding, str):
+        return embedding
+    return json.dumps([float(x) for x in embedding])
+
+
 def serialise_job_fields(**fields) -> Dict[str, Any]:
     """Serialise arbitrary job fields for Supabase storage.
 
@@ -148,8 +175,12 @@ def serialise_job_fields(**fields) -> Dict[str, Any]:
             payload[key] = serialise_articles(value)
         elif key == "status" and isinstance(value, JobStatus):
             payload[key] = value.value
+        elif key == "refinement_status" and isinstance(value, RefinementStatus):
+            payload[key] = value.value
         elif key == "retrieved_docs":
             payload[key] = serialise_docs(value)
+        elif key == "query_embedding":
+            payload[key] = serialise_query_embedding(value)
         else:
             payload[key] = value
     return payload

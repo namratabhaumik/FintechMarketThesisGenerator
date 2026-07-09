@@ -185,7 +185,7 @@ class ThesisGeneratorService:
         self._retrieval_window_days = retrieval_window_days
         self._max_tags = max_tags_per_dimension
 
-    def generate_thesis(
+    async def generate_thesis(
         self,
         topic: str,
         documents: List[Document]
@@ -204,7 +204,7 @@ class ThesisGeneratorService:
         # Step 1: Summarize documents. This is the ONLY LLM call - it writes the
         # narrative prose (raw_output); it does not decide the structured tags.
         logger.info("Step 1: Summarizing retrieved documents...")
-        summary = self._llm.summarize(documents)
+        summary = await self._llm.summarize(documents)
 
         if not summary:
             logger.error("Empty summary returned by LLM")
@@ -266,7 +266,7 @@ class ThesisGeneratorService:
             key_risk_factors=score_result["key_risks"]
         )
 
-    def refine_thesis(
+    async def refine_thesis(
         self,
         topic: str,
         documents: List[Document],
@@ -301,7 +301,7 @@ class ThesisGeneratorService:
         # Step 1: Get refined summary from LLM using feedback
         current_thesis_text = current_thesis.raw_output or ""
         logger.info("Step 1: Refining thesis with LLM feedback...")
-        refined_summary = self._llm.refine(documents, current_thesis_text, feedback_items)
+        refined_summary = await self._llm.refine(documents, current_thesis_text, feedback_items)
 
         if not refined_summary:
             logger.error("Empty refined summary returned by LLM")

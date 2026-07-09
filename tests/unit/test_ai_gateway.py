@@ -1,8 +1,9 @@
 """Tests for AI Gateway cost optimization components."""
 
+import asyncio
 import pytest
 from datetime import datetime
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 from langchain_core.documents import Document
 
 from core.implementations.llm.cache_manager import CacheManager
@@ -265,11 +266,11 @@ class TestAIGateway:
         """Create mock LLM instances."""
         primary = Mock()
         primary.get_model_name.return_value = "gemini-2.0-flash"
-        primary.summarize.return_value = "Primary summary"
+        primary.summarize = AsyncMock(return_value="Primary summary")
 
         fallback = Mock()
         fallback.get_model_name.return_value = "local-extractor"
-        fallback.summarize.return_value = "Fallback summary"
+        fallback.summarize = AsyncMock(return_value="Fallback summary")
 
         return primary, fallback
 
@@ -322,7 +323,7 @@ class TestAIGateway:
         )
 
         docs = [Document(page_content="content")]
-        result = gateway.summarize(docs)
+        result = asyncio.run(gateway.summarize(docs))
 
         assert result == "Cached response"
         # Primary should not be called on cache hit
@@ -343,7 +344,7 @@ class TestAIGateway:
         )
 
         docs = [Document(page_content="new content")]
-        result = gateway.summarize(docs)
+        result = asyncio.run(gateway.summarize(docs))
 
         assert result == "Primary summary"
         primary.summarize.assert_called_once()
@@ -365,7 +366,7 @@ class TestAIGateway:
         )
 
         docs = [Document(page_content="content")]
-        result = gateway.summarize(docs)
+        result = asyncio.run(gateway.summarize(docs))
 
         assert result == "Fallback summary"
         fallback.summarize.assert_called_once()
@@ -385,7 +386,7 @@ class TestAIGateway:
         )
 
         docs = [Document(page_content="content " * 100)]
-        gateway.summarize(docs)
+        asyncio.run(gateway.summarize(docs))
 
         metrics = cost_tracker.get_metrics()
         assert metrics["total_calls"] > 0

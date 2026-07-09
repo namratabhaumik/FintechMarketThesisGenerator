@@ -25,6 +25,7 @@ Run from the repo root:
 
 """
 
+import asyncio
 from datetime import date
 from typing import List
 
@@ -133,7 +134,7 @@ def build_task(graph, handler):
             "messages": [],
         }
         config = {"callbacks": [handler]} if handler else {}
-        result = graph.invoke(state, config=config)
+        result = asyncio.run(graph.ainvoke(state, config=config))
         out = _planner_deltas(result.get("messages", []))
         refined = result.get("current_thesis")
         out["summary"] = getattr(refined, "raw_output", None)

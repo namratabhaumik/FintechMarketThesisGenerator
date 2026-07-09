@@ -62,7 +62,7 @@ class LocalSummarizerModel(ILanguageModel):
         self._config = config
         logger.info("Initializing Local Extractive Summarizer (no API calls)")
 
-    def summarize(self, documents: List[Document]) -> str:
+    async def summarize(self, documents: List[Document]) -> str:
         """Extract summary from documents using keyword scoring.
 
         Args:

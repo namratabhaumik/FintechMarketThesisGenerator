@@ -10,7 +10,7 @@ class ILanguageModel(ABC):
     """Protocol for LLM providers."""
 
     @abstractmethod
-    def summarize(self, documents: List[Document]) -> str:
+    async def summarize(self, documents: List[Document]) -> str:
         """Generate summary from documents."""
         pass
 
@@ -19,7 +19,7 @@ class ILanguageModel(ABC):
         """Return model identifier."""
         pass
 
-    def refine(
+    async def refine(
         self,
         documents: List[Document],
         current_thesis_text: str,

@@ -65,7 +65,7 @@ def _create_langfuse_handler() -> Optional[object]:
 def _make_planner_node(llm_with_tools):
     """Return a planner node that asks the LLM which tool to invoke."""
 
-    def planner_node(state: ThesisRefinementState) -> dict:
+    async def planner_node(state: ThesisRefinementState) -> dict:
         latest_feedback = (
             state["feedback_history"][-1] if state["feedback_history"] else []
         )
@@ -86,7 +86,7 @@ def _make_planner_node(llm_with_tools):
 
         messages = state.get("messages", []) + [HumanMessage(content=prompt)]
         try:
-            response = llm_with_tools.invoke(messages)
+            response = await llm_with_tools.ainvoke(messages)
         except Exception as e:
             logger.error(f"Planner LLM call failed: {e}")
             raise

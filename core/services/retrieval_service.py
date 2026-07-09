@@ -90,6 +90,7 @@ class DocumentRetrievalService:
                 lambda_mult=self._config.lambda_mult,
                 window_days=self._config.window_days,
                 query_embedding=query_embedding,
+                min_similarity=self._config.min_similarity,
             )
         except Exception as e:
             logger.error(f"Retrieval failed for query '{query}': {e}")

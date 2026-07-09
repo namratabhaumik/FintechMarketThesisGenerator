@@ -34,6 +34,7 @@ class IVectorStore(ABC):
         lambda_mult: float,
         window_days: Optional[int] = None,
         query_embedding: Optional[List[float]] = None,
+        min_similarity: float = 0.0,
     ) -> List[Document]:
         """Return up to `k` MMR-selected chunks for `query`.
 
@@ -42,6 +43,9 @@ class IVectorStore(ABC):
         `window_days` is set, only articles published within that trailing
         window (anchored at query time) are considered; None or 0 searches the
         whole corpus. The retrieval service passes these from RetrievalConfig.
+
+        `min_similarity` cosine floor applied to the candidates BEFORE MMR 
+        (default 0.0).
 
         `query_embedding`, when provided, is the already-computed vector for
         `query`: implementations reuse it instead of embedding again, so a

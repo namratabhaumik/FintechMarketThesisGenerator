@@ -74,6 +74,14 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
+      # Cache the FastEmbed/HuggingFace embedding model (keyed on EMBEDDING_MODEL); 
+      # switching models invalidates the cache automatically.
+      - name: Cache embedding model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-model-${{ env.EMBEDDING_MODEL }}
+
       # Stages run in order. Each is a separate step, so a failure stops the job
       # and the later stages don't run.
       - name: Bronze - land raw RSS entries
@@ -84,3 +92,9 @@ jobs:
 
       - name: Gold - recompute weekly trend metrics
         run: uv run python -m scripts.build_gold
+
+      # diagnostic snapshot of similarity distribution in corpus; probe failure 
+      # continues the ci on error (requires sql/corpus_probe.sql applied in Supabase).
+      - name: Probe - snapshot retrieval similarity distribution
+        continue-on-error: true
+        run: uv run python -m scripts.inspect_corpus

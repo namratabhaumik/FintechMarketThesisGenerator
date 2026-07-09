@@ -1,5 +1,7 @@
 """Unit tests for LocalSummarizerModel (pure-Python, no API calls)."""
 
+import asyncio
+
 import pytest
 from unittest.mock import Mock
 from langchain_core.documents import Document
@@ -122,15 +124,15 @@ class TestIsDuplicate:
 class TestSummarize:
     def test_returns_string(self, model):
         docs = [_doc("Stripe raised $1 billion in funding. The company plans to expand globally into payments.")]
-        result = model.summarize(docs)
+        result = asyncio.run(model.summarize(docs))
         assert isinstance(result, str)
 
     def test_empty_documents_returns_fallback(self, model):
-        result = model.summarize([_doc("")])
+        result = asyncio.run(model.summarize([_doc("")]))
         assert result == "No content to summarize."
 
     def test_no_documents_returns_fallback(self, model):
-        result = model.summarize([])
+        result = asyncio.run(model.summarize([]))
         assert result == "No content to summarize."
 
     def test_summarizes_single_document(self, model):
@@ -141,7 +143,7 @@ class TestSummarize:
             "AI is transforming the lending and credit scoring industry. "
             "Blockchain technology enables decentralized financial transactions."
         )
-        result = model.summarize([_doc(text)])
+        result = asyncio.run(model.summarize([_doc(text)]))
         assert len(result) > 0
         assert result != "No content to summarize."
 
@@ -150,7 +152,7 @@ class TestSummarize:
             _doc("Stripe raised $1 billion for payment infrastructure expansion globally."),
             _doc("Neobanks are disrupting traditional banking with digital-first financial services."),
         ]
-        result = model.summarize(docs)
+        result = asyncio.run(model.summarize(docs))
         assert isinstance(result, str)
         assert len(result) > 0
 
@@ -170,7 +172,7 @@ class TestSummarize:
             "Crypto wallets are becoming mainstream for digital asset management.",
         ]
         docs = [_doc(" ".join(sentences))]
-        result = model.summarize(docs)
+        result = asyncio.run(model.summarize(docs))
         # Count by splitting on sentence-terminal punctuation
         output_sentences = [s for s in result.split(". ") if s.strip()]
         assert len(output_sentences) <= 7
@@ -181,5 +183,5 @@ class TestSummarize:
             "The sky is blue and the weather is nice today outside. "  # 0 fintech keywords
             "AI-powered payment fintech platforms are revolutionizing digital banking globally."  # many keywords
         )
-        result = model.summarize([_doc(text)])
+        result = asyncio.run(model.summarize([_doc(text)]))
         assert "fintech" in result.lower() or "payment" in result.lower() or "banking" in result.lower()

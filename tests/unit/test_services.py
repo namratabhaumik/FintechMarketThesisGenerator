@@ -1,5 +1,6 @@
 """Unit tests for service layer."""
 
+import asyncio
 from datetime import date
 from unittest.mock import Mock
 
@@ -134,6 +135,7 @@ class _RecordingVectorStore:
         lambda_mult,
         window_days=None,
         query_embedding=None,
+        min_similarity=0.0,
     ):
         self.retrieve_args = {
             "query": query,
@@ -142,6 +144,7 @@ class _RecordingVectorStore:
             "lambda_mult": lambda_mult,
             "window_days": window_days,
             "query_embedding": query_embedding,
+            "min_similarity": min_similarity,
         }
         return [Document(page_content="r", metadata={"url": "u"})]
 
@@ -189,6 +192,8 @@ class TestDocumentRetrievalService:
         assert vs.retrieve_args["k"] == 5
         assert vs.retrieve_args["fetch_k"] == 20
         assert vs.retrieve_args["lambda_mult"] == 0.5
+        # The configured relevance floor must reach the vector store.
+        assert vs.retrieve_args["min_similarity"] == 0.72
         assert len(docs) == 1
 
     def test_retrieve_passes_window_days(self):
@@ -223,7 +228,7 @@ class TestThesisGeneratorService:
         service = ThesisGeneratorService(mock_llm, scoring_service, _empty_trend())
 
         docs = [Document(page_content="Test content", metadata={"url": "http://test.com"})]
-        thesis = service.generate_thesis("Digital Banking", docs)
+        thesis = asyncio.run(service.generate_thesis("Digital Banking", docs))
 
         assert thesis.key_themes is not None
         assert thesis.risks is not None
@@ -238,7 +243,7 @@ class TestThesisGeneratorService:
         service = ThesisGeneratorService(mock_llm, scoring_service, _empty_trend())
 
         docs = [Document(page_content="Digital banking is the future", metadata={"url": "http://test.com"})]
-        thesis = service.generate_thesis("Digital Banking", docs)
+        thesis = asyncio.run(service.generate_thesis("Digital Banking", docs))
 
         assert thesis.raw_output is not None
         assert thesis.sources == ["http://test.com"]
@@ -254,7 +259,7 @@ class TestThesisGeneratorService:
             Document(page_content="Digital banking innovation", metadata={"url": "http://test.com"}),
             Document(page_content="Payment systems growth", metadata={"url": "http://test2.com"}),
         ]
-        thesis = service.generate_thesis("Digital Banking", docs)
+        thesis = asyncio.run(service.generate_thesis("Digital Banking", docs))
 
         assert hasattr(thesis, "opportunity_score")
         assert hasattr(thesis, "confidence_level")
@@ -272,7 +277,7 @@ class TestThesisGeneratorService:
         service = ThesisGeneratorService(mock_llm, scoring_service, _empty_trend())
 
         docs = [Document(page_content="Test", metadata={"url": "http://test.com"})]
-        thesis = service.generate_thesis("Test Query", docs)
+        thesis = asyncio.run(service.generate_thesis("Test Query", docs))
 
         # Verify recommendation is consistent with score
         if thesis.opportunity_score >= 3.75:
@@ -370,7 +375,7 @@ class TestGroundedTagDerivation:
             ),
             self._doc(themes=["Digital Payments"], url="u2"),
         ]
-        thesis = service.generate_thesis("payments", docs)
+        thesis = asyncio.run(service.generate_thesis("payments", docs))
 
         assert thesis.key_themes == ["Digital Payments"]
         assert thesis.risks == ["Regulatory Risk"]

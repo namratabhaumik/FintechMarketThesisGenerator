@@ -10,12 +10,13 @@ import logging
 import uuid
 from typing import Any, Dict, Optional
 
-from supabase import Client, create_client
+from supabase import AsyncClient
 
 from api.schemas import JobStatus
 from api.serializers import (
     rehydrate_articles,
     rehydrate_docs,
+    rehydrate_query_embedding,
     rehydrate_thesis,
     serialise_job_fields,
 )
@@ -27,13 +28,17 @@ TABLE = "jobs"
 
 
 class SupabaseJobManager(IJobManager):
-    """Persistent job store backed by Supabase."""
+    """Persistent job store backed by Supabase (async client).
 
-    def __init__(self, url: str, service_role_key: str):
-        self._client: Client = create_client(url, service_role_key)
+    One client on the single event loop, requests never share 
+    an HTTP/2 connection across threads.
+    """
+
+    def __init__(self, client: AsyncClient):
+        self._client = client
         logger.info("SupabaseJobManager connected")
 
-    def create_job(self, query: str):
+    async def create_job(self, query: str):
         """Create a new job row and return it."""
         job_id = uuid.uuid4().hex[:12]
         row: Dict[str, Any] = {
@@ -50,14 +55,14 @@ class SupabaseJobManager(IJobManager):
             "execution_log": [],
             "retrieved_docs": [],
         }
-        self._client.table(TABLE).insert(row).execute()
+        await self._client.table(TABLE).insert(row).execute()
         logger.info(f"Job created in Supabase: {job_id} for query: {query!r}")
         return _RowProxy(row)
 
-    def get_job(self, job_id: str):
+    async def get_job(self, job_id: str):
         """Fetch a job by ID. Returns None if not found."""
         resp = (
-            self._client.table(TABLE)
+            await self._client.table(TABLE)
             .select("*")
             .eq("id", job_id)
             .maybe_single()
@@ -67,30 +72,63 @@ class SupabaseJobManager(IJobManager):
             return None
         return _RowProxy(resp.data)
 
-    def update_status(
+    async def update_status(
         self, job_id: str, status: JobStatus, progress: Optional[str] = None
     ):
         """Update job status and optional progress message."""
         update: Dict[str, Any] = {"status": status.value}
         if progress is not None:
             update["progress"] = progress
-        self._client.table(TABLE).update(update).eq("id", job_id).execute()
+        await self._client.table(TABLE).update(update).eq("id", job_id).execute()
 
-    def update_job(self, job_id: str, **fields):
+    async def update_job(self, job_id: str, **fields):
         """Persist arbitrary field updates to the job row."""
         payload = serialise_job_fields(**fields)
         if payload:
-            self._client.table(TABLE).update(payload).eq("id", job_id).execute()
+            await self._client.table(TABLE).update(payload).eq("id", job_id).execute()
 
-    def list_jobs(self) -> list:
-        """List all jobs, most recent first."""
-        resp = (
-            self._client.table(TABLE)
-            .select("*")
-            .order("created_at", desc=True)
-            .execute()
-        )
+    async def list_jobs(
+        self,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        status: Optional[str] = None,
+    ) -> list:
+        """List jobs, most recent first, filtering/paginating at the DB.
+
+        limit=None returns all rows (episodic recall needs the full set);
+        status filters on refinement_status.
+        """
+        query = self._client.table(TABLE).select("*").order("created_at", desc=True)
+        if status is not None:
+            query = query.eq("refinement_status", status)
+        if limit is not None:
+            # Supabase range() is inclusive on both ends, 0-indexed.
+            query = query.range(offset, offset + limit - 1)
+        resp = await query.execute()
         return [_RowProxy(row) for row in resp.data]
+
+    async def match_jobs(
+        self,
+        query_embedding: Any,
+        exclude_id: str,
+        top_n: int = 3,
+        min_similarity: float = 0.86,
+    ) -> list:
+        """Past runs most similar to query_embedding, ranked in the DB.
+
+        Delegates cosine ranking, the similarity floor, and exclusion of the
+        current run + run-less rows to the match_jobs pgvector RPC (episodic
+        recall never pulls the whole jobs table into Python).
+        """
+        # arg name = query_vec; param = query_embedding
+        params = {
+            "query_vec": query_embedding,
+            "exclude_id": exclude_id,
+            "match_count": top_n,
+            "min_similarity": min_similarity,
+        }
+        resp = await self._client.rpc("match_jobs", params).execute()
+        return resp.data or []
 
 
 class _RowProxy:
@@ -114,7 +152,9 @@ class _RowProxy:
         self.feedback_history: list = data.get("feedback_history", [])
         self.execution_log: list = data.get("execution_log", [])
         self.approved_at: Optional[str] = data.get("approved_at")
-        self.query_embedding: Optional[list] = data.get("query_embedding")
+        self.query_embedding: Optional[list] = rehydrate_query_embedding(
+            data.get("query_embedding")
+        )
         self.thesis = rehydrate_thesis(data.get("thesis"))
         self.thesis_history = [
             t for t in (rehydrate_thesis(x) for x in data.get("thesis_history") or [])
