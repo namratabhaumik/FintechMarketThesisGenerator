@@ -18,6 +18,12 @@ import { renderJob, renderResumePicker } from "./render";
 import { RefinementStatus } from "./types";
 import type { JobResponse, ThesisSummaryResponse } from "./types";
 
+/** Signed-in user info + sign-out handler, passed in by the auth gate (main.ts). */
+export interface AuthInfo {
+  email?: string | null;
+  onSignOut: () => void;
+}
+
 export class FinThesisApp {
   private currentJob: JobResponse | null = null;
   private feedbackOptions: string[] = [];
@@ -28,41 +34,124 @@ export class FinThesisApp {
   private readonly status: HTMLElement;
   private readonly results: HTMLElement;
 
-  private constructor(root: HTMLElement) {
-    root.append(el("h1", "FinThesis: Fintech Market Research Assistant"));
+  private constructor(root: HTMLElement, auth?: AuthInfo) {
+    const header = el(
+      "header",
+      undefined,
+      "border-b border-base-300 bg-base-100/80 backdrop-blur-sm sticky top-0 z-50",
+    );
+    const headerInner = el(
+      "div",
+      undefined,
+      "max-w-5xl mx-auto px-6 h-14 flex items-center justify-between",
+    );
 
-    // Resume picker lives above the query input (mirrors app.py's ordering).
-    this.pickerContainer = el("div");
+    const brand = el("div", undefined, "flex items-center gap-3");
+    const logo = el("div", undefined, "w-7 h-7 rounded bg-primary flex items-center justify-center");
+    // Static, hardcoded icon markup (not user/LLM data) - safe as innerHTML.
+    logo.innerHTML =
+      '<svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+      '<path d="M2 11L5.5 6.5L8 9L11 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="text-primary-content" /></svg>';
+    brand.append(
+      logo,
+      el("span", "FinThesis", "font-semibold tracking-tight text-sm"),
+      el(
+        "span",
+        "Fintech Market Research",
+        "hidden sm:block text-xs text-base-content/60 border-l border-base-300 pl-3",
+      ),
+    );
 
-    this.input = el("input");
+    const systemStatus = el(
+      "div",
+      undefined,
+      "flex items-center gap-2 text-xs text-base-content/60 font-mono",
+    );
+    systemStatus.append(
+      el("span", undefined, "w-1.5 h-1.5 rounded-full bg-primary animate-pulse"),
+      document.createTextNode("System active"),
+    );
+
+    headerInner.append(brand, auth ? this.buildUserMenu(auth) : systemStatus);
+    header.append(headerInner);
+
+    const main = el("section", undefined, "max-w-5xl mx-auto px-6 pt-12 pb-8");
+
+    const hero = el("div", undefined, "mb-8");
+    hero.append(
+      el(
+        "p",
+        "AI Research Assistant",
+        "text-xs font-mono text-primary uppercase tracking-widest mb-2",
+      ),
+      el(
+        "h1",
+        "What fintech market do you want to analyze?",
+        "text-2xl font-semibold leading-snug",
+      ),
+      el(
+        "p",
+        "Enter a topic or question - we'll research recent articles and return a scored investment thesis.",
+        "text-sm text-base-content/60 mt-1 leading-relaxed",
+      ),
+    );
+    main.append(hero);
+
+    this.pickerContainer = el("div", undefined, "mt-4");
+
+    this.input = el(
+      "input",
+      undefined,
+      "w-full bg-base-200 border border-base-300 rounded-field px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/60",
+    );
     this.input.type = "text";
     this.input.placeholder = "e.g., Future of Digital Lending in Asia";
     this.input.setAttribute("aria-label", "Market topic or question");
 
-    this.generateButton = el("button", "Generate Thesis");
-    this.status = el("p");
-    this.status.className = "status";
-    this.results = el("section");
-
-    root.append(
-      this.pickerContainer,
-      this.input,
-      this.generateButton,
-      this.status,
-      this.results,
+    this.generateButton = el(
+      "button",
+      "Generate Thesis",
+      "btn btn-primary disabled:pointer-events-auto disabled:cursor-not-allowed disabled:bg-primary! disabled:text-primary-content! disabled:border-primary! disabled:opacity-40!",
     );
+    this.generateButton.disabled = true; // empty query bar on first load
+    this.status = el("p", undefined, "text-xs text-base-content/60 font-mono mt-3");
+    this.results = el("section", undefined, "max-w-5xl mx-auto px-6 pb-16 space-y-4");
+
+    const inputRow = el("div", undefined, "flex gap-3");
+    inputRow.append(this.input, this.generateButton);
+    main.append(inputRow, this.pickerContainer, this.status);
+
+    root.replaceChildren(header, main, this.results);
 
     this.generateButton.addEventListener("click", () => void this.generate());
+    this.input.addEventListener("input", () => this.syncGenerateButton());
     this.input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") void this.generate();
     });
   }
 
+  // Keeps the button disabled while the query bar is empty.
+  private syncGenerateButton(): void {
+    this.generateButton.disabled = this.input.value.trim().length === 0;
+  }
+
+  // Signed-in header: user email + sign-out, replacing the "System active" chip.
+  private buildUserMenu(auth: AuthInfo): HTMLElement {
+    const menu = el("div", undefined, "flex items-center gap-3 text-xs");
+    if (auth.email) {
+      menu.append(el("span", auth.email, "text-base-content/60 font-mono hidden sm:block"));
+    }
+    const signOut = el("button", "Sign out", "btn btn-ghost btn-xs");
+    signOut.addEventListener("click", () => auth.onSignOut());
+    menu.append(signOut);
+    return menu;
+  }
+
   /** Build the app in the given root element and start it. */
-  static mount(selector: string): void {
+  static mount(selector: string, auth?: AuthInfo): void {
     const root = document.querySelector<HTMLElement>(selector);
     if (!root) return;
-    new FinThesisApp(root).init();
+    new FinThesisApp(root, auth).init();
   }
 
   private init(): void {
@@ -194,6 +283,7 @@ export class FinThesisApp {
       this.currentJob = job;
       // Sync the query bar to the loaded run
       this.input.value = job.query;
+      this.syncGenerateButton();
       this.setStatus("");
       this.render(job);
       return true;
