@@ -39,7 +39,7 @@ export class FinThesisApp {
     const header = el(
       "header",
       undefined,
-      "border-b border-base-300 bg-base-100/80 backdrop-blur-sm sticky top-0 z-50",
+      "print:hidden border-b border-base-300 bg-base-100/80 backdrop-blur-sm sticky top-0 z-50",
     );
     const headerInner = el(
       "div",
@@ -76,7 +76,7 @@ export class FinThesisApp {
     headerInner.append(brand, auth ? this.buildUserMenu(auth) : systemStatus);
     header.append(headerInner);
 
-    const main = el("section", undefined, "max-w-5xl mx-auto px-6 pt-12 pb-8");
+    const main = el("section", undefined, "print:hidden max-w-5xl mx-auto px-6 pt-12 pb-8");
 
     const hero = el("div", undefined, "mb-8");
     hero.append(
@@ -122,7 +122,7 @@ export class FinThesisApp {
     inputRow.append(this.input, this.generateButton);
     main.append(inputRow, this.pickerContainer, this.status);
 
-    this.pastTheses = el("section", undefined, "max-w-5xl mx-auto px-6 pb-16 -mt-8");
+    this.pastTheses = el("section", undefined, "print:hidden max-w-5xl mx-auto px-6 pb-16 -mt-8");
 
     root.replaceChildren(header, main, this.results, this.pastTheses);
 

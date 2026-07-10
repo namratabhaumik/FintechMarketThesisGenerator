@@ -1,6 +1,7 @@
 // View: functions that turn job state into DOM
 
 import { bulletList, el } from "./dom";
+import { copyToClipboard, downloadFile, jobToMarkdown, jobToText, shareableUrl } from "./export";
 import { fmtDate, sourcesLabel } from "./format";
 import { RefinementStatus } from "./types";
 import type {
@@ -58,6 +59,46 @@ function recommendationBadgeClass(rec: string): string {
   if (rec === "Pursue") return `${base} bg-primary/15 text-primary border-primary/30`;
   if (rec === "Skip") return `${base} bg-error/15 text-error border-error/30`;
   return `${base} bg-accent/15 text-accent border-accent/30`; // Investigate and any other value
+}
+
+// --- Export / share bar ---
+
+// Transient inline confirmation next to a button, e.g. "Copied" for ~1.5s.
+function flash(button: HTMLButtonElement, text: string): void {
+  const original = button.textContent;
+  button.textContent = text;
+  window.setTimeout(() => {
+    button.textContent = original;
+  }, 1500);
+}
+
+function exportButton(label: string, onClick: (btn: HTMLButtonElement) => void): HTMLButtonElement {
+  const btn = el("button", label, "btn btn-ghost btn-xs font-mono");
+  btn.type = "button";
+  btn.addEventListener("click", () => onClick(btn));
+  return btn;
+}
+
+function renderExportBar(job: JobResponse): HTMLElement {
+  const bar = el("div", undefined, "print:hidden flex flex-wrap gap-2");
+
+  bar.append(
+    exportButton("Copy as text", (btn) => {
+      void copyToClipboard(jobToText(job)).then((ok) => flash(btn, ok ? "Copied" : "Copy failed"));
+    }),
+    exportButton("Download Markdown", (btn) => {
+      downloadFile(`finthesis-${job.job_id}.md`, jobToMarkdown(job), "text/markdown");
+      flash(btn, "Downloaded");
+    }),
+    exportButton("Export PDF", () => {
+      window.print();
+    }),
+    exportButton("Copy link", (btn) => {
+      void copyToClipboard(shareableUrl(job)).then((ok) => flash(btn, ok ? "Link copied" : "Copy failed"));
+    }),
+  );
+
+  return bar;
 }
 
 // --- Source articles ---
@@ -228,7 +269,7 @@ function renderActionBar(
   const section = el(
     "section",
     undefined,
-    "bg-base-200 border border-base-300 rounded-box px-6 py-5 space-y-4",
+    "print:hidden bg-base-200 border border-base-300 rounded-box px-6 py-5 space-y-4",
   );
 
   const escalated = job.refinement_status === RefinementStatus.Escalated;
@@ -526,13 +567,16 @@ export function renderJob(
   container.replaceChildren();
 
   const timestamp = job.created_at ? ` · ${fmtDate(job.created_at)}` : "";
-  container.append(
+  const idRow = el("div", undefined, "flex flex-wrap items-center justify-between gap-3");
+  idRow.append(
     el(
       "p",
       `Thesis generated · job_id: ${job.job_id}${timestamp}`,
       "text-xs text-base-content/60 font-mono",
     ),
   );
+  idRow.append(renderExportBar(job));
+  container.append(idRow);
 
   const card = el("div", undefined, "bg-base-200 border border-base-300 rounded-box px-6 py-5 space-y-4");
   container.append(card);
