@@ -19,6 +19,7 @@ from slowapi.middleware import SlowAPIMiddleware  # noqa: E402
 
 from supabase import acreate_client  # noqa: E402
 
+from api.auth import init_client_pool, shutdown_client_pool  # noqa: E402
 from api.deps import init_dependencies  # noqa: E402
 from api.routes import router  # noqa: E402
 from api.security import (  # noqa: E402
@@ -53,6 +54,9 @@ async def lifespan(app: FastAPI):
             "state carrier). Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
         )
 
+    # Initialize the client pool for per-request user-scoped clients
+    init_client_pool(pool_size=20)
+
     container = ServiceContainer(config)
     # acreate_client is a coroutine, so the async Supabase client is built here
     # (in the running loop) rather than in the manager's __init__.
@@ -63,6 +67,8 @@ async def lifespan(app: FastAPI):
     init_dependencies(container, job_manager)
     logger.info("FinThesis FastAPI app initialized (Supabase backend)")
     yield
+    # Shutdown: close all pooled clients
+    await shutdown_client_pool()
 
 
 app = FastAPI(

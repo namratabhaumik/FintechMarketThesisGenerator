@@ -17,6 +17,24 @@ Each thesis includes:
 - The source articles used to reach the conclusion
 - An optional refinement loop - if the output isn't right, pick from a fixed set of feedback reasons and a LangGraph agent rewrites the thesis via tool calls
 
+## What's in a thesis?
+
+Every output you see maps to a specific path. The tag on each says *how* it is computed: **[LLM]** a model call, **[Agent]** the LangGraph refinement agent, **[Python]** deterministic code with no model involved.
+
+Almost everything starts from the same step: a query runs **[Python]** MMR retrieval over the Silver pgvector embeddings → **retrieved chunks** (each carrying its Silver tags + article metadata), which feed the outputs below. `create_thesis` in [`api/routes.py`](api/routes.py) → [`core/services/retrieval_service.py`](core/services/retrieval_service.py).
+
+- **Summary** — retrieved chunks → **[LLM]** `llm.summarize` (Gemini) → narrative prose. The *only* model call in generation. [`thesis_generator_service.py`](core/services/thesis_generator_service.py)
+- **Themes / Risks / Signals** — chunks' Silver-tag metadata → **[Python]** frequency-rank (`Counter.most_common`) → top 3 per dimension. Tags are assigned at Silver ingest, not invented by the model. `_ranked_tags_from_documents`
+- **Score** (0–5) — total Silver signal/theme/risk tag counts → **[Python]** self-normalizing formula (signals + ½·themes lift, risks pull down) → clamp to 0–5. `_compute_score` in [`opportunity_scoring_service.py`](finthesis_internal/opportunity_scoring_service.py)
+- **Confidence** (0–1) — chunks' tag categories → matched against **Gold** weekly trend metrics → **[Python]** `covered_weeks / window_weeks`. Grounded in corpus trend coverage, not the model. `_gold_confidence_inputs` → `_compute_confidence`
+- **Recommendation** — score → **[Python]** fixed thresholds (≥3.75 Pursue, ≥2.5 Investigate, else Skip). `_get_recommendation`
+- **Sources** — chunks → **[Python]** `doc.metadata["url"]` passthrough, deduped, in relevance order. `_sources_from_docs` in [`api/routes.py`](api/routes.py)
+- **Related past theses** — this run's query embedding → **[Python]** pgvector `match_jobs` RPC (cosine ≥ 0.86) → past jobs ranked by *semantic similarity*. Shown inside the thesis card. `_related_for` in [`api/routes.py`](api/routes.py)
+- **Past theses** — **[Python]** `GET /api/theses` → `list_jobs` ordered by `created_at DESC` (pure recency, no similarity) → the browsable library on the main page. `list_jobs` in [`api/supabase_job_manager.py`](api/supabase_job_manager.py)
+- **Execution trace** (refinement only) — **[Agent]** planner LLM picks a tool → ToolNode executes → `assemble_node` diffs the old vs new thesis and logs each event → `execution_log`. [`refinement_graph.py`](core/agents/refinement_graph.py)
+
+On **refinement**, the numbers are recomputed the same deterministic way; only the narrative is re-written by **[LLM]** `llm.refine`, and the planner LLM merely nudges *how many* tags surface (±1 per dimension, clamped). `refine_thesis` → `_apply_cap_deltas`.
+
 ## How it works
 
 **Medallion pipeline (Bronze → Silver → Gold).** Ingestion is a three-stage medallion, run daily so the corpus accumulates real history:

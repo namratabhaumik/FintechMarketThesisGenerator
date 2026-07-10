@@ -4,8 +4,14 @@ per-request, user-scoped Supabase client so Row Level Security applies.
 The service-role client (see api.deps) bypasses RLS and is for admin/maintenance
 only; user-facing job endpoints depend on get_user_job_manager instead, which
 runs every query as the caller (anon key + their JWT).
+
+Client pooling: Reuses Supabase SDK clients across requests to reduce creation
+overhead. The pool maintains a bounded number of clients; excess requests queue
+until one becomes available.
 """
 
+import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -18,8 +24,81 @@ from supabase import acreate_client
 from api.supabase_job_manager import SupabaseJobManager
 from core.interfaces.job_manager import IJobManager
 
+logger = logging.getLogger(__name__)
 
 _jwks_client: PyJWKClient | None = None
+_client_pool: "SupabaseClientPool | None" = None
+
+
+class SupabaseClientPool:
+    """Bounded pool of reusable Supabase async clients.
+
+    Maintains a fixed number of idle clients. When a request needs a client:
+      - If idle clients exist, reuse one (fast)
+      - If pool is full, wait for one to be released (backpressure)
+      - If pool has space, create a new one
+    This reduces the per-request handshake overhead while bounding memory.
+    """
+
+    def __init__(self, pool_size: int = 20, supabase_url: str = "", anon_key: str = ""):
+        self.pool_size = pool_size
+        self.supabase_url = supabase_url
+        self.anon_key = anon_key
+        self.semaphore = asyncio.Semaphore(pool_size)
+        self._idle_clients: list = []
+        logger.info(f"Initialized SupabaseClientPool with size {pool_size}")
+
+    async def acquire(self):
+        """Get a client from the pool (create if needed, or wait if exhausted)."""
+        await self.semaphore.acquire()
+        try:
+            if self._idle_clients:
+                client = self._idle_clients.pop()
+                logger.debug("Reusing client from pool")
+            else:
+                logger.debug("Creating new client (pool at capacity)")
+                client = await acreate_client(self.supabase_url, self.anon_key)
+            return client
+        except BaseException:
+            # Creating the client failed (or the task was cancelled) after the
+            # semaphore slot was taken. Release it, otherwise a transient failure
+            # permanently shrinks the pool and enough failures deadlock it.
+            self.semaphore.release()
+            raise
+
+    async def release(self, client):
+        """Return a client to the pool for reuse."""
+        self._idle_clients.append(client)
+        self.semaphore.release()
+        logger.debug(f"Released client back to pool (idle: {len(self._idle_clients)})")
+
+    async def shutdown(self):
+        """Close all idle clients on app shutdown."""
+        for client in self._idle_clients:
+            try:
+                await client.postgrest.aclose()
+            except Exception as e:
+                logger.warning(f"Error closing pooled client on shutdown: {e}")
+        self._idle_clients.clear()
+        logger.info("SupabaseClientPool shutdown complete")
+
+
+def init_client_pool(pool_size: int = 20):
+    """Initialize the global client pool at app startup."""
+    global _client_pool
+    if _client_pool is not None:
+        return
+    supabase_url = os.getenv("SUPABASE_URL", "").rstrip("/")
+    anon_key = os.getenv("SUPABASE_ANON_KEY", "")
+    _client_pool = SupabaseClientPool(pool_size, supabase_url, anon_key)
+
+
+async def shutdown_client_pool():
+    """Shutdown the global client pool."""
+    global _client_pool
+    if _client_pool:
+        await _client_pool.shutdown()
+        _client_pool = None
 
 
 def _supabase_url() -> str:
@@ -76,10 +155,18 @@ async def get_user_job_manager(
 ) -> AsyncIterator[IJobManager]:
     """A per-request job manager backed by a user-scoped Supabase client (anon
     key + the caller's JWT), so every jobs query runs under RLS as that user.
-    The client is closed when the request finishes."""
-    client = await acreate_client(_supabase_url(), os.getenv("SUPABASE_ANON_KEY", ""))
+    The client is acquired from the pool and released back when the request finishes."""
+    if _client_pool is None:
+        raise RuntimeError("Client pool not initialized. Call init_client_pool() at startup.")
+
+    client = await _client_pool.acquire()
+    # SECURITY: pooled clients are shared across users. This auth() call re-scopes
+    # the client to the current caller and MUST run after every acquire(), before
+    # any query. A pooled client still carries the previous caller's token until
+    # this line runs, so any future pool consumer must do the same or it would run
+    # queries as whoever used the client last.
     client.postgrest.auth(user.token)
     try:
         yield SupabaseJobManager(client)
     finally:
-        await client.postgrest.aclose()
+        await _client_pool.release(client)
