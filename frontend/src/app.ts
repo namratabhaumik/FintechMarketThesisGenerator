@@ -14,7 +14,7 @@ import {
   listTheses,
 } from "./api";
 import { el } from "./dom";
-import { renderJob, renderPastTheses, renderResumePicker } from "./render";
+import { renderCompareModal, renderJob, renderPastTheses, renderResumePicker } from "./render";
 import { RefinementStatus } from "./types";
 import type { JobResponse, ThesisSummaryResponse } from "./types";
 
@@ -197,7 +197,7 @@ export class FinThesisApp {
   // throwing (which, inside an async handler, would be an unhandled rejection).
   private render(job: JobResponse): void {
     try {
-      renderJob(this.results, job, this.feedbackOptions, this.onRefine, this.onApprove);
+      renderJob(this.results, job, this.feedbackOptions, this.onRefine, this.onApprove, this.onCompare);
     } catch (err) {
       console.error("Failed to render job", err);
       this.results.replaceChildren();
@@ -225,6 +225,9 @@ export class FinThesisApp {
       await this.ensureFeedbackOptions();
       this.setStatus("");
       this.render(job);
+      // Refresh Past Theses: it excludes the now-current job, so a thesis we
+      // just switched away from surfaces and this fresh one stays out.
+      void this.showPastTheses();
     } catch (err) {
       if (err instanceof ApiError && err.code === ErrorCode.NoRelevantDocuments) {
         this.setStatus(
@@ -277,6 +280,28 @@ export class FinThesisApp {
     })();
   };
 
+  // Open the compare modal with the current thesis as the first column plus the
+  // selected past ones (already capped at 2 in the view).
+  private onCompare = (jobIds: string[]): void => {
+    const current = this.currentJob;
+    if (!current) return;
+    this.setStatus("Loading theses to compare...");
+    void (async () => {
+      const results = await Promise.allSettled(jobIds.map((id) => getThesis(id)));
+      const past = results
+        .filter((r): r is PromiseFulfilledResult<JobResponse> => r.status === "fulfilled")
+        .map((r) => r.value);
+      this.setStatus("");
+      if (past.length < 1) {
+        this.setStatus("Could not load the selected theses to compare.");
+        return;
+      }
+      const dialog = renderCompareModal([current, ...past], () => undefined);
+      document.body.append(dialog);
+      dialog.showModal();
+    })();
+  };
+
   // Load a persisted job by id and render it. Returns whether it loaded, so the
   // resume picker can update the URL on success; the ?job_id path ignores it.
   private async restore(jobId: string): Promise<boolean> {
@@ -290,6 +315,7 @@ export class FinThesisApp {
       this.syncGenerateButton();
       this.setStatus("");
       this.render(job);
+      void this.showPastTheses();
       return true;
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
@@ -327,8 +353,10 @@ export class FinThesisApp {
     this.pickerContainer.replaceChildren(renderResumePicker(jobs, this.onResume));
   }
 
-  // Full research library: every past run regardless of refinement status.
-  // Loaded once at startup (see init()).
+  // Past runs the user can switch to - i.e. everything EXCEPT the thesis
+  // currently on screen (which lives in the results panel, not this list). So
+  // switching away from a thesis makes it appear here, and a just-generated or
+  // just-refined thesis you're still viewing never self-lists.
   private async showPastTheses(): Promise<void> {
     let jobs: ThesisSummaryResponse[];
     try {
@@ -338,7 +366,9 @@ export class FinThesisApp {
       this.pastTheses.replaceChildren();
       return;
     }
-    const list = renderPastTheses(jobs);
+    const currentId = this.currentJob?.job_id;
+    const others = jobs.filter((j) => j.job_id !== currentId);
+    const list = renderPastTheses(others);
     this.pastTheses.replaceChildren(...(list ? [list] : []));
   }
 }

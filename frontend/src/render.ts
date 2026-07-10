@@ -6,6 +6,7 @@ import { fmtDate, sourcesLabel } from "./format";
 import { RefinementStatus } from "./types";
 import type {
   ApproveHandler,
+  CompareHandler,
   ExecutionEvent,
   HallucinationAnalysis,
   JobResponse,
@@ -225,17 +226,139 @@ function renderThesisDetails(thesis: ThesisResponse): HTMLElement {
   return section;
 }
 
+// --- Compare modal ---
+
+/** Attributes-as-rows / theses-as-columns, scoped to a small selection (see
+ * MAX_COMPARE_PAST). The first job is the current thesis (marked as such); the
+ * rest are the selected past ones. */
+export function renderCompareModal(jobs: JobResponse[], onClose: () => void): HTMLDialogElement {
+  const dialog = document.createElement("dialog");
+  dialog.className = "modal";
+
+  const box = el("div", undefined, "modal-box max-w-5xl");
+
+  const headerRow = el("div", undefined, "flex items-center justify-between mb-4");
+  headerRow.append(el("h3", "Compare Theses", "font-semibold text-sm"));
+  const closeBtn = el("button", "Close", "btn btn-sm btn-ghost");
+  closeBtn.type = "button";
+  closeBtn.addEventListener("click", () => dialog.close());
+  headerRow.append(closeBtn);
+  box.append(headerRow);
+
+  const scroll = el("div", undefined, "overflow-x-auto");
+  const table = el("table", undefined, "table table-sm");
+
+  const thead = el("thead");
+  const titleRow = el("tr");
+  titleRow.append(el("th", undefined, "w-28"));
+  jobs.forEach((job, i) => {
+    const th = el("th", undefined, "min-w-[200px] align-top");
+    if (i === 0) {
+      th.append(
+        el(
+          "span",
+          "Current",
+          "inline-block mb-1 px-1.5 py-0.5 rounded bg-primary/15 text-primary text-[10px] font-mono uppercase tracking-wider",
+        ),
+      );
+    }
+    const link = el("a", job.query, "block text-primary hover:text-primary/80 font-medium text-xs");
+    link.href = `?job_id=${encodeURIComponent(job.job_id)}`;
+    th.append(link);
+    titleRow.append(th);
+  });
+  thead.append(titleRow);
+  table.append(thead);
+
+  const tbody = el("tbody");
+  const addRow = (label: string, cellFor: (job: JobResponse) => HTMLElement | string): void => {
+    const row = el("tr");
+    row.append(el("td", label, "text-xs font-mono text-base-content/60 align-top whitespace-nowrap"));
+    for (const job of jobs) {
+      const td = el("td", undefined, "align-top text-xs");
+      const content = cellFor(job);
+      if (typeof content === "string") td.textContent = content;
+      else td.append(content);
+      row.append(td);
+    }
+    tbody.append(row);
+  };
+
+  addRow("Date", (j) => (j.created_at ? fmtDate(j.created_at) : "-"));
+  addRow("Score", (j) => (j.thesis ? `${j.thesis.opportunity_score}/5` : "-"));
+  addRow("Confidence", (j) => (j.thesis ? `${Math.trunc(j.thesis.confidence_level * 100)}%` : "-"));
+  addRow("Recommendation", (j) =>
+    j.thesis ? el("span", j.thesis.recommendation, recommendationBadgeClass(j.thesis.recommendation)) : "-",
+  );
+  addRow("Key Themes", (j) => (j.thesis ? bulletList(j.thesis.key_themes, "None", "bg-primary") : "-"));
+  addRow("Risks", (j) => (j.thesis ? bulletList(j.thesis.risks, "None", "bg-error") : "-"));
+  addRow("Investment Signals", (j) =>
+    j.thesis ? bulletList(j.thesis.investment_signals, "None", "bg-accent") : "-",
+  );
+
+  table.append(tbody);
+  scroll.append(table);
+  box.append(scroll);
+  dialog.append(box);
+
+  // Native <dialog>: a click that lands on the dialog element itself (not the
+  // modal-box) means it hit the ::backdrop - daisyUI's documented
+  // click-outside-to-close pattern.
+  dialog.addEventListener("click", (e) => {
+    if (e.target === dialog) dialog.close();
+  });
+  dialog.addEventListener("close", () => {
+    dialog.remove();
+    onClose();
+  });
+
+  return dialog;
+}
+
 // --- Related past theses (episodic recall) ---
 
-function renderRelated(related: RelatedThesisResponse[]): HTMLElement | null {
+// Compare renders as a table (attributes as rows), which stops being
+// skimmable past a handful of columns. The modal always includes the current
+// thesis as one column, so at most 2 past theses can be selected (2 + current
+// = 3 columns total).
+const MAX_COMPARE_PAST = 2;
+
+function renderRelated(
+  related: RelatedThesisResponse[],
+  onCompare: CompareHandler,
+): HTMLElement | null {
   if (related.length === 0) return null;
   const wrap = el("div", undefined, "space-y-2");
+  const boxes: HTMLInputElement[] = [];
+
+  const compareButton = el("button", "Compare with current", "btn btn-outline btn-xs mt-1");
+  compareButton.type = "button";
+  compareButton.disabled = true;
+
+  const syncBoxes = () => {
+    const checked = boxes.filter((b) => b.checked);
+    for (const b of boxes) b.disabled = !b.checked && checked.length >= MAX_COMPARE_PAST;
+    // Enabled once at least one past thesis is picked (current is the other column).
+    compareButton.disabled = checked.length < 1;
+    compareButton.textContent =
+      checked.length > 0 ? `Compare with current (${checked.length + 1})` : "Compare with current";
+  };
+
   for (const r of related) {
     const item = el(
       "div",
       undefined,
       "flex items-center justify-between py-2.5 px-3 rounded-field bg-base-300/50 hover:bg-base-300",
     );
+
+    const box = el("input", undefined, "checkbox checkbox-primary checkbox-xs flex-shrink-0 mr-3");
+    box.type = "checkbox";
+    box.value = r.job_id;
+    box.setAttribute("aria-label", `Select "${r.query}" to compare`);
+    box.addEventListener("change", syncBoxes);
+    boxes.push(box);
+    item.append(box);
+
     const left = el("div", undefined, "flex flex-col gap-0.5 min-w-0");
     const link = el("a", r.query, "text-xs text-primary hover:text-primary/80 font-medium truncate");
     link.href = `?job_id=${encodeURIComponent(r.job_id)}`;
@@ -255,6 +378,14 @@ function renderRelated(related: RelatedThesisResponse[]): HTMLElement | null {
 
     wrap.append(item);
   }
+
+  compareButton.addEventListener("click", () => {
+    const jobIds = boxes.filter((b) => b.checked).map((b) => b.value);
+    if (jobIds.length < 1) return;
+    onCompare(jobIds);
+  });
+  wrap.append(compareButton);
+
   return collapsible(`Related past theses (${related.length})`, wrap);
 }
 
@@ -563,6 +694,7 @@ export function renderJob(
   feedbackOptions: string[],
   onRefine: RefineHandler,
   onApprove: ApproveHandler,
+  onCompare: CompareHandler,
 ): void {
   container.replaceChildren();
 
@@ -610,7 +742,7 @@ export function renderJob(
 
   card.append(renderThesisDetails(thesis));
 
-  const related = renderRelated(job.related_theses);
+  const related = renderRelated(job.related_theses, onCompare);
   if (related) card.append(related);
 
   // Approval first (matches app.py). When approved, no refinement controls.
