@@ -351,18 +351,18 @@ async def create_refinement(
 async def approve_thesis(job_id: str, jm: IJobManager = Depends(get_user_job_manager)):
     """Approve a thesis (idempotent: re-approving returns the existing state).
 
-    Approval is terminal: the approval time is stamped and the run is marked
-    "refined" so it no longer appears as resumable.
+    Approval stamps approved_at and is terminal & refinement_status tracks refinement alone.
     """
     job = await _get_job_or_404(jm, job_id)
     if not job.thesis:
         raise _error(409, "thesis_not_generated", "Thesis not yet generated")
     if not job.approved_at:
         ts = datetime.now(timezone.utc).isoformat()
+        updates = {"approved_at": ts}
+        if job.refinement_status == RefinementStatus.REFINING:
+            updates["refinement_status"] = RefinementStatus.REFINED
         try:
-            await jm.update_job(
-                job_id, approved_at=ts, refinement_status=RefinementStatus.REFINED
-            )
+            await jm.update_job(job_id, **updates)
             job = await jm.get_job(job_id)
         except Exception:
             logger.exception("Failed to record approval")

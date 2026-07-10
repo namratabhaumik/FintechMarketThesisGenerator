@@ -30,9 +30,9 @@ class RefinementStatus(str, Enum):
     """Refinement lifecycle of a thesis job. Single source of truth for the
     `refinement_status` values the API emits (and the frontend branches on)."""
     NOT_APPLICABLE = "N/A"  # generated, never refined
-    REFINING = "refining"   # mid-refinement; the only resumable state
+    REFINING = "refining"   # refined >=1 round, more possible; the only resumable state
     ESCALATED = "escalated"  # max refinements reached; terminal
-    REFINED = "refined"     # approved; terminal
+    REFINED = "refined"     # refinement finalized (e.g. by approval); terminal
 
 
 # --- Request schemas ---
