@@ -219,7 +219,8 @@ class TestAPIEndpoints:
         """Create a test client by overriding FastAPI dependencies."""
         from fastapi.testclient import TestClient
         from api.routes import router
-        from api.deps import get_container, get_job_manager
+        from api.auth import get_user_job_manager
+        from api.deps import get_container
         from fastapi import FastAPI
 
         # Job manager methods are async now -> AsyncMock so `await jm.x()` works.
@@ -234,7 +235,8 @@ class TestAPIEndpoints:
 
         test_app = FastAPI()
         test_app.include_router(router)
-        test_app.dependency_overrides[get_job_manager] = lambda: mock_jm
+        # Override the per-request user-scoped manager (bypasses JWT auth in tests).
+        test_app.dependency_overrides[get_user_job_manager] = lambda: mock_jm
         test_app.dependency_overrides[get_container] = lambda: mock_container
 
         self._mock_jm = mock_jm

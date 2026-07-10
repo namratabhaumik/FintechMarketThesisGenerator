@@ -126,6 +126,9 @@ class SupabaseConfig:
     """Supabase connection configuration."""
     url: str = ""
     service_role_key: str = ""
+    # Public anon key, used to build per-request user-scoped clients (anon key +
+    # the caller's JWT) so RLS applies. Distinct from service_role, which bypasses RLS.
+    anon_key: str = ""
     enabled: bool = False
 
 
@@ -264,6 +267,7 @@ class AppConfig:
         # Supabase configuration (optional — falls back to in-memory if not set)
         supabase_url = os.getenv("SUPABASE_URL", "")
         supabase_service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+        supabase_anon_key = os.getenv("SUPABASE_ANON_KEY", "")
         supabase_enabled = bool(supabase_url and supabase_service_role_key)
 
         # Load AI Gateway configuration
@@ -301,6 +305,7 @@ class AppConfig:
             supabase=SupabaseConfig(
                 url=supabase_url,
                 service_role_key=supabase_service_role_key,
+                anon_key=supabase_anon_key,
                 enabled=supabase_enabled,
             ),
             ai_gateway=AIGatewayConfig(

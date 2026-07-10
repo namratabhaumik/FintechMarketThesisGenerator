@@ -16,12 +16,12 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
-from api.deps import get_container, get_job_manager
+from api.auth import get_user_job_manager
+from api.deps import get_container
 from api.security import (
     GENERATE_LIMIT,
     REFINE_LIMIT,
     limiter,
-    require_api_key,
 )
 from api.schemas import (
     JobResponse,
@@ -152,7 +152,6 @@ async def _get_job_or_404(jm: IJobManager, job_id: str):
     "/theses",
     status_code=201,
     response_model=JobResponse,
-    dependencies=[Depends(require_api_key)],
     tags=["theses"],
 )
 @limiter.limit(GENERATE_LIMIT)
@@ -161,7 +160,7 @@ async def create_thesis(
     payload: ThesisRequest,
     response: Response,
     container: ServiceContainer = Depends(get_container),
-    jm: IJobManager = Depends(get_job_manager),
+    jm: IJobManager = Depends(get_user_job_manager),
 ):
     """Generate a thesis synchronously and persist the completed job.
 
@@ -237,7 +236,7 @@ async def list_theses(
     status: Optional[RefinementStatus] = Query(
         None, description="Filter by refinement_status (e.g. 'refining' for the resume picker)"
     ),
-    jm: IJobManager = Depends(get_job_manager),
+    jm: IJobManager = Depends(get_user_job_manager),
 ):
     """List thesis jobs, most recent first (slim representations).
 
@@ -262,7 +261,7 @@ async def list_theses(
 
 
 @router.get("/theses/{job_id}", response_model=JobResponse, tags=["theses"])
-async def get_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
+async def get_thesis(job_id: str, jm: IJobManager = Depends(get_user_job_manager)):
     """Full state of one thesis job (rehydrates everything the UI shows)."""
     job = await _get_job_or_404(jm, job_id)
     return await _job_to_response(job, jm)
@@ -271,7 +270,6 @@ async def get_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
 @router.post(
     "/theses/{job_id}/refinements",
     response_model=JobResponse,
-    dependencies=[Depends(require_api_key)],
     tags=["theses"],
 )
 @limiter.limit(REFINE_LIMIT)
@@ -280,7 +278,7 @@ async def create_refinement(
     job_id: str,
     payload: RefinementRequest,
     container: ServiceContainer = Depends(get_container),
-    jm: IJobManager = Depends(get_job_manager),
+    jm: IJobManager = Depends(get_user_job_manager),
 ):
     """Run one refinement round and return the updated thesis state.
 
@@ -348,10 +346,9 @@ async def create_refinement(
 @router.put(
     "/theses/{job_id}/approval",
     response_model=JobResponse,
-    dependencies=[Depends(require_api_key)],
     tags=["theses"],
 )
-async def approve_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
+async def approve_thesis(job_id: str, jm: IJobManager = Depends(get_user_job_manager)):
     """Approve a thesis (idempotent: re-approving returns the existing state).
 
     Approval is terminal: the approval time is stamped and the run is marked
