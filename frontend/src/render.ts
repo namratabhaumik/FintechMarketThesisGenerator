@@ -416,6 +416,41 @@ function renderExecutionTrace(log: unknown[]): HTMLElement | null {
   return collapsible("Execution Trace", body);
 }
 
+// --- Past theses (browsable research library) ---
+
+export function renderPastTheses(jobs: ThesisSummaryResponse[]): HTMLElement | null {
+  if (jobs.length === 0) return null;
+  const wrap = el("div", undefined, "space-y-2");
+  for (const j of jobs) {
+    const item = el(
+      "div",
+      undefined,
+      "flex items-center justify-between py-2.5 px-3 rounded-field bg-base-300/50 hover:bg-base-300",
+    );
+    const left = el("div", undefined, "flex flex-col gap-0.5 min-w-0");
+    const link = el("a", j.query, "text-xs text-primary hover:text-primary/80 font-medium truncate");
+    link.href = `?job_id=${encodeURIComponent(j.job_id)}`;
+    left.append(link);
+
+    const date = j.created_at ? fmtDate(j.created_at) : "";
+    const parts = j.opportunity_score != null ? [`score ${j.opportunity_score}/5`, date] : [date];
+    let meta = parts.filter(Boolean).join(" · ");
+    if (j.approved_at) meta += " · approved";
+    else if (j.refinement_status && j.refinement_status !== "N/A") meta += ` · ${j.refinement_status}`;
+    left.append(el("span", meta, "text-[10px] text-base-content/60 font-mono"));
+    item.append(left);
+
+    const right = el("div", undefined, "flex items-center gap-3 flex-shrink-0 ml-4");
+    if (j.recommendation) {
+      right.append(el("span", j.recommendation, recommendationBadgeClass(j.recommendation)));
+    }
+    item.append(right);
+
+    wrap.append(item);
+  }
+  return collapsible(`Past theses (${jobs.length})`, wrap);
+}
+
 // --- Resume picker (controller filters the list; view builds the widget) ---
 
 export function renderResumePicker(

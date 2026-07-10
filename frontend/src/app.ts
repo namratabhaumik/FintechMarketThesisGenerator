@@ -14,7 +14,7 @@ import {
   listTheses,
 } from "./api";
 import { el } from "./dom";
-import { renderJob, renderResumePicker } from "./render";
+import { renderJob, renderPastTheses, renderResumePicker } from "./render";
 import { RefinementStatus } from "./types";
 import type { JobResponse, ThesisSummaryResponse } from "./types";
 
@@ -33,6 +33,7 @@ export class FinThesisApp {
   private readonly generateButton: HTMLButtonElement;
   private readonly status: HTMLElement;
   private readonly results: HTMLElement;
+  private readonly pastTheses: HTMLElement;
 
   private constructor(root: HTMLElement, auth?: AuthInfo) {
     const header = el(
@@ -121,7 +122,9 @@ export class FinThesisApp {
     inputRow.append(this.input, this.generateButton);
     main.append(inputRow, this.pickerContainer, this.status);
 
-    root.replaceChildren(header, main, this.results);
+    this.pastTheses = el("section", undefined, "max-w-5xl mx-auto px-6 pb-16 -mt-8");
+
+    root.replaceChildren(header, main, this.results, this.pastTheses);
 
     this.generateButton.addEventListener("click", () => void this.generate());
     this.input.addEventListener("input", () => this.syncGenerateButton());
@@ -158,6 +161,7 @@ export class FinThesisApp {
     // Always offer the resume picker (if any resumable runs exist), and
     // additionally restore a specific run when the URL carries ?job_id.
     void this.showResumePicker();
+    void this.showPastTheses();
     const jobId = new URLSearchParams(location.search).get("job_id");
     if (jobId) void this.restore(jobId);
   }
@@ -321,5 +325,20 @@ export class FinThesisApp {
     }
     if (jobs.length === 0) return;
     this.pickerContainer.replaceChildren(renderResumePicker(jobs, this.onResume));
+  }
+
+  // Full research library: every past run regardless of refinement status.
+  // Loaded once at startup (see init()).
+  private async showPastTheses(): Promise<void> {
+    let jobs: ThesisSummaryResponse[];
+    try {
+      jobs = await listTheses(20);
+    } catch (err) {
+      console.error("Failed to load past theses", err);
+      this.pastTheses.replaceChildren();
+      return;
+    }
+    const list = renderPastTheses(jobs);
+    this.pastTheses.replaceChildren(...(list ? [list] : []));
   }
 }
