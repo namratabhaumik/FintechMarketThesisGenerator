@@ -206,9 +206,11 @@ async def create_thesis(
         raise _error(502, "generation_failed", "The language model failed to generate a thesis")
 
     try:
-        job = await jm.create_job(query)
-        await jm.update_job(
-            job.id,
+        # One atomic insert with the full completed state: a failure (or crash)
+        # here creates NO row, so a half-written pending job can never appear
+        # in the library.
+        job = await jm.create_job(
+            query,
             status=JobStatus.COMPLETED,
             thesis=thesis,
             retrieved_docs=docs,
@@ -326,8 +328,13 @@ async def create_refinement(
     hallucination = detector.analyze(result_state.get("messages", []))
 
     try:
-        await jm.update_job(
+        # Guarded persist (optimistic concurrency): only write if no other
+        # request touched the job while the agent ran - an approval landing
+        # mid-refinement (Approve stays clickable in the UI) or a second tab
+        # refining the same job. A lost race returns False; DB errors raise.
+        persisted = await jm.update_job_guarded(
             job_id,
+            {"refinement_count": job.refinement_count, "approved_at": None},
             thesis=result_state["current_thesis"],
             thesis_history=thesis_history,
             refinement_count=result_state["refinement_count"],
@@ -335,10 +342,17 @@ async def create_refinement(
             feedback_history=result_state["feedback_history"],
             execution_log=result_state.get("execution_log", []),
         )
-        updated = await jm.get_job(job_id)
+        updated = await jm.get_job(job_id) if persisted else None
     except Exception:
         logger.exception("Failed to persist refinement")
         raise _error(500, "persistence_failed", "Refinement ran but could not be saved")
+    if not persisted:
+        raise _error(
+            409,
+            "conflict",
+            "This thesis was approved or refined elsewhere while the refinement "
+            "ran; the round was discarded. Reload to see the latest state.",
+        )
 
     return await _job_to_response(updated, jm, hallucination=hallucination)
 
