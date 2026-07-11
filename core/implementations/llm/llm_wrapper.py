@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 class LLMWrapper(ILanguageModel):
     """Wraps an LLM with retry logic and automatic fallback.
 
-    Implements pattern: Try primary LLM with retries, then fall back to secondary.
+    Implements pattern: Try primary LLM with retries, then fall back to
+    secondary. Fallback applies to summarize only; refine propagates after
+    retries (see refine's docstring).
     """
 
     def __init__(
@@ -103,9 +105,14 @@ class LLMWrapper(ILanguageModel):
         current_thesis_text: str,
         feedback_items: List[str],
     ) -> str:
-        """Refine thesis with retry logic and fallback.
+        """Refine thesis with retry logic on the primary LLM only.
 
-        NotImplementedError is re-raised immediately — no retry, no fallback.
+        Unlike summarize, refine has NO fallback: the local summarizer cannot
+        rewrite a thesis (its refine raises NotImplementedError), so once the
+        primary exhausts its retries the error propagates to the caller, which
+        surfaces it and persists nothing.
+
+        NotImplementedError is re-raised immediately — no retry.
 
         Args:
             documents: Source documents for context.
@@ -133,17 +140,9 @@ class LLMWrapper(ILanguageModel):
                 f"{self._primary_llm.get_model_name()} does not support refinement"
             )
             raise
-        except Exception:
-            logger.warning(
-                f"Primary LLM ({self._primary_llm.get_model_name()}) exhausted. "
-                f"Falling back to {self._fallback_llm.get_model_name()}"
+        except Exception as e:
+            logger.error(
+                f"Primary LLM ({self._primary_llm.get_model_name()}) exhausted "
+                f"retries; refinement failed (no fallback): {e}"
             )
-            try:
-                result = await self._fallback_llm.refine(
-                    documents, current_thesis_text, feedback_items
-                )
-                logger.info("Fallback LLM refinement succeeded")
-                return result
-            except Exception as e:
-                logger.error(f"Fallback LLM also failed: {e}")
-                raise
+            raise

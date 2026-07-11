@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
 
-from api.security import limiter, rate_limit_handler
+from api.security import _rate_limit_key, limiter, rate_limit_handler
 
 
 def _client() -> TestClient:
@@ -51,6 +51,28 @@ class TestAuthWiredToRoutes:
         client = _client()
         assert client.get("/api/feedback-options").status_code == 200
         assert client.get("/api/health").status_code == 200
+
+
+class TestRateLimitKey:
+    """Behind a reverse proxy (e.g. Render) the key is the client IP recorded
+    in X-Forwarded-For, so users get separate buckets; without the header
+    (local dev, direct access) it falls back to the peer address."""
+
+    @staticmethod
+    def _request(headers=(), client=("10.0.0.1", 1234)) -> Request:
+        scope = {
+            "type": "http", "method": "GET", "path": "/", "query_string": b"",
+            "headers": list(headers), "client": client,
+            "server": ("test", 80), "scheme": "http",
+        }
+        return Request(scope)
+
+    def test_prefers_first_forwarded_hop(self):
+        req = self._request([(b"x-forwarded-for", b"203.0.113.7, 10.1.2.3")])
+        assert _rate_limit_key(req) == "203.0.113.7"
+
+    def test_falls_back_to_peer_address_without_header(self):
+        assert _rate_limit_key(self._request()) == "10.0.0.1"
 
 
 class TestRateLimit:

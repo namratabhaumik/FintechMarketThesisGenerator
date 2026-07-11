@@ -27,9 +27,18 @@ from slowapi.util import get_remote_address
 # --- Rate limiter -------------------------------------------------------------
 
 def _rate_limit_key(request: Request) -> str:
-    """per-user limiting on a shared bucket for all endpoints (frontend surfaces 
-    a single "rate limit exceeded" error). This is the default key_func for the 
-    Limiter instance below."""
+    """per-user limiting on a shared bucket for all endpoints (frontend surfaces
+    a single "rate limit exceeded" error). This is the default key_func for the
+    Limiter instance below.
+
+    Behind a reverse proxy, the TCP peer is the proxy, so keying
+    on it would put every user in ONE bucket and let a single client's burst
+    429 everyone. Prefer the client IP the proxy records in X-Forwarded-For;
+    absent that header (local dev, direct access), fall back to the peer
+    address."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
     return get_remote_address(request)
 
 

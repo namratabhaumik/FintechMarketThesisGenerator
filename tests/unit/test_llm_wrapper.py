@@ -201,6 +201,43 @@ class TestLLMWrapperEdgeCases:
         assert result == "Empty summary"
         mock_primary_llm.summarize.assert_called_once_with([])
 
+    def test_refine_raises_without_touching_fallback(self, test_documents, mock_primary_llm, mock_fallback_llm):
+        """refine retries the primary but never falls back (the local summarizer
+        cannot rewrite a thesis); the error propagates to the caller so the API
+        surfaces it instead of silently consuming a refinement round."""
+        mock_primary_llm.refine.side_effect = RuntimeError("API down")
+
+        wrapper = LLMWrapper(
+            primary_llm=mock_primary_llm,
+            fallback_llm=mock_fallback_llm,
+            max_retries=1,
+            initial_delay_seconds=0.01,
+        )
+
+        with pytest.raises(RuntimeError, match="API down"):
+            asyncio.run(wrapper.refine(test_documents, "thesis text", ["Too broad"]))
+
+        # 1 attempt + 1 retry on primary; fallback never consulted.
+        assert mock_primary_llm.refine.call_count == 2
+        assert mock_fallback_llm.refine.call_count == 0
+
+    def test_refine_not_implemented_raises_immediately(self, test_documents, mock_primary_llm, mock_fallback_llm):
+        """NotImplementedError from refine is re-raised at once - no retry, no fallback."""
+        mock_primary_llm.refine.side_effect = NotImplementedError("no refine")
+
+        wrapper = LLMWrapper(
+            primary_llm=mock_primary_llm,
+            fallback_llm=mock_fallback_llm,
+            max_retries=2,
+            initial_delay_seconds=0.01,
+        )
+
+        with pytest.raises(NotImplementedError):
+            asyncio.run(wrapper.refine(test_documents, "thesis text", ["Too broad"]))
+
+        assert mock_primary_llm.refine.call_count == 1
+        assert mock_fallback_llm.refine.call_count == 0
+
     def test_different_exception_types(self, test_documents, mock_primary_llm, mock_fallback_llm):
         """Handles different exception types from primary."""
         mock_primary_llm.summarize.side_effect = [

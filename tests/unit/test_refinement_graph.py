@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from langchain_core.documents import Document
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 from core.agents.refinement_graph import (
     _create_langfuse_handler,
@@ -222,6 +222,50 @@ class TestRefineThesisContentOnly:
         # Scoring is handled downstream (assemble_node) - left at defaults here.
         assert result.opportunity_score == 0.0
         assert result.recommendation == ""
+
+
+class TestToolErrorsPropagate:
+    """A tool failure (e.g. a Gemini outage inside refine_thesis) propagates out
+    of graph.ainvoke instead of being swallowed as an error-string ToolMessage,
+    so the route can 502 and the failed round is never persisted."""
+
+    def test_tool_exception_propagates_out_of_ainvoke(self, monkeypatch, current_thesis):
+        from core.agents import refinement_graph as rg
+
+        monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+        monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+
+        # Stub the planner LLM: no network, always calls refine_thesis.
+        planner_response = AIMessage(content="", tool_calls=[{
+            "name": "refine_thesis",
+            "args": {"feedback_focus": "x", "theme_delta": 0,
+                     "risk_delta": 0, "signal_delta": 0},
+            "id": "call1",
+        }])
+        bound_llm = Mock()
+        bound_llm.ainvoke = AsyncMock(return_value=planner_response)
+        fake_chat = Mock()
+        fake_chat.bind_tools.return_value = bound_llm
+        monkeypatch.setattr(rg, "ChatGoogleGenerativeAI", Mock(return_value=fake_chat))
+
+        service = Mock()
+        service.refine_thesis = AsyncMock(side_effect=RuntimeError("gemini outage"))
+        graph, _ = rg.build_refinement_graph(
+            thesis_service=service, gemini_api_key="test-key"
+        )
+
+        state = {
+            "topic": "t",
+            "documents": [Document(page_content="doc", metadata={"url": "u1"})],
+            "current_thesis": current_thesis,
+            "feedback_history": [["Too broad"]],
+            "refinement_count": 0,
+            "status": "refining",
+            "execution_log": [],
+            "messages": [],
+        }
+        with pytest.raises(RuntimeError, match="gemini outage"):
+            asyncio.run(graph.ainvoke(state))
 
 
 class TestLangfuseHandler:

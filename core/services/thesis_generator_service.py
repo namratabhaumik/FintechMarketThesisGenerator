@@ -1,5 +1,6 @@
 """Thesis generator service."""
 
+import asyncio
 import logging
 from collections import Counter
 from datetime import date, timedelta
@@ -240,8 +241,12 @@ class ThesisGeneratorService:
             None if self._retrieval_window_days <= 0
             else max(1, round(self._retrieval_window_days / 7))
         )
+        # The trend repository uses the sync Supabase client, so the read runs
+        # in a worker thread; awaiting it inline would block the event loop for
+        # every other in-flight request.
+        metrics = await asyncio.to_thread(self._trend_repository.fetch_all)
         covered_weeks, window_weeks, as_of = _gold_confidence_inputs(
-            documents, self._trend_repository.fetch_all(), window_weeks
+            documents, metrics, window_weeks
         )
         score_result = self._scoring_service.score_opportunity(
             risks=risks,

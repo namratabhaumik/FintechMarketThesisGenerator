@@ -340,13 +340,16 @@ class TestAPIEndpoints:
         assert response.json()["detail"]["code"] == "already_approved"
 
     def test_approve_stamps_and_is_idempotent(self, client):
-        """Test approval persists a timestamp once and re-approval is a no-op."""
+        """Test approval persists a timestamp once and re-approval is a no-op.
+
+        refinement_status is decoupled from approval: a never-refined job (N/A)
+        keeps its status untouched (only approved_at is written)."""
         from api.supabase_job_manager import _RowProxy
         self._mock_jm.get_job.return_value = _RowProxy(_row())
         response = client.put("/api/theses/test123/approval")
         assert response.status_code == 200
         update_kwargs = self._mock_jm.update_job.call_args.kwargs
-        assert update_kwargs["refinement_status"] == "refined"
+        assert "refinement_status" not in update_kwargs
         assert update_kwargs["approved_at"]
 
         # Already approved: no further write, same state returned.
@@ -357,6 +360,18 @@ class TestAPIEndpoints:
         assert response.status_code == 200
         assert response.json()["approved_at"] == "2026-07-01T12:00:00+00:00"
         self._mock_jm.update_job.assert_not_called()
+
+    def test_approve_mid_refinement_finalizes_status(self, client):
+        """Approving a job that is mid-refinement finalizes refinement_status
+        to "refined" alongside the approval timestamp."""
+        from api.supabase_job_manager import _RowProxy
+        self._mock_jm.get_job.return_value = _RowProxy(
+            _row(refinement_status="refining", refinement_count=1))
+        response = client.put("/api/theses/test123/approval")
+        assert response.status_code == 200
+        update_kwargs = self._mock_jm.update_job.call_args.kwargs
+        assert update_kwargs["refinement_status"] == "refined"
+        assert update_kwargs["approved_at"]
 
     def test_feedback_options(self, client):
         """Test the feedback options endpoint serves the configured list."""

@@ -314,7 +314,12 @@ def build_refinement_graph(
     graph = StateGraph(ThesisRefinementState)
 
     graph.add_node("planner", _make_planner_node(planner_llm))
-    graph.add_node("tools", ToolNode(tools))
+    # handle_tool_errors=False: a tool failure (e.g. a Gemini outage inside
+    # refine_thesis) propagates out of ainvoke instead of coming back as an
+    # error-string ToolMessage that assemble would treat as a parse error. The
+    # route surfaces it as a 502 and persists nothing, so a failed round is
+    # not counted against MAX_REFINEMENTS.
+    graph.add_node("tools", ToolNode(tools, handle_tool_errors=False))
     graph.add_node("assemble", _make_assemble_node())
     graph.add_node("escalate", _escalate_node)
 
