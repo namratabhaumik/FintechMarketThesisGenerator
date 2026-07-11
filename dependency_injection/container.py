@@ -1,6 +1,7 @@
 """Dependency Injection Container for wiring dependencies."""
 
 import logging
+import threading
 from typing import Dict, Optional, Type
 
 from config.settings import AppConfig
@@ -138,6 +139,16 @@ class ServiceContainer:
         """
         self._config = config or AppConfig.from_env()
 
+        # Guards the lazy check-then-set in the getters reached from request
+        # handling: routes run embed/retrieve/graph-build in worker threads
+        # (asyncio.to_thread), so two concurrent FIRST requests could otherwise
+        # both see an empty slot and double-build a singleton (e.g. two ONNX
+        # embedding models in memory at once). Re-entrant because getters nest
+        # (get_retrieval_service -> get_vectorstore -> get_embedding_model).
+        # Offline-pipeline getters (scraper, repos, Silver/Gold services) run
+        # single-threaded and stay unguarded.
+        self._lock = threading.RLock()
+
         # Lazy-loaded interface implementations (singletons)
         self._scraper: Optional[IWebScraper] = None
         self._relevance_classifier: Optional[IRelevanceClassifier] = None
@@ -252,17 +263,21 @@ class ServiceContainer:
             ValueError: If configured embedding provider is not in the registry.
         """
         if not self._embedding_model:
-            provider = self._config.embedding.provider
-            embedding_class = EMBEDDING_PROVIDER_REGISTRY.get(provider)
+            with self._lock:
+                if not self._embedding_model:
+                    provider = self._config.embedding.provider
+                    embedding_class = EMBEDDING_PROVIDER_REGISTRY.get(provider)
 
-            if not embedding_class:
-                raise ValueError(
-                    f"Unknown embedding provider: '{provider}'. "
-                    f"Supported: {list(EMBEDDING_PROVIDER_REGISTRY.keys())}"
-                )
+                    if not embedding_class:
+                        raise ValueError(
+                            f"Unknown embedding provider: '{provider}'. "
+                            f"Supported: {list(EMBEDDING_PROVIDER_REGISTRY.keys())}"
+                        )
 
-            logger.info(f"Creating {provider} embedding model ({embedding_class.__name__})")
-            self._embedding_model = embedding_class(self._config.embedding)
+                    logger.info(
+                        f"Creating {provider} embedding model ({embedding_class.__name__})"
+                    )
+                    self._embedding_model = embedding_class(self._config.embedding)
 
         return self._embedding_model
 
@@ -280,18 +295,20 @@ class ServiceContainer:
             ValueError: If configured vectorstore provider is unknown.
         """
         if not self._vectorstore:
-            provider = self._config.vectorstore.provider
-            factory = VECTORSTORE_PROVIDER_REGISTRY.get(provider)
+            with self._lock:
+                if not self._vectorstore:
+                    provider = self._config.vectorstore.provider
+                    factory = VECTORSTORE_PROVIDER_REGISTRY.get(provider)
 
-            if not factory:
-                raise ValueError(
-                    f"Unknown vectorstore provider: '{provider}'. "
-                    f"Supported: {list(VECTORSTORE_PROVIDER_REGISTRY.keys())}"
-                )
+                    if not factory:
+                        raise ValueError(
+                            f"Unknown vectorstore provider: '{provider}'. "
+                            f"Supported: {list(VECTORSTORE_PROVIDER_REGISTRY.keys())}"
+                        )
 
-            logger.info(f"Creating {provider} vectorstore")
-            embedding_model = self.get_embedding_model()
-            self._vectorstore = factory(self._config, embedding_model)
+                    logger.info(f"Creating {provider} vectorstore")
+                    embedding_model = self.get_embedding_model()
+                    self._vectorstore = factory(self._config, embedding_model)
 
         return self._vectorstore
 
@@ -515,48 +532,57 @@ class ServiceContainer:
             ValueError: If configured LLM provider is not in the registry.
         """
         if not self._llm:
-            provider = self._config.llm.provider
-            llm_class = LLM_PROVIDER_REGISTRY.get(provider)
-
-            if not llm_class:
-                raise ValueError(
-                    f"Unknown LLM provider: '{provider}'. "
-                    f"Supported: {list(LLM_PROVIDER_REGISTRY.keys())}"
-                )
-
-            logger.info(f"Creating {provider} LLM ({llm_class.__name__})")
-            primary_llm = llm_class(self._config.llm)
-
-            # Wrap Gemini with fallback to Local for resilience
-            if provider == "gemini":
-                logger.info("Wrapping Gemini with fallback to Local")
-                fallback_llm = LocalSummarizerModel(self._config.llm)
-                self._llm = LLMWrapper(
-                    primary_llm=primary_llm,
-                    fallback_llm=fallback_llm,
-                    max_retries=2
-                )
-            else:
-                self._llm = primary_llm
-
-            # Wrap with AI Gateway if enabled
-            if self._config.ai_gateway.enabled:
-                logger.info("Wrapping LLM with AI Gateway for cost optimization")
-                cache_manager = self.get_cache_manager()
-                cost_tracker = self.get_cost_tracker()
-
-                # Create fallback LLM for gateway if not already created
-                fallback_llm = fallback_llm if provider == "gemini" else LocalSummarizerModel(self._config.llm)
-
-                self._llm = AIGateway(
-                    primary_llm=self._llm,
-                    fallback_llm=fallback_llm,
-                    config=self._config.ai_gateway,
-                    cache_manager=cache_manager,
-                    cost_tracker=cost_tracker,
-                )
-
+            with self._lock:
+                if not self._llm:
+                    self._llm = self._build_llm()
         return self._llm
+
+    def _build_llm(self) -> ILanguageModel:
+        """Construct the layered LLM (provider + fallback + optional gateway).
+
+        Called only under self._lock from get_llm."""
+        provider = self._config.llm.provider
+        llm_class = LLM_PROVIDER_REGISTRY.get(provider)
+
+        if not llm_class:
+            raise ValueError(
+                f"Unknown LLM provider: '{provider}'. "
+                f"Supported: {list(LLM_PROVIDER_REGISTRY.keys())}"
+            )
+
+        logger.info(f"Creating {provider} LLM ({llm_class.__name__})")
+        primary_llm = llm_class(self._config.llm)
+
+        # Wrap Gemini with fallback to Local for resilience
+        if provider == "gemini":
+            logger.info("Wrapping Gemini with fallback to Local")
+            fallback_llm = LocalSummarizerModel(self._config.llm)
+            llm: ILanguageModel = LLMWrapper(
+                primary_llm=primary_llm,
+                fallback_llm=fallback_llm,
+                max_retries=2
+            )
+        else:
+            llm = primary_llm
+
+        # Wrap with AI Gateway if enabled
+        if self._config.ai_gateway.enabled:
+            logger.info("Wrapping LLM with AI Gateway for cost optimization")
+            cache_manager = self.get_cache_manager()
+            cost_tracker = self.get_cost_tracker()
+
+            # Create fallback LLM for gateway if not already created
+            fallback_llm = fallback_llm if provider == "gemini" else LocalSummarizerModel(self._config.llm)
+
+            llm = AIGateway(
+                primary_llm=llm,
+                fallback_llm=fallback_llm,
+                config=self._config.ai_gateway,
+                cache_manager=cache_manager,
+                cost_tracker=cost_tracker,
+            )
+
+        return llm
 
     def get_scoring_strategy(self) -> IScoringStrategy:
         """Get or create scoring strategy implementation.
@@ -672,11 +698,13 @@ class ServiceContainer:
             DocumentRetrievalService instance.
         """
         if not self._retrieval_service:
-            logger.info("Creating DocumentRetrievalService")
-            vectorstore = self.get_vectorstore()
-            self._retrieval_service = DocumentRetrievalService(
-                vectorstore, self._config.retrieval
-            )
+            with self._lock:
+                if not self._retrieval_service:
+                    logger.info("Creating DocumentRetrievalService")
+                    vectorstore = self.get_vectorstore()
+                    self._retrieval_service = DocumentRetrievalService(
+                        vectorstore, self._config.retrieval
+                    )
         return self._retrieval_service
 
     def get_approval_service(self) -> ApprovalService:
@@ -721,15 +749,17 @@ class ServiceContainer:
             ThesisGeneratorService instance.
         """
         if not self._thesis_service:
-            logger.info("Creating ThesisGeneratorService")
-            llm = self.get_llm()
-            scoring_service = self.get_opportunity_scoring_service()
-            self._thesis_service = ThesisGeneratorService(
-                llm=llm,
-                scoring_service=scoring_service,
-                trend_repository=self.get_trend_repository(),
-                retrieval_window_days=self._config.retrieval.window_days,
-            )
+            with self._lock:
+                if not self._thesis_service:
+                    logger.info("Creating ThesisGeneratorService")
+                    llm = self.get_llm()
+                    scoring_service = self.get_opportunity_scoring_service()
+                    self._thesis_service = ThesisGeneratorService(
+                        llm=llm,
+                        scoring_service=scoring_service,
+                        trend_repository=self.get_trend_repository(),
+                        retrieval_window_days=self._config.retrieval.window_days,
+                    )
         return self._thesis_service
 
     def get_refinement_graph(self) -> tuple:
@@ -748,19 +778,21 @@ class ServiceContainer:
             NotImplementedError: If Gemini API key is not configured.
         """
         if not self._refinement_graph:
-            if not self._config.llm.api_key:
-                raise NotImplementedError(
-                    "Refinement graph requires a Gemini API key (GOOGLE_API_KEY)."
-                )
+            with self._lock:
+                if not self._refinement_graph:
+                    if not self._config.llm.api_key:
+                        raise NotImplementedError(
+                            "Refinement graph requires a Gemini API key (GOOGLE_API_KEY)."
+                        )
 
-            logger.info("Creating LangGraph refinement graph with real tool calling")
-            from core.agents.refinement_graph import build_refinement_graph
+                    logger.info("Creating LangGraph refinement graph with real tool calling")
+                    from core.agents.refinement_graph import build_refinement_graph
 
-            self._refinement_graph, self._langfuse_handler = build_refinement_graph(
-                thesis_service=self.get_thesis_service(),
-                gemini_api_key=self._config.llm.api_key,
-                model_name=self._config.llm.model_name,
-                timeout=self._config.llm.timeout,
-                max_output_tokens=self._config.llm.max_output_tokens,
-            )
+                    self._refinement_graph, self._langfuse_handler = build_refinement_graph(
+                        thesis_service=self.get_thesis_service(),
+                        gemini_api_key=self._config.llm.api_key,
+                        model_name=self._config.llm.model_name,
+                        timeout=self._config.llm.timeout,
+                        max_output_tokens=self._config.llm.max_output_tokens,
+                    )
         return self._refinement_graph, self._langfuse_handler

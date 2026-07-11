@@ -224,3 +224,47 @@ class TestServiceContainer:
         """Test that retrieval service singleton starts as None."""
         container = ServiceContainer(mock_config)
         assert container._retrieval_service is None
+
+
+class TestContainerThreadSafety:
+    """Concurrent FIRST requests must build each singleton exactly once.
+
+    Routes run embed/retrieve/graph-build in worker threads (asyncio.to_thread),
+    so two simultaneous first requests hit the lazy getters in parallel; the
+    container's RLock must collapse that to a single build."""
+
+    @pytest.fixture
+    def mock_config(self):
+        config = Mock(spec=AppConfig)
+        config.embedding = Mock(spec=EmbeddingConfig)
+        config.embedding.provider = "fastembed"
+        config.embedding.model_name = "test-embedding-model"
+        return config
+
+    def test_concurrent_first_calls_build_embedding_model_once(self, mock_config):
+        import threading
+        import time
+
+        build_count = 0
+
+        class SlowEmbedding:
+            """Stands in for the FastEmbed model; a slow __init__ widens the
+            race window that unguarded check-then-set would fall into."""
+            def __init__(self, config):
+                nonlocal build_count
+                build_count += 1
+                time.sleep(0.05)
+
+        with patch.dict(EMBEDDING_PROVIDER_REGISTRY, {"fastembed": SlowEmbedding}):
+            container = ServiceContainer(mock_config)
+            threads = [
+                threading.Thread(target=container.get_embedding_model)
+                for _ in range(8)
+            ]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            assert build_count == 1
+            assert isinstance(container.get_embedding_model(), SlowEmbedding)
