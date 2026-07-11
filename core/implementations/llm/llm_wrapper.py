@@ -9,6 +9,7 @@ from tenacity import (
     before_sleep_log,
     retry_if_not_exception_type,
     stop_after_attempt,
+    stop_after_delay,
     wait_exponential,
 )
 
@@ -31,6 +32,7 @@ class LLMWrapper(ILanguageModel):
         fallback_llm: ILanguageModel,
         max_retries: int = 2,
         initial_delay_seconds: float = 1.0,
+        retry_budget_seconds: float = 60.0,
     ):
         """Initialize with primary and fallback LLMs.
 
@@ -39,21 +41,32 @@ class LLMWrapper(ILanguageModel):
             fallback_llm: Fallback LLM (e.g., Local). Used if primary exhausts retries.
             max_retries: Number of times to retry primary before fallback.
             initial_delay_seconds: Initial delay between retries (exponential backoff).
+            retry_budget_seconds: Total wall-clock ceiling across ALL attempts of
+                one call. Retrying stops once it is exceeded even if attempts
+                remain, so slow hangs (per-attempt timeouts) cannot stack past a
+                platform gateway timeout: budget + one in-flight attempt is the true worst case.
         """
         self._primary_llm = primary_llm
         self._fallback_llm = fallback_llm
         self._max_retries = max_retries
         self._initial_delay_seconds = initial_delay_seconds
+        self._retry_budget_seconds = retry_budget_seconds
         logger.info(
             f"LLMWrapper initialized: "
             f"primary={primary_llm.get_model_name()}, "
             f"fallback={fallback_llm.get_model_name()}, "
-            f"max_retries={max_retries}"
+            f"max_retries={max_retries}, "
+            f"retry_budget={retry_budget_seconds}s"
         )
 
     def _make_retrying(self, **kwargs) -> AsyncRetrying:
         return AsyncRetrying(
-            stop=stop_after_attempt(self._max_retries + 1),
+            # Whichever binds first: the attempt cap (fast failures) or the
+            # wall-clock budget (slow hangs at the per-attempt timeout).
+            stop=(
+                stop_after_attempt(self._max_retries + 1)
+                | stop_after_delay(self._retry_budget_seconds)
+            ),
             wait=wait_exponential(
                 multiplier=self._initial_delay_seconds,
                 min=self._initial_delay_seconds,

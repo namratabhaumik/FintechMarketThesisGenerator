@@ -300,10 +300,6 @@ async def create_refinement(
     except NotImplementedError as e:
         raise _error(501, "refinement_not_supported", str(e))
 
-    # Snapshot the current thesis into history before refining, so the
-    # Previous Versions panel keeps every round (mirrors the Streamlit flow).
-    thesis_history = list(job.thesis_history) + [job.thesis]
-
     langgraph_state = {
         "topic": job.query,
         "documents": job.retrieved_docs,
@@ -327,6 +323,16 @@ async def create_refinement(
     detector = HallucinationDetector()
     hallucination = detector.analyze(result_state.get("messages", []))
 
+    # Snapshot the pre-refinement thesis into history (the Previous Versions
+    # panel) only when this round actually changed it. Escalate and skip
+    # rounds leave the thesis as-is; snapshotting those would persist a
+    # duplicate "version" identical to the current thesis.
+    new_thesis = result_state["current_thesis"]
+    if new_thesis != job.thesis:
+        thesis_history = list(job.thesis_history) + [job.thesis]
+    else:
+        thesis_history = job.thesis_history
+
     try:
         # Guarded persist (optimistic concurrency): only write if no other
         # request touched the job while the agent ran - an approval landing
@@ -335,7 +341,7 @@ async def create_refinement(
         persisted = await jm.update_job_guarded(
             job_id,
             {"refinement_count": job.refinement_count, "approved_at": None},
-            thesis=result_state["current_thesis"],
+            thesis=new_thesis,
             thesis_history=thesis_history,
             refinement_count=result_state["refinement_count"],
             refinement_status=result_state["status"],

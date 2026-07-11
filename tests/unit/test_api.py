@@ -384,15 +384,23 @@ class TestAPIEndpoints:
         assert response.status_code == 409
         assert response.json()["detail"]["code"] == "already_approved"
 
-    def _refine_with_graph(self, client, result_status="refining"):
-        """POST a refinement with the graph mocked to one successful round."""
+    def _refine_with_graph(self, client, result_status="refining", change_thesis=True):
+        """POST a refinement with the graph mocked to one round.
+
+        change_thesis=False models an escalate/skip round: the graph returns
+        with the thesis untouched."""
+        from dataclasses import replace
+
         from api.supabase_job_manager import _RowProxy
 
         self._mock_jm.get_job.return_value = _RowProxy(_row())
 
         async def fake_ainvoke(state, config=None):
+            thesis = state["current_thesis"]
+            if change_thesis:
+                thesis = replace(thesis, raw_output="rewritten narrative")
             return {
-                "current_thesis": state["current_thesis"],
+                "current_thesis": thesis,
                 "refinement_count": state["refinement_count"] + 1,
                 "status": result_status,
                 "feedback_history": state["feedback_history"],
@@ -408,14 +416,26 @@ class TestAPIEndpoints:
 
     def test_refine_persists_guarded(self, client):
         """A refinement persists via the guarded update, keyed on the count it
-        read and on the job being unapproved."""
+        read and on the job being unapproved; the changed round snapshots the
+        prior thesis into history."""
         response = self._refine_with_graph(client)
         assert response.status_code == 200
         args, kwargs = self._mock_jm.update_job_guarded.call_args
         assert args[0] == "test123"
         assert args[1] == {"refinement_count": 0, "approved_at": None}
         assert kwargs["refinement_count"] == 1
+        assert kwargs["thesis"].raw_output == "rewritten narrative"
+        # Previous Versions gains exactly the pre-refinement thesis.
+        assert [t.raw_output for t in kwargs["thesis_history"]] == ["text"]
         self._mock_jm.update_job.assert_not_called()
+
+    def test_refine_unchanged_round_adds_no_history_entry(self, client):
+        """A round that leaves the thesis untouched (escalate, or a planner
+        skip) must NOT snapshot a duplicate 'previous version'."""
+        response = self._refine_with_graph(client, change_thesis=False)
+        assert response.status_code == 200
+        kwargs = self._mock_jm.update_job_guarded.call_args.kwargs
+        assert kwargs["thesis_history"] == []
 
     def test_refine_lost_race_returns_409_conflict(self, client):
         """If an approval (or a second tab's refinement) lands while the agent

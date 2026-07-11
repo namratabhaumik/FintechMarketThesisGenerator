@@ -149,6 +149,30 @@ class TestLLMWrapperRetry:
         mock_sleep.assert_any_call(1.0)
         mock_sleep.assert_any_call(2.0)
 
+    def test_retry_budget_stops_slow_hangs(self, test_documents, mock_primary_llm, mock_fallback_llm):
+        """A slow-failing primary (per-attempt timeout) exhausts the wall-clock
+        budget after one attempt: no further retries even though max_retries
+        allows them, so hangs cannot stack past a gateway timeout."""
+        async def slow_failure(*args, **kwargs):
+            await asyncio.sleep(0.1)  # longer than the whole budget below
+            raise RuntimeError("hang then fail")
+
+        mock_primary_llm.summarize.side_effect = slow_failure
+        mock_fallback_llm.summarize.return_value = "Fallback summary"
+
+        wrapper = LLMWrapper(
+            primary_llm=mock_primary_llm,
+            fallback_llm=mock_fallback_llm,
+            max_retries=5,
+            initial_delay_seconds=0.01,
+            retry_budget_seconds=0.05,
+        )
+
+        result = asyncio.run(wrapper.summarize(test_documents))
+
+        assert result == "Fallback summary"
+        assert mock_primary_llm.summarize.call_count == 1
+
     def test_max_retries_respected(self, test_documents, mock_primary_llm, mock_fallback_llm):
         """Respects max_retries configuration."""
         mock_primary_llm.summarize.side_effect = RuntimeError("Always fails")
