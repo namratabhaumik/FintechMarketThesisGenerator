@@ -17,8 +17,6 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from slowapi.errors import RateLimitExceeded  # noqa: E402
 from slowapi.middleware import SlowAPIMiddleware  # noqa: E402
 
-from supabase import acreate_client  # noqa: E402
-
 from api.auth import init_client_pool, shutdown_client_pool  # noqa: E402
 from api.deps import init_dependencies  # noqa: E402
 from api.routes import router  # noqa: E402
@@ -27,7 +25,6 @@ from api.security import (  # noqa: E402
     limiter,
     rate_limit_handler,
 )
-from api.supabase_job_manager import SupabaseJobManager  # noqa: E402
 from config.settings import AppConfig  # noqa: E402
 from core.utils.logging import setup_logging  # noqa: E402
 from dependency_injection.container import ServiceContainer  # noqa: E402
@@ -54,17 +51,13 @@ async def lifespan(app: FastAPI):
             "state carrier). Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
         )
 
-    # Initialize the client pool for per-request user-scoped clients
+    # Initialize the client pool for per-request user-scoped clients; job
+    # endpoints build their RLS-scoped manager per request (api.auth), so no
+    # service-role job manager is wired here.
     init_client_pool(pool_size=20)
 
     container = ServiceContainer(config)
-    # acreate_client is a coroutine, so the async Supabase client is built here
-    # (in the running loop) rather than in the manager's __init__.
-    client = await acreate_client(
-        config.supabase.url, config.supabase.service_role_key
-    )
-    job_manager = SupabaseJobManager(client)
-    init_dependencies(container, job_manager)
+    init_dependencies(container)
     logger.info("FinThesis FastAPI app initialized (Supabase backend)")
     yield
     # Shutdown: close all pooled clients

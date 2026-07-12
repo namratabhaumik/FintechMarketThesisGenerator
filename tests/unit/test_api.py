@@ -59,7 +59,7 @@ class TestSupabaseJobManager:
         """Test retrieving an existing job."""
         mock_client.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute = AsyncMock(
             return_value=Mock(
-                data={"id": "abc123", "query": "neobanking", "status": "completed", "progress": "Done", "thesis": None, "articles": [], "error": None}
+                data={"id": "abc123", "query": "neobanking", "status": "completed", "progress": "Done", "thesis": None, "error": None}
             )
         )
         job = asyncio.run(jm.get_job("abc123"))
@@ -129,8 +129,8 @@ class TestSupabaseJobManager:
         mock_client.table.return_value.select.return_value.order.return_value.execute = AsyncMock(
             return_value=Mock(
                 data=[
-                    {"id": "job2", "query": "second", "status": "pending", "articles": []},
-                    {"id": "job1", "query": "first", "status": "completed", "articles": []},
+                    {"id": "job2", "query": "second", "status": "pending"},
+                    {"id": "job1", "query": "first", "status": "completed"},
                 ]
             )
         )
@@ -151,32 +151,16 @@ class TestRowProxy:
             "thesis": {"key_themes": ["Fintech"], "risks": [], "investment_signals": [],
                        "sources": [], "raw_output": "text", "opportunity_score": 3.5,
                        "confidence_level": 0.8, "recommendation": "Pursue", "key_risk_factors": []},
-            "articles": [],
         }
         proxy = _RowProxy(row)
         assert proxy.thesis is not None
         assert proxy.thesis.key_themes == ["Fintech"]
         assert proxy.thesis.opportunity_score == 3.5
 
-    def test_rehydrates_articles(self):
-        """Test that stored article dicts become Article objects."""
-        from api.supabase_job_manager import _RowProxy
-        row = {
-            "id": "test2", "query": "q", "status": "pending",
-            "thesis": None,
-            "articles": [
-                {"title": "Test Article", "text": "Content here", "source": "techcrunch.com", "url": "https://example.com", "published_at": "2026-01-01T00:00:00+00:00"},
-            ],
-        }
-        proxy = _RowProxy(row)
-        assert len(proxy.articles) == 1
-        assert proxy.articles[0].title == "Test Article"
-        assert proxy.articles[0].published_at.year == 2026
-
     def test_null_thesis_stays_none(self):
         """Test that null thesis in DB stays None."""
         from api.supabase_job_manager import _RowProxy
-        row = {"id": "test3", "query": "q", "status": "pending", "thesis": None, "articles": []}
+        row = {"id": "test3", "query": "q", "status": "pending", "thesis": None}
         proxy = _RowProxy(row)
         assert proxy.thesis is None
 
@@ -240,7 +224,7 @@ def _row(job_id="test123", query="digital lending", **overrides):
                    "investment_signals": [], "sources": [], "raw_output": "text",
                    "opportunity_score": 3.5, "confidence_level": 0.8,
                    "recommendation": "Pursue", "key_risk_factors": []},
-        "articles": [], "error": None, "refinement_count": 0,
+        "error": None, "refinement_count": 0,
         "refinement_status": "N/A", "feedback_history": [], "execution_log": [],
         "retrieved_docs": [
             {"page_content": "chunk", "metadata": {

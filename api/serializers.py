@@ -1,7 +1,7 @@
 """Serialization and deserialization helpers for job data.
 
 Handles converting between Supabase JSON rows and Python domain objects
-(StructuredThesis, Article, Document) so the job manager and _RowProxy
+(StructuredThesis, Document) so the job manager and _RowProxy
 stay focused on storage and attribute mapping.
 
 The functions come in matched pairs that move data in opposite directions:
@@ -14,13 +14,12 @@ directly (datetimes, the JobStatus enum); the rest pass straight through.
 import json
 import logging
 from dataclasses import asdict
-from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from datetime import date
+from typing import Any, Dict, Optional
 
 from langchain_core.documents import Document
 
 from api.schemas import JobStatus, RefinementStatus
-from core.models.article import Article
 from core.models.thesis import StructuredThesis
 
 logger = logging.getLogger(__name__)
@@ -42,29 +41,6 @@ def rehydrate_thesis(raw: Any) -> Optional[StructuredThesis]:
             data["confidence_as_of"] = date.fromisoformat(as_of)
         return StructuredThesis(**data)
     return None
-
-
-def rehydrate_articles(raw: Any) -> List[Article]:
-    """Convert stored JSON dicts to Article objects.
-
-    `published_at` is stored as an ISO 8601 string and parsed back into a
-    datetime, since Article requires a real datetime on that field.
-    """
-    if not raw:
-        return []
-    articles = []
-    for a in raw:
-        if not isinstance(a, dict):
-            continue
-        data = dict(a)
-        published = data.get("published_at")
-        if isinstance(published, str):
-            data["published_at"] = datetime.fromisoformat(published)
-        try:
-            articles.append(Article(**data))
-        except TypeError:
-            logger.warning(f"Skipping malformed stored article: {data.get('url', '?')}")
-    return articles
 
 
 def rehydrate_docs(raw: Any) -> list:
@@ -116,21 +92,6 @@ def serialise_thesis(thesis: StructuredThesis) -> dict:
     return data
 
 
-def serialise_articles(articles: List[Article]) -> list:
-    """Convert Article objects to JSON-safe dicts.
-
-    `published_at` is a datetime, which is not JSON-serialisable, so it is
-    emitted as an ISO 8601 string.
-    """
-    result = []
-    for a in articles:
-        data = asdict(a)
-        if isinstance(data.get("published_at"), datetime):
-            data["published_at"] = data["published_at"].isoformat()
-        result.append(data)
-    return result
-
-
 def serialise_docs(docs: list) -> list:
     """Convert LangChain Documents to JSON-safe dicts.
 
@@ -161,7 +122,7 @@ def serialise_job_fields(**fields) -> Dict[str, Any]:
     """Serialise arbitrary job fields for Supabase storage.
 
     The single entry point the job manager calls before a write. It dispatches
-    each known field to its matching serialiser (thesis / articles / docs) and
+    each known field to its matching serialiser (thesis / docs) and
     unwraps the JobStatus enum to its string value; any other field is stored
     verbatim, so callers can mix domain objects and plain values freely.
     """
@@ -171,8 +132,6 @@ def serialise_job_fields(**fields) -> Dict[str, Any]:
             payload[key] = serialise_thesis(value)
         elif key == "thesis_history":
             payload[key] = [serialise_thesis(t) for t in value]
-        elif key == "articles":
-            payload[key] = serialise_articles(value)
         elif key == "status" and isinstance(value, JobStatus):
             payload[key] = value.value
         elif key == "refinement_status" and isinstance(value, RefinementStatus):

@@ -183,13 +183,6 @@ class TestServiceContainer:
 
     # === Service Factory Methods ===
 
-    def test_get_article_source_method_exists(self, mock_config):
-        """Test that get_article_source method exists and returns IArticleSource."""
-
-        container = ServiceContainer(mock_config)
-        assert hasattr(container, "get_article_source")
-        assert callable(container.get_article_source)
-
     def test_get_retrieval_service_method_exists(self, mock_config):
         """Test that get_retrieval_service method exists."""
         container = ServiceContainer(mock_config)
@@ -205,20 +198,10 @@ class TestServiceContainer:
 
     # === Service Singleton Caching ===
 
-    def test_article_source_singleton_attribute_starts_none(self, mock_config):
-        """Test that article source singleton starts as None."""
-        container = ServiceContainer(mock_config)
-        assert container._article_source is None
-
     def test_thesis_service_singleton_attribute_starts_none(self, mock_config):
         """Test that thesis service singleton starts as None."""
         container = ServiceContainer(mock_config)
         assert container._thesis_service is None
-
-    def test_ingestion_service_singleton_attribute_starts_none(self, mock_config):
-        """Test that ingestion service singleton starts as None."""
-        container = ServiceContainer(mock_config)
-        assert container._ingestion_service is None
 
     def test_retrieval_service_singleton_attribute_starts_none(self, mock_config):
         """Test that retrieval service singleton starts as None."""

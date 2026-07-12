@@ -7,7 +7,7 @@ from unittest.mock import Mock
 from langchain_core.documents import Document
 
 from core.models.trend_metric import TrendMetric
-from core.services.ingestion_service import ArticleIngestionService
+from core.services.ingestion_service import article_to_document
 from core.services.thesis_generator_service import (
     ThesisGeneratorService,
     _apply_cap_deltas,
@@ -71,41 +71,20 @@ class TestGoldConfidenceInputs:
         assert (covered, window_weeks, as_of) == (4, 7, self.W0)
 
 
-class TestArticleIngestionService:
-    """Tests for ArticleIngestionService."""
+class TestArticleToDocument:
+    """article_to_document: the shared Article -> Document conversion."""
 
-    def test_fetch_articles(self, mock_article_source):
-        """Test fetching articles."""
-        service = ArticleIngestionService(mock_article_source)
-        articles = service.fetch_articles("fintech", limit=5)
-
-        assert len(articles) > 0
-        assert articles[0].title == "Test Article 1"
-        assert articles[0].source == "example.com"
-
-    def test_fetch_articles_respects_limit(self, mock_article_source):
-        """Test that fetch respects limit."""
-        service = ArticleIngestionService(mock_article_source)
-        articles = service.fetch_articles("fintech", limit=2)
-
-        assert len(articles) == 2
-
-    def test_convert_to_documents(self, sample_articles, mock_article_source):
-        """Test conversion of articles to documents."""
-        service = ArticleIngestionService(mock_article_source)
-        docs = service.convert_to_documents(sample_articles)
+    def test_converts_articles_to_documents(self, sample_articles):
+        docs = [article_to_document(a) for a in sample_articles]
 
         assert len(docs) == 3
         assert isinstance(docs[0], Document)
         assert "Test Article 1" in docs[0].page_content
         assert docs[0].metadata["source"] == "example.com"
 
-    def test_convert_to_documents_includes_metadata(self, sample_articles, mock_article_source):
-        """Test that documents include proper metadata."""
-        service = ArticleIngestionService(mock_article_source)
-        docs = service.convert_to_documents(sample_articles)
+    def test_documents_include_metadata(self, sample_articles):
+        doc = article_to_document(sample_articles[0])
 
-        doc = docs[0]
         assert "title" in doc.metadata
         assert "source" in doc.metadata
         assert "url" in doc.metadata
@@ -123,12 +102,8 @@ class _RecordingVectorStore:
     def build(self, documents):
         return object()
 
-    def open(self):
-        return object()
-
     def retrieve(
         self,
-        vectorstore,
         query,
         k,
         fetch_k,
@@ -150,36 +125,16 @@ class _RecordingVectorStore:
 
 
 class TestDocumentRetrievalService:
-    """Tests for DocumentRetrievalService MMR wiring."""
+    """Tests for DocumentRetrievalService MMR wiring.
+
+    The service is stateless (no open/build step): retrieve() delegates
+    straight to the vector store implementation."""
 
     def _service(self, config):
         from core.services.retrieval_service import DocumentRetrievalService
 
         vs = _RecordingVectorStore()
-        service = DocumentRetrievalService(vs, config)
-        service.build_vectorstore([Document(page_content="x", metadata={"url": "u"})])
-        return service, vs
-
-    def test_is_built_false_initially(self):
-        from config.settings import RetrievalConfig
-        from core.services.retrieval_service import DocumentRetrievalService
-
-        service = DocumentRetrievalService(_RecordingVectorStore(), RetrievalConfig())
-        assert service.is_built() is False
-
-    def test_retrieve_lazily_opens_existing_store(self):
-        from config.settings import RetrievalConfig
-        from core.services.retrieval_service import DocumentRetrievalService
-
-        # No build_vectorstore() call: retrieve must open the existing store
-        vs = _RecordingVectorStore()
-        service = DocumentRetrievalService(vs, RetrievalConfig())
-        assert service.is_built() is False
-
-        docs = service.retrieve("query")
-
-        assert service.is_built() is True
-        assert len(docs) == 1
+        return DocumentRetrievalService(vs, config), vs
 
     def test_retrieve_uses_mmr_config(self):
         from config.settings import RetrievalConfig

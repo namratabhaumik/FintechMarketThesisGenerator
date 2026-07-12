@@ -16,18 +16,8 @@ class IVectorStore(ABC):
         pass
 
     @abstractmethod
-    def open(self) -> VectorStore:
-        """Open the existing persistent store for reading (the read path).
-
-        Returns a retriever-ready handle over whatever is already persisted,
-        without embedding or writing anything.
-        """
-        pass
-
-    @abstractmethod
     def retrieve(
         self,
-        vectorstore: VectorStore,
         query: str,
         k: int,
         fetch_k: int,

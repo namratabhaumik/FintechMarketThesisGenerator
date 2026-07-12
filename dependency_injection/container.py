@@ -5,7 +5,6 @@ import threading
 from typing import Dict, Optional, Type
 
 from config.settings import AppConfig
-from core.implementations.article_sources.rss_source import RSSArticleSource
 from core.implementations.classifiers.huggingface_classifier import (
     HuggingFaceFintechClassifier,
 )
@@ -42,7 +41,6 @@ from core.implementations.repositories.supabase_untagged_repository import (
 from core.implementations.vectorstores.supabase_vector_store import SupabaseVectorStoreImpl
 from core.interfaces.article_content_repository import IArticleContentRepository
 from core.interfaces.article_repository import IArticleRepository
-from core.interfaces.article_source import IArticleSource
 from core.interfaces.quarantine_repository import IQuarantineRepository
 from core.interfaces.silver_repository import ISilverRepository
 from core.interfaces.trend_repository import ITrendRepository
@@ -53,9 +51,7 @@ from core.interfaces.relevance_classifier import IRelevanceClassifier
 from core.interfaces.scraper import IWebScraper
 from core.interfaces.scoring_strategy import IScoringStrategy
 from core.interfaces.vectorstore import IVectorStore
-from core.services.approval_service import ApprovalService
 from core.services.gold_service import GoldService
-from core.services.ingestion_service import ArticleIngestionService
 from core.services.silver_service import SilverService
 from finthesis_internal.category_mappings import (
     ThemeMappings,
@@ -152,7 +148,6 @@ class ServiceContainer:
         # Lazy-loaded interface implementations (singletons)
         self._scraper: Optional[IWebScraper] = None
         self._relevance_classifier: Optional[IRelevanceClassifier] = None
-        self._article_source: Optional[IArticleSource] = None
         self._embedding_model: Optional[IEmbeddingModel] = None
         self._vectorstore: Optional[IVectorStore] = None
         self._article_repository: Optional[IArticleRepository] = None
@@ -169,11 +164,9 @@ class ServiceContainer:
         self._cost_tracker: Optional[CostTracker] = None
 
         # Services
-        self._ingestion_service: Optional[ArticleIngestionService] = None
         self._silver_service: Optional[SilverService] = None
         self._gold_service: Optional[GoldService] = None
         self._retrieval_service: Optional[DocumentRetrievalService] = None
-        self._approval_service: Optional[ApprovalService] = None
         self._opportunity_scoring_service: Optional[OpportunityScoringService] = None
         self._thesis_service: Optional[ThesisGeneratorService] = None
 
@@ -227,27 +220,6 @@ class ServiceContainer:
             logger.info(f"Creating {provider} classifier ({classifier_class.__name__})")
             self._relevance_classifier = classifier_class(self._config.classifier)
         return self._relevance_classifier
-
-    def get_article_source(self) -> IArticleSource:
-        """Get or create article source implementation.
-
-        Builds the Bronze entry point: reads the configured RSS feeds and yields
-        candidate articles. Wires in get_scraper (to fetch text) and
-        get_relevance_classifier (to gate by relevance). This is where raw data
-        first enters the pipeline.
-
-        Returns:
-            IArticleSource implementation (RSSArticleSource).
-        """
-        if not self._article_source:
-            logger.info("Creating RSSArticleSource")
-            scraper = self.get_scraper()
-            self._article_source = RSSArticleSource(
-                feeds=self._config.rss_feeds,
-                scraper=scraper,
-                classifier=self.get_relevance_classifier(),
-            )
-        return self._article_source
 
     def get_embedding_model(self) -> IEmbeddingModel:
         """Get or create embedding model implementation.
@@ -601,21 +573,6 @@ class ServiceContainer:
 
     # === Service Factories ===
 
-    def get_ingestion_service(self) -> ArticleIngestionService:
-        """Get or create article ingestion service.
-
-        The Bronze driver: pulls articles from get_article_source and lands them.
-        Thin wrapper whose only dependency is the article source.
-
-        Returns:
-            ArticleIngestionService instance.
-        """
-        if not self._ingestion_service:
-            logger.info("Creating ArticleIngestionService")
-            article_source = self.get_article_source()
-            self._ingestion_service = ArticleIngestionService(article_source)
-        return self._ingestion_service
-
     def get_silver_service(self) -> SilverService:
         """Get or create the Silver service.
 
@@ -706,20 +663,6 @@ class ServiceContainer:
                         vectorstore, self._config.retrieval
                     )
         return self._retrieval_service
-
-    def get_approval_service(self) -> ApprovalService:
-        """Get or create approval service.
-
-        Holds the human-in-the-loop approval state (approve / reject a generated
-        thesis). Self-contained, no dependencies.
-
-        Returns:
-            ApprovalService instance for human approval workflows.
-        """
-        if not self._approval_service:
-            logger.info("Creating ApprovalService")
-            self._approval_service = ApprovalService()
-        return self._approval_service
 
     def get_opportunity_scoring_service(self) -> OpportunityScoringService:
         """Get or create opportunity scoring service.

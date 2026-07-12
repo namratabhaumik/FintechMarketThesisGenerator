@@ -88,10 +88,10 @@ class SupabaseVectorStoreImpl(IVectorStore):
         return self.open()
 
     def open(self) -> VectorStore:
-        """Open the existing persistent store for reading.
+        """Retriever-ready LangChain handle over the persisted store.
 
-        This is the read path a thesis request takes: it only retrieves from
-        what is already persisted, so build() reuses this for its final handle.
+        Only build() needs this (its return value); the API read path queries
+        the match_documents RPC directly via retrieve() below.
         """
         return SupabaseVectorStore(
             client=self._client,
@@ -102,7 +102,6 @@ class SupabaseVectorStoreImpl(IVectorStore):
 
     def retrieve(
         self,
-        vectorstore: VectorStore,
         query: str,
         k: int,
         fetch_k: int,

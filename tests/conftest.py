@@ -4,7 +4,6 @@ import pytest
 from datetime import datetime, timezone
 from typing import Dict, List
 
-from core.interfaces.article_source import IArticleSource
 from core.interfaces.scraper import IWebScraper
 from core.interfaces.llm import ILanguageModel
 from core.interfaces.scoring_strategy import IScoringStrategy
@@ -19,22 +18,6 @@ class MockWebScraper(IWebScraper):
     def scrape(self, url: str) -> str:
         """Return mock content."""
         return f"Mock content from {url}"
-
-
-class MockArticleSource(IArticleSource):
-    """Mock article source for testing."""
-
-    def __init__(self, articles: List[Article]):
-        """Initialize with predefined articles."""
-        self._articles = articles
-
-    def fetch_articles(self, query: str, limit: int) -> List[Article]:
-        """Return predefined articles."""
-        return self._articles[:limit]
-
-    def get_source_name(self) -> str:
-        """Return source name."""
-        return "Mock Source"
 
 
 class MockLanguageModel(ILanguageModel):
@@ -94,12 +77,6 @@ def sample_articles() -> List[Article]:
 def mock_scraper() -> IWebScraper:
     """Mock web scraper."""
     return MockWebScraper()
-
-
-@pytest.fixture
-def mock_article_source(sample_articles) -> IArticleSource:
-    """Mock article source."""
-    return MockArticleSource(sample_articles)
 
 
 @pytest.fixture

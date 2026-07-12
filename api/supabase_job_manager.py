@@ -15,7 +15,6 @@ from supabase import AsyncClient
 
 from api.schemas import JobStatus
 from api.serializers import (
-    rehydrate_articles,
     rehydrate_docs,
     rehydrate_query_embedding,
     rehydrate_thesis,
@@ -54,7 +53,6 @@ class SupabaseJobManager(IJobManager):
             "status": JobStatus.PENDING.value,
             "progress": None,
             "thesis": None,
-            "articles": [],
             "error": None,
             "refinement_count": 0,
             "refinement_status": "N/A",  # becomes "refining" only once the user refines
@@ -203,5 +201,4 @@ class _RowProxy:
             t for t in (rehydrate_thesis(x) for x in data.get("thesis_history") or [])
             if t is not None
         ]
-        self.articles = rehydrate_articles(data.get("articles", []))
         self.retrieved_docs = rehydrate_docs(data.get("retrieved_docs", []))

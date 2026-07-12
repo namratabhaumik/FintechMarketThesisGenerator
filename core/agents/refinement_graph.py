@@ -12,7 +12,6 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
-from core.agents.execution_tracker import ExecutionTracker  # noqa: F401 (kept for compatibility)
 from core.agents.thesis_tools import create_thesis_tools
 from core.models.thesis import StructuredThesis
 from core.services.thesis_generator_service import ThesisGeneratorService
