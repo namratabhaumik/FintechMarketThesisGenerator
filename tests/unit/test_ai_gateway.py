@@ -87,14 +87,14 @@ class TestCacheManager:
         assert metrics["cache_size"] == 1
 
     def test_cache_clear(self):
-        """Test cache clearing."""
+        """Test cache clearing (asserted through the get() contract)."""
         manager = CacheManager()
         key = manager.generate_key("content", "topic", "model")
         manager.set(key, "response", "model", 100, 50)
 
-        assert manager.size() == 1
+        assert manager.get(key) is not None
         manager.clear()
-        assert manager.size() == 0
+        assert manager.get(key) is None
 
 
 class TestCostTracker:

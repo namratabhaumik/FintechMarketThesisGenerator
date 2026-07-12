@@ -8,15 +8,6 @@ AVAILABLE_TOOLS: Dict[str, str] = {
 }
 
 
-def get_available_tool_names() -> list[str]:
-    """Get list of available tool names.
-
-    Returns:
-        List of tool identifiers that the agent can use.
-    """
-    return list(AVAILABLE_TOOLS.keys())
-
-
 def is_valid_tool(tool_name: str) -> bool:
     """Check if a tool name is valid.
 

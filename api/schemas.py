@@ -112,9 +112,3 @@ class JobResponse(BaseModel):
     related_theses: List[RelatedThesisResponse] = []
     # Present only on refinement responses (transient, not stored).
     hallucination: Optional[dict] = None
-
-
-class ErrorDetail(BaseModel):
-    """Machine-readable error payload carried in HTTPException detail."""
-    code: str
-    message: str

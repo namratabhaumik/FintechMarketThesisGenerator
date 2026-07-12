@@ -181,7 +181,6 @@ class _RowProxy:
     """
 
     def __init__(self, data: dict):
-        self._data = data
         self.id: str = data["id"]
         self.query: str = data["query"]
         self.status: JobStatus = JobStatus(data["status"])

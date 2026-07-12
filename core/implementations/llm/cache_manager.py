@@ -86,24 +86,6 @@ class CacheManager:
         self._cache.clear()
         logger.info("Cache cleared")
 
-    def evict_expired(self) -> int:
-        """Remove all expired entries.
-
-        Returns:
-            Number of entries evicted.
-        """
-        expired_keys = [
-            key for key, entry in self._cache.items()
-            if entry.is_expired(self._ttl_seconds)
-        ]
-        for key in expired_keys:
-            del self._cache[key]
-
-        if expired_keys:
-            logger.info(f"Evicted {len(expired_keys)} expired cache entries")
-
-        return len(expired_keys)
-
     def get_metrics(self) -> dict:
         """Get cache performance metrics.
 
@@ -120,12 +102,3 @@ class CacheManager:
             "cache_size": len(self._cache),
             "total_requests": total,
         }
-
-    def size(self) -> int:
-        """Get current cache size."""
-        return len(self._cache)
-
-    def reset_metrics(self) -> None:
-        """Reset hit/miss counters."""
-        self._hits = 0
-        self._misses = 0

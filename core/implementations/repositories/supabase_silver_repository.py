@@ -36,19 +36,6 @@ class SupabaseSilverRepository(ISilverRepository):
         rows: list = resp.data or []
         return {row["url"] for row in rows}
 
-    def fintech_themes(self) -> Dict[str, List[str]]:
-        # Pull url + themes, but only for rows flagged fintech_relevant=True.
-        resp = (
-            self._client.table(TABLE)
-            .select("url, themes")
-            .eq("fintech_relevant", True)
-            .execute()
-        )
-        rows: list = resp.data or []
-        # Build url --> themes-list map; null themes fall back to an empty list
-        # so callers never have to handle None.
-        return {row["url"]: (row.get("themes") or []) for row in rows}
-
     def fintech_tags(self) -> Dict[str, Dict[str, List[str]]]:
         # Pull all three tag dimensions for the accepted (fintech) rows.
         resp = (
