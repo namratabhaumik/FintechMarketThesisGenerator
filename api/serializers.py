@@ -13,7 +13,7 @@ directly (datetimes, the JobStatus enum); the rest pass straight through.
 
 import json
 import logging
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from datetime import date
 from typing import Any, Dict, Optional
 
@@ -33,9 +33,14 @@ def rehydrate_thesis(raw: Any) -> Optional[StructuredThesis]:
     with no thesis yet) becomes None rather than an error. `confidence_as_of` is
     stored as an ISO 8601 date string and parsed back into a `date`, mirroring
     serialise_thesis.
+
+    Unknown keys are dropped rather than passed through: if a dataclass field
+    is ever renamed or removed, rows stored under the old schema must degrade
+    to the field default instead of 500ing every read with a TypeError.
     """
     if raw and isinstance(raw, dict):
-        data = dict(raw)
+        known = {f.name for f in fields(StructuredThesis)}
+        data = {k: v for k, v in raw.items() if k in known}
         as_of = data.get("confidence_as_of")
         if isinstance(as_of, str):
             data["confidence_as_of"] = date.fromisoformat(as_of)

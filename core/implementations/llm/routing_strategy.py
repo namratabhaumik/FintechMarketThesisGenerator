@@ -1,26 +1,36 @@
-"""Routing strategies for cost-optimized LLM provider selection."""
+"""Routing strategies for cost-optimized LLM route selection.
+
+A strategy decides a ROUTE, not a vendor: "primary" (the configured LLM,
+whatever LLM_PROVIDER names) or "fallback" (the free local extractive
+summarizer). The gateway resolves the route to an actual model, so nothing
+here needs to know which provider is wired in.
+"""
 
 import logging
 from abc import ABC, abstractmethod
-from typing import List, Tuple
+from typing import List
 
 from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
+
+# Route names the strategies can return.
+ROUTE_PRIMARY = "primary"
+ROUTE_FALLBACK = "fallback"
 
 
 class RoutingStrategy(ABC):
     """Abstract base class for routing strategies."""
 
     @abstractmethod
-    def select_provider(
+    def select_route(
         self,
         documents: List[Document],
         topic: str,
         daily_spend: float,
         daily_limit: float,
-    ) -> Tuple[str, str]:
-        """Select which provider and model to use.
+    ) -> str:
+        """Select which route to use.
 
         Args:
             documents: List of documents to summarize.
@@ -29,15 +39,21 @@ class RoutingStrategy(ABC):
             daily_limit: Daily spend limit in USD.
 
         Returns:
-            Tuple of (provider, model) to use.
+            ROUTE_PRIMARY or ROUTE_FALLBACK.
         """
+
+
+def _estimate_tokens(documents: List[Document]) -> int:
+    """Rough estimate of total tokens in documents (words * 1.3)."""
+    total_words = sum(len(doc.page_content.split()) for doc in documents)
+    return int(total_words * 1.3)
 
 
 class CostOptimizedStrategy(RoutingStrategy):
     """Route to minimize cost while maintaining acceptable quality.
 
-    Uses local summarizer for large documents or when cost limit approaching.
-    Falls back to Gemini only for small, critical queries.
+    Uses the local summarizer for large documents or when the cost limit is
+    approaching; the primary LLM only for small, critical queries.
     """
 
     def __init__(self, size_threshold_tokens: int = 5000):
@@ -48,86 +64,61 @@ class CostOptimizedStrategy(RoutingStrategy):
         """
         self._size_threshold = size_threshold_tokens
 
-    def _estimate_tokens(self, documents: List[Document]) -> int:
-        """Rough estimate of total tokens in documents (words * 1.3).
-
-        Args:
-            documents: List of documents.
-
-        Returns:
-            Estimated token count.
-        """
-        total_words = sum(len(doc.page_content.split()) for doc in documents)
-        return int(total_words * 1.3)
-
-    def select_provider(
+    def select_route(
         self,
         documents: List[Document],
         topic: str,
         daily_spend: float,
         daily_limit: float,
-    ) -> Tuple[str, str]:
-        """Select provider based on document size and cost limits.
+    ) -> str:
+        """Select route based on document size and cost limits.
 
         Strategy:
-        1. If documents are large (>5000 tokens) → use local (free)
-        2. If daily spend > 80% of limit → use local (cost containment)
-        3. Otherwise → use gemini (better quality for small docs)
-
-        Args:
-            documents: List of documents.
-            topic: Query topic.
-            daily_spend: Current daily spend.
-            daily_limit: Daily limit.
-
-        Returns:
-            Tuple of (provider, model).
+        1. If documents are large (>threshold tokens) -> fallback (free)
+        2. If daily spend > 80% of limit -> fallback (cost containment)
+        3. Otherwise -> primary (better quality for small docs)
         """
-        estimated_tokens = self._estimate_tokens(documents)
+        estimated_tokens = _estimate_tokens(documents)
         cost_ratio = daily_spend / daily_limit if daily_limit > 0 else 0
 
         if estimated_tokens > self._size_threshold:
-            logger.info(f"Document size {estimated_tokens} > {self._size_threshold}: using local")
-            return ("local", "local-extractor")
+            logger.info(
+                f"Document size {estimated_tokens} > {self._size_threshold}: "
+                f"routing to the local summarizer"
+            )
+            return ROUTE_FALLBACK
 
         if cost_ratio > 0.8:
-            logger.info(f"Cost ratio {cost_ratio:.2%} > 80%: using local for cost containment")
-            return ("local", "local-extractor")
+            logger.info(
+                f"Cost ratio {cost_ratio:.2%} > 80%: routing to the local "
+                f"summarizer for cost containment"
+            )
+            return ROUTE_FALLBACK
 
-        logger.info("Using gemini for cost-optimized routing")
-        return ("gemini", "gemini-2.0-flash")
+        logger.info("Cost-optimized routing: using the primary LLM")
+        return ROUTE_PRIMARY
 
 
 class QualityFirstStrategy(RoutingStrategy):
     """Route to maximize quality, cost is secondary concern."""
 
-    def select_provider(
+    def select_route(
         self,
         documents: List[Document],
         topic: str,
         daily_spend: float,
         daily_limit: float,
-    ) -> Tuple[str, str]:
-        """Always prefer Gemini for best quality.
-
-        Args:
-            documents: List of documents.
-            topic: Query topic.
-            daily_spend: Current daily spend.
-            daily_limit: Daily limit.
-
-        Returns:
-            Tuple of (provider, model).
-        """
-        logger.info("Using gemini for quality-first routing")
-        return ("gemini", "gemini-2.0-flash")
+    ) -> str:
+        """Always prefer the primary LLM for best quality."""
+        logger.info("Quality-first routing: using the primary LLM")
+        return ROUTE_PRIMARY
 
 
 class HybridStrategy(RoutingStrategy):
     """Balance quality and cost with intelligent decision-making.
 
-    Uses gemini for small documents, local for large ones.
-    Respects cost limits as hard constraint.
+    Uses the primary LLM for small documents, the local summarizer for large
+    ones. Respects cost limits as a hard constraint.
     """
 
     def __init__(self, size_threshold_tokens: int = 5000):
@@ -138,56 +129,41 @@ class HybridStrategy(RoutingStrategy):
         """
         self._size_threshold = size_threshold_tokens
 
-    def _estimate_tokens(self, documents: List[Document]) -> int:
-        """Rough estimate of total tokens (words * 1.3).
-
-        Args:
-            documents: List of documents.
-
-        Returns:
-            Estimated token count.
-        """
-        total_words = sum(len(doc.page_content.split()) for doc in documents)
-        return int(total_words * 1.3)
-
-    def select_provider(
+    def select_route(
         self,
         documents: List[Document],
         topic: str,
         daily_spend: float,
         daily_limit: float,
-    ) -> Tuple[str, str]:
-        """Select provider balancing quality and cost.
+    ) -> str:
+        """Select route balancing quality and cost.
 
         Strategy:
-        1. If daily spend would exceed limit → use local (hard constraint)
-        2. If documents are large (>5000 tokens) → use local (no benefit to API)
-        3. If documents are small → use gemini (better quality on small summaries)
-
-        Args:
-            documents: List of documents.
-            topic: Query topic.
-            daily_spend: Current daily spend.
-            daily_limit: Daily limit.
-
-        Returns:
-            Tuple of (provider, model).
+        1. If daily spend would exceed limit -> fallback (hard constraint)
+        2. If documents are large (>threshold) -> fallback (no benefit to API)
+        3. If documents are small -> primary (better quality)
         """
-        estimated_tokens = self._estimate_tokens(documents)
+        estimated_tokens = _estimate_tokens(documents)
 
         # Hard cost limit
         if daily_spend >= daily_limit:
-            logger.info("Daily cost limit reached: using local")
-            return ("local", "local-extractor")
+            logger.info("Daily cost limit reached: routing to the local summarizer")
+            return ROUTE_FALLBACK
 
-        # Large documents → local (free, adequate quality)
+        # Large documents -> local summarizer (free, adequate quality)
         if estimated_tokens > self._size_threshold:
-            logger.info(f"Document size {estimated_tokens} > {self._size_threshold}: using local")
-            return ("local", "local-extractor")
+            logger.info(
+                f"Document size {estimated_tokens} > {self._size_threshold}: "
+                f"routing to the local summarizer"
+            )
+            return ROUTE_FALLBACK
 
-        # Small documents → gemini (better quality)
-        logger.info(f"Document size {estimated_tokens} <= {self._size_threshold}: using gemini")
-        return ("gemini", "gemini-2.0-flash")
+        # Small documents -> primary LLM (better quality)
+        logger.info(
+            f"Document size {estimated_tokens} <= {self._size_threshold}: "
+            f"routing to the primary LLM"
+        )
+        return ROUTE_PRIMARY
 
 
 # Strategy registry

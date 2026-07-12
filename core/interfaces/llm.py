@@ -1,9 +1,23 @@
 """Abstract interface for language models."""
 
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
 from typing import List
 
 from langchain_core.documents import Document
+
+SOURCE_LLM = "llm"
+SOURCE_LOCAL = "local"
+
+# Per-call provenance of generated summary text. LocalSummarizerModel sets it
+# to SOURCE_LOCAL on every call, so each path that can serve extractive text
+# (wrapper outage fallback, gateway cost-limit fallback or routing, cache hits
+# of a local response) marks it without callers having to know. The thesis
+# service resets it before summarize and stores the outcome on the thesis, so
+# a degraded no-LLM summary is visible to the API/UI instead of passing as an
+# LLM one. A ContextVar (not instance state) keeps concurrent requests from
+# seeing each other's value: each request task gets its own copy.
+summary_source_var: ContextVar[str] = ContextVar("summary_source", default=SOURCE_LLM)
 
 
 class ILanguageModel(ABC):

@@ -7,7 +7,7 @@ from typing import List
 from langchain_core.documents import Document
 
 from config.settings import LLMConfig
-from core.interfaces.llm import ILanguageModel
+from core.interfaces.llm import SOURCE_LOCAL, ILanguageModel, summary_source_var
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +71,10 @@ class LocalSummarizerModel(ILanguageModel):
         Returns:
             Summarized text (extractive - combination of top sentences).
         """
+        # Mark the per-call provenance: whatever path led here (outage
+        # fallback, cost-limit fallback, routing), the text served is
+        # extractive, and the thesis records that.
+        summary_source_var.set(SOURCE_LOCAL)
         try:
             logger.info(f"Summarizing {len(documents)} documents locally (keyword-based extraction)")
 

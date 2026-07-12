@@ -202,6 +202,30 @@ class TestThesisGeneratorService:
 
         assert thesis.raw_output is not None
         assert thesis.sources == ["http://test.com"]
+        # A plain LLM summary carries the default provenance.
+        assert thesis.summary_source == "llm"
+
+    def test_generate_thesis_records_local_fallback_provenance(self):
+        """When the local extractive path produces the summary (it sets the
+        provenance var, like the real LocalSummarizerModel), the thesis
+        records summary_source='local'."""
+        from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
+
+        from core.interfaces.llm import SOURCE_LOCAL, summary_source_var
+
+        llm = Mock()
+
+        async def local_summarize(documents):
+            summary_source_var.set(SOURCE_LOCAL)
+            return "extractive summary"
+
+        llm.summarize = local_summarize
+        service = ThesisGeneratorService(llm, OpportunityScoringService(), _empty_trend())
+
+        docs = [Document(page_content="x", metadata={"url": "http://test.com"})]
+        thesis = asyncio.run(service.generate_thesis("Digital Banking", docs))
+
+        assert thesis.summary_source == "local"
 
     def test_generate_thesis_includes_opportunity_score(self, mock_llm, mock_scoring_strategy):
         """Test that thesis includes opportunity score and confidence."""

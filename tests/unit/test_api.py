@@ -164,6 +164,20 @@ class TestRowProxy:
         proxy = _RowProxy(row)
         assert proxy.thesis is None
 
+    def test_thesis_with_unknown_stored_key_still_rehydrates(self):
+        """A stored thesis carrying a key the dataclass no longer has (field
+        renamed/removed in a later schema) degrades gracefully instead of
+        raising TypeError on every read of the old row."""
+        from api.supabase_job_manager import _RowProxy
+        row = {
+            "id": "test4", "query": "q", "status": "completed",
+            "thesis": {"key_themes": ["Fintech"], "some_renamed_field": "old value"},
+        }
+        proxy = _RowProxy(row)
+        assert proxy.thesis is not None
+        assert proxy.thesis.key_themes == ["Fintech"]
+        assert not hasattr(proxy.thesis, "some_renamed_field")
+
 
 class TestSchemas:
     """Tests for Pydantic request/response schemas."""

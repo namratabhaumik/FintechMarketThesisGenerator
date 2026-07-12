@@ -19,3 +19,6 @@ class StructuredThesis:
     confidence_as_of: Optional[date] = None
     recommendation: str = ""
     key_risk_factors: List[str] = field(default_factory=list)
+    # What produced raw_output: "llm" (Gemini narrative) or "local" (extractive
+    # fallback - no LLM). Lets the UI mark degraded summaries.
+    summary_source: str = "llm"

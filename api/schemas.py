@@ -68,6 +68,8 @@ class ThesisResponse(BaseModel):
     confidence_as_of: Optional[str] = None
     recommendation: str = ""
     key_risk_factors: List[str] = []
+    # What produced raw_output: "llm" or "local" (extractive fallback).
+    summary_source: str = "llm"
 
 
 class RelatedThesisResponse(BaseModel):

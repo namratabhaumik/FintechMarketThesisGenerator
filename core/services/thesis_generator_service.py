@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 
 from langchain_core.documents import Document
 
-from core.interfaces.llm import ILanguageModel
+from core.interfaces.llm import SOURCE_LLM, ILanguageModel, summary_source_var
 from core.interfaces.trend_repository import ITrendRepository
 from core.models.thesis import StructuredThesis
 from core.models.trend_metric import TrendMetric
@@ -204,8 +204,13 @@ class ThesisGeneratorService:
 
         # Step 1: Summarize documents. This is the ONLY LLM call - it writes the
         # narrative prose (raw_output); it does not decide the structured tags.
+        # Reset provenance first: if the local extractive fallback ends up
+        # producing the text (outage, cost limit, routing, cached local
+        # response), it flips this to "local" and the thesis records it.
         logger.info("Step 1: Summarizing retrieved documents...")
+        summary_source_var.set(SOURCE_LLM)
         summary = await self._llm.summarize(documents)
+        summary_source = summary_source_var.get()
 
         if not summary:
             logger.error("Empty summary returned by LLM")
@@ -268,7 +273,8 @@ class ThesisGeneratorService:
             confidence_level=score_result["confidence_level"],
             confidence_as_of=as_of,
             recommendation=score_result["recommendation"],
-            key_risk_factors=score_result["key_risks"]
+            key_risk_factors=score_result["key_risks"],
+            summary_source=summary_source,
         )
 
     async def refine_thesis(

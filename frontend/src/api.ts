@@ -12,8 +12,8 @@ import type {
 } from "./types";
 
 /** fetch() with the Supabase access token attached as a Bearer header when the
- * user is signed in. Sent on every call so per-user scoping works once the
- * backend enforces it; harmless while the backend still ignores it. */
+ * user is signed in. Required: the backend verifies it and scopes every jobs
+ * query to the caller via RLS; without it, job endpoints return 401. */
 async function authedFetch(url: string, init: RequestInit = {}): Promise<Response> {
   const token = await getAccessToken();
   const headers = new Headers(init.headers);

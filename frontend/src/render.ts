@@ -725,12 +725,24 @@ export function renderJob(
   if (sources) card.append(sources);
 
   if (thesis.raw_output) {
-    const raw = el(
-      "p",
-      thesis.raw_output,
-      "text-sm text-base-content/60 leading-relaxed whitespace-pre-wrap",
+    const body = el("div");
+    if (thesis.summary_source === "local") {
+      body.append(
+        el(
+          "p",
+          "Generated without an LLM (local extractive summarizer) - narrative quality may be reduced.",
+          "text-xs text-accent border border-accent/30 bg-accent/10 rounded-field px-3 py-2 mb-3",
+        ),
+      );
+    }
+    body.append(
+      el(
+        "p",
+        thesis.raw_output,
+        "text-sm text-base-content/60 leading-relaxed whitespace-pre-wrap",
+      ),
     );
-    card.append(collapsible("Raw Summary", raw, true));
+    card.append(collapsible("Raw Summary", body, true));
   }
 
   if (thesis.key_themes.length === 0) {

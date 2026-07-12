@@ -225,6 +225,34 @@ class TestLLMWrapperEdgeCases:
         assert result == "Empty summary"
         mock_primary_llm.summarize.assert_called_once_with([])
 
+    def test_fallback_summary_marks_local_provenance(self, test_documents, mock_primary_llm):
+        """A summary served by the real local fallback flips the per-call
+        provenance to 'local', so the thesis can record the degradation."""
+        from config.settings import LLMConfig
+        from core.implementations.llm.local_summarizer import LocalSummarizerModel
+        from core.interfaces.llm import SOURCE_LLM, summary_source_var
+
+        mock_primary_llm.summarize.side_effect = RuntimeError("API down")
+        local = LocalSummarizerModel(LLMConfig(provider="local", model_name="x", api_key=""))
+        wrapper = LLMWrapper(
+            primary_llm=mock_primary_llm,
+            fallback_llm=local,
+            max_retries=0,
+        )
+
+        async def run():
+            # Read the var inside the task: context changes don't propagate
+            # out of asyncio.run (in production the thesis service reads it
+            # inside the same request task, like this).
+            summary_source_var.set(SOURCE_LLM)
+            result = await wrapper.summarize(test_documents)
+            return result, summary_source_var.get()
+
+        result, source = asyncio.run(run())
+
+        assert result  # extractive text came back
+        assert source == "local"
+
     def test_refine_raises_without_touching_fallback(self, test_documents, mock_primary_llm, mock_fallback_llm):
         """refine retries the primary but never falls back (the local summarizer
         cannot rewrite a thesis); the error propagates to the caller so the API

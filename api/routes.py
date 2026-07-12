@@ -70,6 +70,7 @@ def _thesis_to_response(thesis) -> ThesisResponse:
         confidence_as_of=as_of.isoformat() if as_of else None,
         recommendation=thesis.recommendation,
         key_risk_factors=thesis.key_risk_factors,
+        summary_source=thesis.summary_source,
     )
 
 

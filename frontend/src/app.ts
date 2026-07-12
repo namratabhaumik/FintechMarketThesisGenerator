@@ -168,17 +168,23 @@ export class FinThesisApp {
 
   // --- Helpers ---
 
-  private setStatus(text: string): void {
+  private setStatus(text: string, isError = false): void {
     this.status.textContent = text;
+    // Errors get a highlighted banner; plain progress text stays muted. The
+    // class resets on every call so a later non-error status clears the box.
+    this.status.className =
+      isError && text
+        ? "text-xs font-mono mt-3 text-error border border-error/30 bg-error/10 rounded-field px-3 py-2"
+        : "text-xs text-base-content/60 font-mono mt-3";
   }
 
-  /** Map an error to a status message; ApiError carries a server message. */
+  /** Map an error to a highlighted status message; ApiError carries a server message. */
   private reportError(err: unknown, fallback: string, prefix: string): void {
     if (err instanceof ApiError) {
-      this.setStatus(`${prefix}: ${err.message}`);
+      this.setStatus(`${prefix}: ${err.message}`, true);
     } else {
       console.error(fallback, err);
-      this.setStatus(fallback);
+      this.setStatus(fallback, true);
     }
   }
 
