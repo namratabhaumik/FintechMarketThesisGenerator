@@ -66,13 +66,15 @@ from core.services.thesis_generator_service import ThesisGeneratorService
 # that implements it. get_llm/get_embedding_model/get_relevance_classifier look
 # up the configured name here, so swapping a backend is a config change, not a
 # code change.
-# To add a new LLM provider, see README.md
+# To add a new LLM provider: implement ILanguageModel, register it here, and
+# add its API key/model env vars to PROVIDER_API_KEY_ENV/PROVIDER_MODEL_ENV
+# in config/settings.py.
 LLM_PROVIDER_REGISTRY: Dict[str, Type[ILanguageModel]] = {
     "gemini": GeminiLanguageModel,
     "local": LocalSummarizerModel,
 }
 
-# To add a new embedding provider, see README.md
+# To add a new embedding provider: implement IEmbeddingModel and register it here.
 EMBEDDING_PROVIDER_REGISTRY: Dict[str, Type[IEmbeddingModel]] = {
     "fastembed": FastEmbedEmbeddingModel,
 }

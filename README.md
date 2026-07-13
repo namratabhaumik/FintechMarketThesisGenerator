@@ -23,8 +23,10 @@ Every output you see maps to a specific path. The tag on each says *how* it is c
 
 Almost everything starts from the same step: a query runs **[Python]** MMR retrieval over the Silver pgvector embeddings → **retrieved chunks** (each carrying its Silver tags + article metadata), which feed the outputs below. `create_thesis` in [`api/routes.py`](api/routes.py) → [`core/services/retrieval_service.py`](core/services/retrieval_service.py).
 
-- **Summary** — retrieved chunks → **[LLM]** `llm.summarize` (Gemini) → narrative prose. The *only* model call in generation. [`thesis_generator_service.py`](core/services/thesis_generator_service.py)
-- **Themes / Risks / Signals** — chunks' Silver-tag metadata → **[Python]** frequency-rank (`Counter.most_common`) → top 3 per dimension. Tags are assigned at Silver ingest, not invented by the model. `_ranked_tags_from_documents`
+If the retrieved chunks don't carry Silver tags in **all three** dimensions (themes, risks, signals), the request is refused with a `422` (`insufficient_evidence`) *before* the model call. The missing dimensions are logged.
+
+- **Summary** — retrieved chunks → **[LLM]** `llm.summarize` → narrative prose. The *only* model call in generation: Gemini normally, falling back to a local extractive summarizer if Gemini is unavailable. A **summary_source** badge in the UI shows which one produced the text. [`thesis_generator_service.py`](core/services/thesis_generator_service.py)
+- **Themes / Risks / Signals** — chunks' Silver-tag metadata → **[Python]** frequency-rank (`Counter.most_common`) → top 3 per dimension at generation (refinement can nudge this cap to 4; see below). Tags are assigned at Silver ingest, not invented by the model. `_ranked_tags_from_documents`
 - **Score** (0–5) — total Silver signal/theme/risk tag counts → **[Python]** self-normalizing formula (signals + ½·themes lift, risks pull down) → clamp to 0–5. `_compute_score` in [`opportunity_scoring_service.py`](finthesis_internal/opportunity_scoring_service.py)
 - **Confidence** (0–1) — chunks' tag categories → matched against **Gold** weekly trend metrics → **[Python]** `covered_weeks / window_weeks`. Grounded in corpus trend coverage, not the model. `_gold_confidence_inputs` → `_compute_confidence`
 - **Recommendation** — score → **[Python]** fixed thresholds (≥3.75 Pursue, ≥2.5 Investigate, else Skip). `_get_recommendation`

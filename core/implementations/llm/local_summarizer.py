@@ -85,8 +85,10 @@ class LocalSummarizerModel(ILanguageModel):
                 all_sentences.extend(sentences)
 
             if not all_sentences:
+                # No extractable content. Raise rather than return a placeholder
+                # string.
                 logger.warning("No sentences found in documents")
-                return "No content to summarize."
+                raise RuntimeError("No extractable content in documents to summarize")
 
             # Filter out mid-sentence fragments (sentences starting with lowercase)
             complete_sentences = [
