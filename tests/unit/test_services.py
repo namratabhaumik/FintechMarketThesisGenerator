@@ -20,6 +20,7 @@ def _empty_trend():
     """Trend repo stub with no Gold metrics (confidence falls to 0)."""
     repo = Mock()
     repo.fetch_all.return_value = []
+    repo.fetch_recent.return_value = []
     return repo
 
 
