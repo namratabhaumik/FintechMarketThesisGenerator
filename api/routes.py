@@ -37,6 +37,7 @@ from api.schemas import (
 from config.settings import FEEDBACK_OPTIONS
 from core.agents.hallucination_detector import HallucinationDetector
 from core.interfaces.job_manager import IJobManager
+from core.services.thesis_generator_service import _tag_strengths_from_documents
 from dependency_injection.container import ServiceContainer
 
 logger = logging.getLogger(__name__)
@@ -198,6 +199,39 @@ async def create_thesis(
             422,
             "no_relevant_documents",
             "No relevant documents found in the corpus for this query",
+        )
+
+    # A thesis is only meaningful if the retrieved evidence grounds all three
+    # Silver dimensions. If any of themes/risks/signals has no tag across the
+    # retrieved chunks, the score would fall back to a hardcoded neutral and the
+    # empty dimension would render blank. Refuse before the LLM call & log which 
+    # dimensions were missing. Uses generation's own tag-strength computation, 
+    # so passing this guard means generate_thesis will produce a non-empty tag 
+    # list for every dimension.
+    signal_strength, theme_strength, risk_strength = _tag_strengths_from_documents(docs)
+    missing = [
+        dim
+        for dim, strength in (
+            ("themes", theme_strength),
+            ("risks", risk_strength),
+            ("signals", signal_strength),
+        )
+        if strength == 0
+    ]
+    if missing:
+        logger.warning(
+            "Taxonomy gap: query %r retrieved evidence with no %s tags; refusing "
+            "to build a partial thesis. Sources: %s",
+            query,
+            "/".join(missing),
+            [d.metadata.get("url") for d in docs if getattr(d, "metadata", None)],
+        )
+        raise _error(
+            422,
+            "insufficient_evidence",
+            "The retrieved sources don't cover themes, risks, and investment "
+            "signals for this query, so a complete thesis can't be built. Try a "
+            "broader or more established fintech topic.",
         )
 
     try:

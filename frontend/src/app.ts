@@ -239,6 +239,10 @@ export class FinThesisApp {
         this.setStatus(
           "No relevant documents found for this query. Try a broader or different fintech topic.",
         );
+      } else if (err instanceof ApiError && err.code === ErrorCode.InsufficientEvidence) {
+        this.setStatus(
+          "Not enough tagged evidence to build a complete thesis for this query.",
+        );
       } else {
         this.reportError(err, "An unexpected error occurred. Is the API running?", "Error");
       }

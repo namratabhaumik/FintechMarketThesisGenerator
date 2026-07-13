@@ -28,6 +28,7 @@ async function authedFetch(url: string, init: RequestInit = {}): Promise<Respons
  */
 export const ErrorCode = {
   NoRelevantDocuments: "no_relevant_documents",
+  InsufficientEvidence: "insufficient_evidence",
 } as const;
 
 /** An API error carrying the backend's machine-readable code (see routes.py). */

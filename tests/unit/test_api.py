@@ -305,8 +305,11 @@ class TestAPIEndpoints:
 
         self._mock_container.get_embedding_model.return_value \
             .get_embeddings.return_value.embed_query.return_value = [0.1, 0.2]
+        # All three Silver tag dimensions present, so the taxonomy-gap guard
+        # lets the request through to generation.
         self._mock_container.get_retrieval_service.return_value \
-            .retrieve.return_value = [Document(page_content="chunk", metadata={})]
+            .retrieve.return_value = [Document(page_content="chunk", metadata={
+                "themes": ["Payments"], "risks": ["Regulatory"], "signals": ["Growth"]})]
         self._mock_container.get_thesis_service.return_value \
             .generate_thesis = AsyncMock(return_value=StructuredThesis(
                 key_themes=["Fintech"], recommendation="Pursue"))
