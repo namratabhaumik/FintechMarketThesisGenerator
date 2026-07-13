@@ -590,9 +590,23 @@ function renderExecutionTrace(log: unknown[]): HTMLElement | null {
 
 // --- Past theses (browsable research library) ---
 
-export function renderPastTheses(jobs: ThesisSummaryResponse[]): HTMLElement | null {
-  if (jobs.length === 0) return null;
+export function renderPastTheses(
+  jobs: ThesisSummaryResponse[],
+  onPrevPage?: () => void,
+  onNextPage?: () => void,
+  canPrevPage?: boolean,
+  canNextPage?: boolean,
+): HTMLElement | null {
+  const paginated = Boolean(onPrevPage || onNextPage);
+  // Without pagination, an empty list means nothing to show - collapse entirely.
+  // With pagination, this page can be empty (e.g. its only row is the current
+  // job, filtered out by the caller) while other pages still have content, so
+  // the shell - and its Prev/Next controls - must stay mounted.
+  if (jobs.length === 0 && !paginated) return null;
   const wrap = el("div", undefined, "space-y-2");
+  if (jobs.length === 0) {
+    wrap.append(el("p", "No other past theses on this page.", "text-xs text-base-content/60"));
+  }
   for (const j of jobs) {
     const item = el(
       "div",
@@ -620,6 +634,24 @@ export function renderPastTheses(jobs: ThesisSummaryResponse[]): HTMLElement | n
 
     wrap.append(item);
   }
+
+  if (onPrevPage || onNextPage) {
+    const pagination = el("div", undefined, "mt-3 flex gap-2");
+    if (onPrevPage) {
+      const prevBtn = el("button", "← Previous", "btn btn-xs btn-outline");
+      prevBtn.disabled = !canPrevPage;
+      prevBtn.addEventListener("click", onPrevPage);
+      pagination.append(prevBtn);
+    }
+    if (onNextPage) {
+      const nextBtn = el("button", "Next →", "btn btn-xs btn-outline");
+      nextBtn.disabled = !canNextPage;
+      nextBtn.addEventListener("click", onNextPage);
+      pagination.append(nextBtn);
+    }
+    wrap.append(pagination);
+  }
+
   return collapsible(`Past theses (${jobs.length})`, wrap);
 }
 

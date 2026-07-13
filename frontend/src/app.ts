@@ -27,6 +27,8 @@ export interface AuthInfo {
 export class FinThesisApp {
   private currentJob: JobResponse | null = null;
   private feedbackOptions: string[] = [];
+  private pastThesesOffset = 0;
+  private readonly pageSize = 10;
 
   private readonly pickerContainer: HTMLElement;
   private readonly input: HTMLInputElement;
@@ -351,7 +353,7 @@ export class FinThesisApp {
   private async showResumePicker(): Promise<void> {
     let jobs: ThesisSummaryResponse[];
     try {
-      jobs = await listTheses(20, RefinementStatus.Refining);
+      jobs = await listTheses(this.pageSize, 0, RefinementStatus.Refining);
     } catch (err) {
       console.error("Failed to load resumable sessions", err);
       this.pickerContainer.replaceChildren(
@@ -370,7 +372,7 @@ export class FinThesisApp {
   private async showPastTheses(): Promise<void> {
     let jobs: ThesisSummaryResponse[];
     try {
-      jobs = await listTheses(20);
+      jobs = await listTheses(this.pageSize, this.pastThesesOffset);
     } catch (err) {
       console.error("Failed to load past theses", err);
       this.pastTheses.replaceChildren();
@@ -378,7 +380,18 @@ export class FinThesisApp {
     }
     const currentId = this.currentJob?.job_id;
     const others = jobs.filter((j) => j.job_id !== currentId);
-    const list = renderPastTheses(others);
+    const list = renderPastTheses(
+      others,
+      () => this.pagePastThesesPage(-1),
+      () => this.pagePastThesesPage(1),
+      this.pastThesesOffset > 0,
+      jobs.length >= this.pageSize,
+    );
     this.pastTheses.replaceChildren(...(list ? [list] : []));
+  }
+
+  private pagePastThesesPage(direction: number): void {
+    this.pastThesesOffset = Math.max(0, this.pastThesesOffset + direction * this.pageSize);
+    void this.showPastTheses();
   }
 }

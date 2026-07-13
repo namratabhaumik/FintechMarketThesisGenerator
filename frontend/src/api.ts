@@ -141,9 +141,10 @@ export async function getThesis(jobId: string): Promise<JobResponse> {
  * refinement_status server-side ). */
 export async function listTheses(
   limit = 20,
+  offset = 0,
   status?: string,
 ): Promise<ThesisSummaryResponse[]> {
-  const params = new URLSearchParams({ limit: String(limit) });
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (status) params.set("status", status);
   const res = await authedFetch(`${API_BASE}/api/theses?${params.toString()}`);
   if (!res.ok) {
