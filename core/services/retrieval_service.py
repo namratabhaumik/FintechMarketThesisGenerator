@@ -7,6 +7,7 @@ from langchain_core.documents import Document
 
 from config.settings import RetrievalConfig
 from core.interfaces.vectorstore import IVectorStore
+from core.utils.date_intent import parse_date_intent
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,12 @@ class DocumentRetrievalService:
         effective_k = k if k is not None else self._config.k
         fetch_k = max(self._config.fetch_k, effective_k)
 
+        # An explicit date range named in the query (e.g. "since March 2024")
+        # replaces the default trailing window rather than narrowing it.
+        date_intent = parse_date_intent(query)
+        date_from, date_to = date_intent if date_intent else (None, None)
+        window_days = None if date_intent else self._config.window_days
+
         logger.info(f"Retrieving {effective_k} documents (MMR) for query: {query}")
         try:
             docs = self._vectorstore_impl.retrieve(
@@ -63,9 +70,11 @@ class DocumentRetrievalService:
                 k=effective_k,
                 fetch_k=fetch_k,
                 lambda_mult=self._config.lambda_mult,
-                window_days=self._config.window_days,
+                window_days=window_days,
                 query_embedding=query_embedding,
                 min_similarity=self._config.min_similarity,
+                date_from=date_from,
+                date_to=date_to,
             )
         except Exception as e:
             logger.error(f"Retrieval failed for query '{query}': {e}")

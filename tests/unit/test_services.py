@@ -112,6 +112,8 @@ class _RecordingVectorStore:
         window_days=None,
         query_embedding=None,
         min_similarity=0.0,
+        date_from=None,
+        date_to=None,
     ):
         self.retrieve_args = {
             "query": query,
@@ -121,6 +123,8 @@ class _RecordingVectorStore:
             "window_days": window_days,
             "query_embedding": query_embedding,
             "min_similarity": min_similarity,
+            "date_from": date_from,
+            "date_to": date_to,
         }
         return [Document(page_content="r", metadata={"url": "u"})]
 
@@ -171,6 +175,28 @@ class TestDocumentRetrievalService:
 
         assert vs.retrieve_args["k"] == 30
         assert vs.retrieve_args["fetch_k"] == 30
+
+    def test_retrieve_query_date_intent_overrides_window_days(self):
+        from config.settings import RetrievalConfig
+
+        # A query naming an explicit date range takes over from the default
+        # trailing window instead of being combined with it.
+        service, vs = self._service(RetrievalConfig(window_days=365))
+        service.retrieve("fintech regulation since March 2024")
+
+        assert vs.retrieve_args["window_days"] is None
+        assert vs.retrieve_args["date_from"] is not None
+        assert vs.retrieve_args["date_to"] is not None
+
+    def test_retrieve_query_without_date_intent_keeps_window_days(self):
+        from config.settings import RetrievalConfig
+
+        service, vs = self._service(RetrievalConfig(window_days=365))
+        service.retrieve("crypto adoption in Asia")
+
+        assert vs.retrieve_args["window_days"] == 365
+        assert vs.retrieve_args["date_from"] is None
+        assert vs.retrieve_args["date_to"] is None
 
 
 class TestThesisGeneratorService:
