@@ -145,10 +145,10 @@ function renderMetricsStrip(thesis: ThesisResponse): HTMLElement {
   const metrics = el(
     "div",
     undefined,
-    "border-b border-base-300 pb-4 flex flex-wrap items-center gap-6",
+    "border-b border-base-300 pb-4 flex flex-wrap items-center justify-between gap-6",
   );
 
-  const scoreBox = el("div", undefined, "flex-1 min-w-0");
+  const scoreBox = el("div", undefined, "min-w-0");
   scoreBox.append(el("p", "Investment Score", "text-xs text-base-content/60 font-mono uppercase tracking-wider mb-1"));
   const scoreValue = el("div", undefined, "flex items-end gap-2");
   scoreValue.append(
@@ -158,9 +158,9 @@ function renderMetricsStrip(thesis: ThesisResponse): HTMLElement {
   scoreBox.append(scoreValue);
   metrics.append(scoreBox);
 
-  const confidenceBox = el("div", undefined, "flex-1 min-w-0");
+  const confidenceBox = el("div", undefined, "w-48 min-w-0");
   confidenceBox.append(el("p", "Confidence", "text-xs text-base-content/60 font-mono uppercase tracking-wider mb-1"));
-  const pct = Math.trunc(thesis.confidence_level * 100);
+  const pct = Math.round(thesis.confidence_level * 100);
   const confidenceValue = el("div", undefined, "flex items-end gap-2 mb-1.5");
   confidenceValue.append(
     el("span", `${pct}`, "text-3xl font-bold font-mono leading-none"),
@@ -286,7 +286,7 @@ export function renderCompareModal(jobs: JobResponse[], onClose: () => void): HT
 
   addRow("Date", (j) => (j.created_at ? fmtDate(j.created_at) : "-"));
   addRow("Score", (j) => (j.thesis ? `${j.thesis.opportunity_score}/5` : "-"));
-  addRow("Confidence", (j) => (j.thesis ? `${Math.trunc(j.thesis.confidence_level * 100)}%` : "-"));
+  addRow("Confidence", (j) => (j.thesis ? `${Math.round(j.thesis.confidence_level * 100)}%` : "-"));
   addRow("Recommendation", (j) =>
     j.thesis ? el("span", j.thesis.recommendation, recommendationBadgeClass(j.thesis.recommendation)) : "-",
   );
