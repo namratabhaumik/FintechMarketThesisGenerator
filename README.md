@@ -2,7 +2,7 @@
 
 > An agentic pipeline that reads fintech news so you don't have to.
 
-[![FinThesis Demo](https://img.youtube.com/vi/73SnVdzeVrg/hqdefault.jpg)](https://youtu.be/73SnVdzeVrg)
+**Live:** [finthesis-0f2c.onrender.com](https://finthesis-0f2c.onrender.com)
 
 ---
 
@@ -89,4 +89,12 @@ Deliberate scope boundaries of the current platform:
 
 - **Single news source.** Articles come only from TechCrunch's RSS feeds. Multi-source ingestion, and detecting or adapting to a source changing its feed format, are out of scope - the pipeline assumes the current feed structure.
 - **Point-in-time history, not restated.** Raw articles are retained indefinitely and each article's fintech classification is recorded once and frozen. Changing the classifier model applies to new articles only - past records are not retroactively re-classified, so historical trends reflect what was judged at the time.
+
+## Deployment
+
+Frontend and backend are decoupled and deployed as separate Render services, across two environments (development and production).
+
+**Branch flow.** `feature → develop → master`. `develop` drives the development environment ([finthesis.onrender.com](https://finthesis.onrender.com)); `master` drives production ([finthesis-0f2c.onrender.com](https://finthesis-0f2c.onrender.com)).
+
+**CI/CD (GitHub Actions).** On every push, a read-only job runs the tests and builds the vanilla-TS frontend bundle with that environment's API base URL compiled in. A separate job (with write access) then publishes just the built static assets to a per-environment deploy branch (`deploy-dev` / `deploy-prod`) that the corresponding Render Static Site serves. The FastAPI backend deploys per source branch. A failing test skips the deploy entirely.
 
