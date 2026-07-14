@@ -45,7 +45,7 @@ def test_pool_backpressure_at_capacity():
 
             # Acquire 2 clients (fill the pool)
             client1 = await pool.acquire()
-            client2 = await pool.acquire()
+            await pool.acquire()  # second slot; only client1 is released later
             assert mock_create.call_count == 2
 
             # Start a third acquisition (should block)
