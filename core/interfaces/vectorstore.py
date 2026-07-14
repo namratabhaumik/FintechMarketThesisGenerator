@@ -1,6 +1,7 @@
 """Abstract interface for vector stores."""
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import List, Optional
 
 from langchain_core.documents import Document
@@ -16,18 +17,8 @@ class IVectorStore(ABC):
         pass
 
     @abstractmethod
-    def open(self) -> VectorStore:
-        """Open the existing persistent store for reading (the read path).
-
-        Returns a retriever-ready handle over whatever is already persisted,
-        without embedding or writing anything.
-        """
-        pass
-
-    @abstractmethod
     def retrieve(
         self,
-        vectorstore: VectorStore,
         query: str,
         k: int,
         fetch_k: int,
@@ -35,6 +26,8 @@ class IVectorStore(ABC):
         window_days: Optional[int] = None,
         query_embedding: Optional[List[float]] = None,
         min_similarity: float = 0.0,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
     ) -> List[Document]:
         """Return up to `k` MMR-selected chunks for `query`.
 
@@ -44,7 +37,12 @@ class IVectorStore(ABC):
         window (anchored at query time) are considered; None or 0 searches the
         whole corpus. The retrieval service passes these from RetrievalConfig.
 
-        `min_similarity` cosine floor applied to the candidates BEFORE MMR 
+        `date_from`/`date_to`, when set, filter on the article's published
+        date directly (an explicit range named in the query, e.g. "since
+        March 2024"). The retrieval service sets only one of window_days or
+        date_from/date_to per call, never both.
+
+        `min_similarity` cosine floor applied to the candidates BEFORE MMR
         (default 0.0).
 
         `query_embedding`, when provided, is the already-computed vector for

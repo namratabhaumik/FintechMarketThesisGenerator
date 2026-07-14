@@ -81,11 +81,13 @@ class LLMConfig:
     model_name: str
     api_key: str
     temperature: float = 0.0
-    # upper limit with headroom above the observed max (llm timeout + token limit)
-    timeout: int = 120
+    # PER-ATTEMPT cap on one LLM call. The total ceiling across retries is
+    # LLMWrapper's retry budget; together they must keep the worst case
+    # (attempts x timeout + backoff) inside the platform gateway timeout, 
+    # or the proxy drops a request the server then completes anyway. Observed 
+    # calls run 1-3s, so 40s is generous headroom.
+    timeout: int = 40
     max_output_tokens: int = 4096
-    timeout: int = 60
-    max_output_tokens: int = 2048
 
 
 @dataclass
@@ -126,6 +128,9 @@ class SupabaseConfig:
     """Supabase connection configuration."""
     url: str = ""
     service_role_key: str = ""
+    # Public anon key, used to build per-request user-scoped clients (anon key +
+    # the caller's JWT) so RLS applies. Distinct from service_role, which bypasses RLS.
+    anon_key: str = ""
     enabled: bool = False
 
 
@@ -264,6 +269,7 @@ class AppConfig:
         # Supabase configuration (optional — falls back to in-memory if not set)
         supabase_url = os.getenv("SUPABASE_URL", "")
         supabase_service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+        supabase_anon_key = os.getenv("SUPABASE_ANON_KEY", "")
         supabase_enabled = bool(supabase_url and supabase_service_role_key)
 
         # Load AI Gateway configuration
@@ -281,7 +287,7 @@ class AppConfig:
                 provider=llm_provider,
                 model_name=model_name,
                 api_key=api_key,
-                timeout=int(os.getenv("LLM_TIMEOUT_SECONDS", "120")),
+                timeout=int(os.getenv("LLM_TIMEOUT_SECONDS", "40")),
                 max_output_tokens=int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "4096")),
             ),
             embedding=EmbeddingConfig(
@@ -301,6 +307,7 @@ class AppConfig:
             supabase=SupabaseConfig(
                 url=supabase_url,
                 service_role_key=supabase_service_role_key,
+                anon_key=supabase_anon_key,
                 enabled=supabase_enabled,
             ),
             ai_gateway=AIGatewayConfig(

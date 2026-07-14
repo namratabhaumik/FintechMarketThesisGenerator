@@ -10,6 +10,8 @@ from core.implementations.llm.cache_manager import CacheManager
 from core.implementations.llm.cost_tracker import CostTracker
 from core.implementations.llm.ai_gateway import AIGateway
 from core.implementations.llm.routing_strategy import (
+    ROUTE_FALLBACK,
+    ROUTE_PRIMARY,
     CostOptimizedStrategy,
     QualityFirstStrategy,
     HybridStrategy,
@@ -87,14 +89,52 @@ class TestCacheManager:
         assert metrics["cache_size"] == 1
 
     def test_cache_clear(self):
-        """Test cache clearing."""
+        """Test cache clearing (asserted through the get() contract)."""
         manager = CacheManager()
         key = manager.generate_key("content", "topic", "model")
         manager.set(key, "response", "model", 100, 50)
 
-        assert manager.size() == 1
+        assert manager.get(key) is not None
         manager.clear()
-        assert manager.size() == 0
+        assert manager.get(key) is None
+
+    def test_cache_hit_restores_local_provenance(self):
+        """A cached local-extractive summary stays marked 'local' on later hits
+        (no model runs on the cache path, so the gateway must restore it)."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from config.settings import AIGatewayConfig
+        from core.implementations.llm.ai_gateway import AIGateway
+        from core.implementations.llm.cost_tracker import CostTracker
+        from core.interfaces.llm import SOURCE_LLM, summary_source_var
+        from langchain_core.documents import Document
+
+        local_llm = MagicMock()
+        local_llm.get_model_name.return_value = "local-extractor"
+        local_llm.summarize = AsyncMock(return_value="extractive summary")
+
+        gateway = AIGateway(
+            primary_llm=local_llm,
+            fallback_llm=MagicMock(),
+            config=AIGatewayConfig(enabled=True),
+            cache_manager=CacheManager(),
+            cost_tracker=CostTracker(),
+        )
+        docs = [Document(page_content="x", metadata={"url": "u"})]
+
+        async def scenario():
+            # Read the var inside the task: context changes don't propagate
+            # out of asyncio.run.
+            await gateway.summarize(docs)  # miss: caches with model name
+            summary_source_var.set(SOURCE_LLM)  # simulate a fresh request
+            await gateway.summarize(docs)  # hit: must restore provenance
+            return summary_source_var.get()
+
+        source = asyncio.run(scenario())
+
+        assert local_llm.summarize.call_count == 1
+        assert source == "local"
 
 
 class TestCostTracker:
@@ -187,34 +227,30 @@ class TestRoutingStrategies:
         strategy = CostOptimizedStrategy(size_threshold_tokens=5000)
         docs = [Document(page_content=" ".join(["word"] * 4000))]  # ~5200 tokens
 
-        provider, model = strategy.select_provider(docs, "topic", 0, 5.0)
-        assert provider == "local"
+        assert strategy.select_route(docs, "topic", 0, 5.0) == ROUTE_FALLBACK
 
     def test_cost_optimized_strategy_cost_limit(self):
         """Test cost-optimized routing when approaching cost limit."""
         strategy = CostOptimizedStrategy(size_threshold_tokens=5000)
         docs = [Document(page_content="small doc")]  # ~10 tokens
 
-        # 85% of limit - should trigger local
-        provider, model = strategy.select_provider(docs, "topic", 4.25, 5.0)
-        assert provider == "local"
+        # 85% of limit - should route to the local summarizer
+        assert strategy.select_route(docs, "topic", 4.25, 5.0) == ROUTE_FALLBACK
 
     def test_cost_optimized_strategy_small_documents(self):
         """Test cost-optimized routing for small documents within limit."""
         strategy = CostOptimizedStrategy(size_threshold_tokens=5000)
         docs = [Document(page_content="small doc")]  # ~10 tokens
 
-        # 50% of limit - should use gemini
-        provider, model = strategy.select_provider(docs, "topic", 2.5, 5.0)
-        assert provider == "gemini"
+        # 50% of limit - should route to the primary LLM
+        assert strategy.select_route(docs, "topic", 2.5, 5.0) == ROUTE_PRIMARY
 
     def test_quality_first_strategy_always_gemini(self):
-        """Test quality-first strategy always uses Gemini."""
+        """Test quality-first strategy always uses the primary LLM."""
         strategy = QualityFirstStrategy()
         docs = [Document(page_content="any content")]
 
-        provider, model = strategy.select_provider(docs, "topic", 4.9, 5.0)
-        assert provider == "gemini"
+        assert strategy.select_route(docs, "topic", 4.9, 5.0) == ROUTE_PRIMARY
 
     def test_hybrid_strategy_hard_cost_limit(self):
         """Test hybrid strategy enforces hard cost limit."""
@@ -222,24 +258,21 @@ class TestRoutingStrategies:
         docs = [Document(page_content="small doc")]
 
         # Cost limit exceeded - hard constraint
-        provider, model = strategy.select_provider(docs, "topic", 5.0, 5.0)
-        assert provider == "local"
+        assert strategy.select_route(docs, "topic", 5.0, 5.0) == ROUTE_FALLBACK
 
     def test_hybrid_strategy_large_documents(self):
         """Test hybrid strategy routes large docs to local."""
         strategy = HybridStrategy(size_threshold_tokens=5000)
         docs = [Document(page_content=" ".join(["word"] * 4000))]  # ~5200 tokens
 
-        provider, model = strategy.select_provider(docs, "topic", 1.0, 5.0)
-        assert provider == "local"
+        assert strategy.select_route(docs, "topic", 1.0, 5.0) == ROUTE_FALLBACK
 
     def test_hybrid_strategy_small_documents_in_budget(self):
-        """Test hybrid strategy routes small docs to Gemini when in budget."""
+        """Test hybrid strategy routes small docs to the primary LLM when in budget."""
         strategy = HybridStrategy(size_threshold_tokens=5000)
         docs = [Document(page_content="small doc")]
 
-        provider, model = strategy.select_provider(docs, "topic", 1.0, 5.0)
-        assert provider == "gemini"
+        assert strategy.select_route(docs, "topic", 1.0, 5.0) == ROUTE_PRIMARY
 
     def test_get_strategy_factory(self):
         """Test strategy factory function."""

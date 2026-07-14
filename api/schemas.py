@@ -30,9 +30,9 @@ class RefinementStatus(str, Enum):
     """Refinement lifecycle of a thesis job. Single source of truth for the
     `refinement_status` values the API emits (and the frontend branches on)."""
     NOT_APPLICABLE = "N/A"  # generated, never refined
-    REFINING = "refining"   # mid-refinement; the only resumable state
+    REFINING = "refining"   # refined >=1 round, more possible; the only resumable state
     ESCALATED = "escalated"  # max refinements reached; terminal
-    REFINED = "refined"     # approved; terminal
+    REFINED = "refined"     # refinement finalized (e.g. by approval); terminal
 
 
 # --- Request schemas ---
@@ -68,6 +68,8 @@ class ThesisResponse(BaseModel):
     confidence_as_of: Optional[str] = None
     recommendation: str = ""
     key_risk_factors: List[str] = []
+    # What produced raw_output: "llm" or "local" (extractive fallback).
+    summary_source: str = "llm"
 
 
 class RelatedThesisResponse(BaseModel):
@@ -112,9 +114,3 @@ class JobResponse(BaseModel):
     related_theses: List[RelatedThesisResponse] = []
     # Present only on refinement responses (transient, not stored).
     hallucination: Optional[dict] = None
-
-
-class ErrorDetail(BaseModel):
-    """Machine-readable error payload carried in HTTPException detail."""
-    code: str
-    message: str

@@ -27,6 +27,11 @@ create table if not exists jobs (
     -- 512-dim) stored as pgvector, used to rank past runs by cosine similarity
     -- via match_jobs. Older rows are NULL and are skipped by recall.
     query_embedding     vector(512),
+    -- Owner (multi-tenant isolation). Set to the authenticated user on insert
+    -- via the per-request user-scoped client (default auth.uid()); RLS scopes
+    -- all access to auth.uid(). NULL only on legacy/pre-auth rows (invisible
+    -- under RLS).
+    user_id      uuid references auth.users(id) on delete cascade default auth.uid(),
     created_at   timestamptz not null default now()
 );
 
@@ -34,9 +39,22 @@ create table if not exists jobs (
 create index if not exists jobs_query_embedding_hnsw
     on jobs using hnsw (query_embedding vector_cosine_ops);
 
--- Row Level Security: on with no policy, so only the service_role key (which
--- bypasses RLS) can reach this table. The app connects with service_role.
+-- Row Level Security: each user reaches only their own jobs. The API's
+-- per-request user-scoped client (anon key + the user's JWT) is subject to
+-- these policies; the service_role key bypasses RLS (admin/maintenance only).
 alter table jobs enable row level security;
+
+create policy "jobs_select_own" on jobs
+  for select using (auth.uid() = user_id);
+create policy "jobs_insert_own" on jobs
+  for insert with check (auth.uid() = user_id);
+create policy "jobs_update_own" on jobs
+  for update using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "jobs_delete_own" on jobs
+  for delete using (auth.uid() = user_id);
+
+-- RLS filters every query by user_id; index it.
+create index if not exists jobs_user_id_idx on jobs (user_id);
 
 -- match_jobs: past runs most similar to query_embedding (episodic recall),
 -- excluding the current run and runs without a thesis, above min_similarity.
@@ -94,3 +112,11 @@ $$;
 --   alter table jobs add column if not exists thesis_history jsonb not null default '[]'::jsonb;
 -- Migration for a table created with the earlier allow-all anon policy:
 --   drop policy if exists "Allow all access via anon key" on jobs;
+--
+-- Multi-tenant migration for an existing jobs table (add owner + RLS policies):
+--   alter table jobs add column if not exists user_id uuid
+--     references auth.users(id) on delete cascade default auth.uid();
+--   create index if not exists jobs_user_id_idx on jobs (user_id);
+--   -- then create the four jobs_*_own policies above.
+--   -- Existing rows have user_id = NULL and are invisible under RLS; either
+--   -- backfill them (update jobs set user_id = '<uuid>' ...) or delete test rows.

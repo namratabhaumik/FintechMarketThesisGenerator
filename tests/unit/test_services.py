@@ -7,7 +7,7 @@ from unittest.mock import Mock
 from langchain_core.documents import Document
 
 from core.models.trend_metric import TrendMetric
-from core.services.ingestion_service import ArticleIngestionService
+from core.services.ingestion_service import article_to_document
 from core.services.thesis_generator_service import (
     ThesisGeneratorService,
     _apply_cap_deltas,
@@ -20,6 +20,7 @@ def _empty_trend():
     """Trend repo stub with no Gold metrics (confidence falls to 0)."""
     repo = Mock()
     repo.fetch_all.return_value = []
+    repo.fetch_recent.return_value = []
     return repo
 
 
@@ -71,41 +72,20 @@ class TestGoldConfidenceInputs:
         assert (covered, window_weeks, as_of) == (4, 7, self.W0)
 
 
-class TestArticleIngestionService:
-    """Tests for ArticleIngestionService."""
+class TestArticleToDocument:
+    """article_to_document: the shared Article -> Document conversion."""
 
-    def test_fetch_articles(self, mock_article_source):
-        """Test fetching articles."""
-        service = ArticleIngestionService(mock_article_source)
-        articles = service.fetch_articles("fintech", limit=5)
-
-        assert len(articles) > 0
-        assert articles[0].title == "Test Article 1"
-        assert articles[0].source == "example.com"
-
-    def test_fetch_articles_respects_limit(self, mock_article_source):
-        """Test that fetch respects limit."""
-        service = ArticleIngestionService(mock_article_source)
-        articles = service.fetch_articles("fintech", limit=2)
-
-        assert len(articles) == 2
-
-    def test_convert_to_documents(self, sample_articles, mock_article_source):
-        """Test conversion of articles to documents."""
-        service = ArticleIngestionService(mock_article_source)
-        docs = service.convert_to_documents(sample_articles)
+    def test_converts_articles_to_documents(self, sample_articles):
+        docs = [article_to_document(a) for a in sample_articles]
 
         assert len(docs) == 3
         assert isinstance(docs[0], Document)
         assert "Test Article 1" in docs[0].page_content
         assert docs[0].metadata["source"] == "example.com"
 
-    def test_convert_to_documents_includes_metadata(self, sample_articles, mock_article_source):
-        """Test that documents include proper metadata."""
-        service = ArticleIngestionService(mock_article_source)
-        docs = service.convert_to_documents(sample_articles)
+    def test_documents_include_metadata(self, sample_articles):
+        doc = article_to_document(sample_articles[0])
 
-        doc = docs[0]
         assert "title" in doc.metadata
         assert "source" in doc.metadata
         assert "url" in doc.metadata
@@ -123,12 +103,8 @@ class _RecordingVectorStore:
     def build(self, documents):
         return object()
 
-    def open(self):
-        return object()
-
     def retrieve(
         self,
-        vectorstore,
         query,
         k,
         fetch_k,
@@ -136,6 +112,8 @@ class _RecordingVectorStore:
         window_days=None,
         query_embedding=None,
         min_similarity=0.0,
+        date_from=None,
+        date_to=None,
     ):
         self.retrieve_args = {
             "query": query,
@@ -145,41 +123,23 @@ class _RecordingVectorStore:
             "window_days": window_days,
             "query_embedding": query_embedding,
             "min_similarity": min_similarity,
+            "date_from": date_from,
+            "date_to": date_to,
         }
         return [Document(page_content="r", metadata={"url": "u"})]
 
 
 class TestDocumentRetrievalService:
-    """Tests for DocumentRetrievalService MMR wiring."""
+    """Tests for DocumentRetrievalService MMR wiring.
+
+    The service is stateless (no open/build step): retrieve() delegates
+    straight to the vector store implementation."""
 
     def _service(self, config):
         from core.services.retrieval_service import DocumentRetrievalService
 
         vs = _RecordingVectorStore()
-        service = DocumentRetrievalService(vs, config)
-        service.build_vectorstore([Document(page_content="x", metadata={"url": "u"})])
-        return service, vs
-
-    def test_is_built_false_initially(self):
-        from config.settings import RetrievalConfig
-        from core.services.retrieval_service import DocumentRetrievalService
-
-        service = DocumentRetrievalService(_RecordingVectorStore(), RetrievalConfig())
-        assert service.is_built() is False
-
-    def test_retrieve_lazily_opens_existing_store(self):
-        from config.settings import RetrievalConfig
-        from core.services.retrieval_service import DocumentRetrievalService
-
-        # No build_vectorstore() call: retrieve must open the existing store
-        vs = _RecordingVectorStore()
-        service = DocumentRetrievalService(vs, RetrievalConfig())
-        assert service.is_built() is False
-
-        docs = service.retrieve("query")
-
-        assert service.is_built() is True
-        assert len(docs) == 1
+        return DocumentRetrievalService(vs, config), vs
 
     def test_retrieve_uses_mmr_config(self):
         from config.settings import RetrievalConfig
@@ -216,6 +176,28 @@ class TestDocumentRetrievalService:
         assert vs.retrieve_args["k"] == 30
         assert vs.retrieve_args["fetch_k"] == 30
 
+    def test_retrieve_query_date_intent_overrides_window_days(self):
+        from config.settings import RetrievalConfig
+
+        # A query naming an explicit date range takes over from the default
+        # trailing window instead of being combined with it.
+        service, vs = self._service(RetrievalConfig(window_days=365))
+        service.retrieve("fintech regulation since March 2024")
+
+        assert vs.retrieve_args["window_days"] is None
+        assert vs.retrieve_args["date_from"] is not None
+        assert vs.retrieve_args["date_to"] is not None
+
+    def test_retrieve_query_without_date_intent_keeps_window_days(self):
+        from config.settings import RetrievalConfig
+
+        service, vs = self._service(RetrievalConfig(window_days=365))
+        service.retrieve("crypto adoption in Asia")
+
+        assert vs.retrieve_args["window_days"] == 365
+        assert vs.retrieve_args["date_from"] is None
+        assert vs.retrieve_args["date_to"] is None
+
 
 class TestThesisGeneratorService:
     """Tests for ThesisGeneratorService."""
@@ -247,6 +229,30 @@ class TestThesisGeneratorService:
 
         assert thesis.raw_output is not None
         assert thesis.sources == ["http://test.com"]
+        # A plain LLM summary carries the default provenance.
+        assert thesis.summary_source == "llm"
+
+    def test_generate_thesis_records_local_fallback_provenance(self):
+        """When the local extractive path produces the summary (it sets the
+        provenance var, like the real LocalSummarizerModel), the thesis
+        records summary_source='local'."""
+        from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
+
+        from core.interfaces.llm import SOURCE_LOCAL, summary_source_var
+
+        llm = Mock()
+
+        async def local_summarize(documents):
+            summary_source_var.set(SOURCE_LOCAL)
+            return "extractive summary"
+
+        llm.summarize = local_summarize
+        service = ThesisGeneratorService(llm, OpportunityScoringService(), _empty_trend())
+
+        docs = [Document(page_content="x", metadata={"url": "http://test.com"})]
+        thesis = asyncio.run(service.generate_thesis("Digital Banking", docs))
+
+        assert thesis.summary_source == "local"
 
     def test_generate_thesis_includes_opportunity_score(self, mock_llm, mock_scoring_strategy):
         """Test that thesis includes opportunity score and confidence."""

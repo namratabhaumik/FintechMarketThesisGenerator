@@ -1,7 +1,7 @@
 """Abstract interface for the trend metrics store (medallion: Gold layer)."""
 
 from abc import ABC, abstractmethod
-from typing import List
+from typing import List, Optional
 
 from core.models.trend_metric import TrendMetric
 
@@ -34,4 +34,16 @@ class ITrendRepository(ABC):
     @abstractmethod
     def fetch_all(self) -> List[TrendMetric]:
         """Return all stored metrics, most recent week first."""
+        pass
+
+    @abstractmethod
+    def fetch_recent(self, window_weeks: Optional[int]) -> List[TrendMetric]:
+        """Return the metrics needed for a `window_weeks`-week confidence window.
+
+        Scopes the read to the last `window_weeks` Gold weeks (ending at the
+        latest present week) so the transfer stays bounded as history grows.
+        `window_weeks=None` (whole-corpus retrieval) returns everything, same as
+        fetch_all. The scoped result is equivalent to fetch_all for confidence
+        purposes: the window is exactly that range, so nothing counted is lost.
+        """
         pass

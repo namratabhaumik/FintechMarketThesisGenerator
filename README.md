@@ -2,7 +2,7 @@
 
 > An agentic pipeline that reads fintech news so you don't have to.
 
-[![FinThesis Demo](https://img.youtube.com/vi/73SnVdzeVrg/hqdefault.jpg)](https://youtu.be/73SnVdzeVrg)
+**Live:** [finthesis-0f2c.onrender.com](https://finthesis-0f2c.onrender.com)
 
 ---
 
@@ -16,6 +16,26 @@ Each thesis includes:
 - A rule-based opportunity score (0–5), confidence level, and Pursue / Investigate / Skip recommendation
 - The source articles used to reach the conclusion
 - An optional refinement loop - if the output isn't right, pick from a fixed set of feedback reasons and a LangGraph agent rewrites the thesis via tool calls
+
+## What's in a thesis?
+
+Every output you see maps to a specific path. The tag on each says *how* it is computed: **[LLM]** a model call, **[Agent]** the LangGraph refinement agent, **[Python]** deterministic code with no model involved.
+
+Almost everything starts from the same step: a query runs **[Python]** MMR retrieval over the Silver pgvector embeddings → **retrieved chunks** (each carrying its Silver tags + article metadata), which feed the outputs below. `create_thesis` in [`api/routes.py`](api/routes.py) → [`core/services/retrieval_service.py`](core/services/retrieval_service.py).
+
+If the retrieved chunks don't carry Silver tags in **all three** dimensions (themes, risks, signals), the request is refused with a `422` (`insufficient_evidence`) *before* the model call. The missing dimensions are logged.
+
+- **Summary** — retrieved chunks → **[LLM]** `llm.summarize` → narrative prose. The *only* model call in generation: Gemini normally, falling back to a local extractive summarizer if Gemini is unavailable. A **summary_source** badge in the UI shows which one produced the text. [`thesis_generator_service.py`](core/services/thesis_generator_service.py)
+- **Themes / Risks / Signals** — chunks' Silver-tag metadata → **[Python]** frequency-rank (`Counter.most_common`) → top 3 per dimension at generation (refinement can nudge this cap to 4; see below). Tags are assigned at Silver ingest, not invented by the model. `_ranked_tags_from_documents`
+- **Score** (0–5) — total Silver signal/theme/risk tag counts → **[Python]** self-normalizing formula (signals + ½·themes lift, risks pull down) → clamp to 0–5. `_compute_score` in [`opportunity_scoring_service.py`](finthesis_internal/opportunity_scoring_service.py)
+- **Confidence** (0–1) — chunks' tag categories → matched against **Gold** weekly trend metrics → **[Python]** `covered_weeks / window_weeks`. Grounded in corpus trend coverage, not the model. `_gold_confidence_inputs` → `_compute_confidence`
+- **Recommendation** — score → **[Python]** fixed thresholds (≥3.75 Pursue, ≥2.5 Investigate, else Skip). `_get_recommendation`
+- **Sources** — chunks → **[Python]** `doc.metadata["url"]` passthrough, deduped, in relevance order. `_sources_from_docs` in [`api/routes.py`](api/routes.py)
+- **Related past theses** — this run's query embedding → **[Python]** pgvector `match_jobs` RPC (cosine ≥ 0.86) → past jobs ranked by *semantic similarity*. Shown inside the thesis card. `_related_for` in [`api/routes.py`](api/routes.py)
+- **Past theses** — **[Python]** `GET /api/theses` → `list_jobs` ordered by `created_at DESC` (pure recency, no similarity) → the browsable library on the main page. `list_jobs` in [`api/supabase_job_manager.py`](api/supabase_job_manager.py)
+- **Execution trace** (refinement only) — **[Agent]** planner LLM picks a tool → ToolNode executes → `assemble_node` diffs the old vs new thesis and logs each event → `execution_log`. [`refinement_graph.py`](core/agents/refinement_graph.py)
+
+On **refinement**, the numbers are recomputed the same deterministic way; only the narrative is re-written by **[LLM]** `llm.refine`, and the planner LLM merely nudges *how many* tags surface (±1 per dimension, clamped). `refine_thesis` → `_apply_cap_deltas`.
 
 ## How it works
 
@@ -69,4 +89,12 @@ Deliberate scope boundaries of the current platform:
 
 - **Single news source.** Articles come only from TechCrunch's RSS feeds. Multi-source ingestion, and detecting or adapting to a source changing its feed format, are out of scope - the pipeline assumes the current feed structure.
 - **Point-in-time history, not restated.** Raw articles are retained indefinitely and each article's fintech classification is recorded once and frozen. Changing the classifier model applies to new articles only - past records are not retroactively re-classified, so historical trends reflect what was judged at the time.
+
+## Deployment
+
+Frontend and backend are decoupled and deployed as separate Render services, across two environments (development and production).
+
+**Branch flow.** `feature → develop → master`. `develop` drives the development environment ([finthesis.onrender.com](https://finthesis.onrender.com)); `master` drives production ([finthesis-0f2c.onrender.com](https://finthesis-0f2c.onrender.com)).
+
+**CI/CD (GitHub Actions).** On every push, a read-only job runs the tests and builds the vanilla-TS frontend bundle with that environment's API base URL compiled in. A separate job (with write access) then publishes just the built static assets to a per-environment deploy branch (`deploy-dev` / `deploy-prod`) that the corresponding Render Static Site serves. The FastAPI backend deploys per source branch. A failing test skips the deploy entirely.
 

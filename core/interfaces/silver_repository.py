@@ -27,16 +27,6 @@ class ISilverRepository(ABC):
         pass
 
     @abstractmethod
-    def fintech_themes(self) -> Dict[str, List[str]]:
-        """Return {url: themes} for the accepted (fintech-relevant) articles.
-
-        Themes were assigned from the full scraped text when Silver ran. The
-        Gold layer reads this mapping directly to count trends. An accepted
-        article that matched no theme maps to an empty list.
-        """
-        pass
-
-    @abstractmethod
     def fintech_tags(self) -> Dict[str, Dict[str, List[str]]]:
         """Return {url: {"themes": [...], "risks": [...], "signals": [...]}}
         for the accepted (fintech-relevant) articles.

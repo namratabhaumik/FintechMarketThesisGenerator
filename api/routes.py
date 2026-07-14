@@ -16,12 +16,12 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
-from api.deps import get_container, get_job_manager
+from api.auth import get_user_job_manager
+from api.deps import get_container
 from api.security import (
     GENERATE_LIMIT,
     REFINE_LIMIT,
     limiter,
-    require_api_key,
 )
 from api.schemas import (
     JobResponse,
@@ -37,6 +37,7 @@ from api.schemas import (
 from config.settings import FEEDBACK_OPTIONS
 from core.agents.hallucination_detector import HallucinationDetector
 from core.interfaces.job_manager import IJobManager
+from core.services.thesis_generator_service import _tag_strengths_from_documents
 from dependency_injection.container import ServiceContainer
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ def _thesis_to_response(thesis) -> ThesisResponse:
         confidence_as_of=as_of.isoformat() if as_of else None,
         recommendation=thesis.recommendation,
         key_risk_factors=thesis.key_risk_factors,
+        summary_source=thesis.summary_source,
     )
 
 
@@ -152,7 +154,6 @@ async def _get_job_or_404(jm: IJobManager, job_id: str):
     "/theses",
     status_code=201,
     response_model=JobResponse,
-    dependencies=[Depends(require_api_key)],
     tags=["theses"],
 )
 @limiter.limit(GENERATE_LIMIT)
@@ -161,7 +162,7 @@ async def create_thesis(
     payload: ThesisRequest,
     response: Response,
     container: ServiceContainer = Depends(get_container),
-    jm: IJobManager = Depends(get_job_manager),
+    jm: IJobManager = Depends(get_user_job_manager),
 ):
     """Generate a thesis synchronously and persist the completed job.
 
@@ -200,6 +201,39 @@ async def create_thesis(
             "No relevant documents found in the corpus for this query",
         )
 
+    # A thesis is only meaningful if the retrieved evidence grounds all three
+    # Silver dimensions. If any of themes/risks/signals has no tag across the
+    # retrieved chunks, the score would fall back to a hardcoded neutral and the
+    # empty dimension would render blank. Refuse before the LLM call & log which 
+    # dimensions were missing. Uses generation's own tag-strength computation, 
+    # so passing this guard means generate_thesis will produce a non-empty tag 
+    # list for every dimension.
+    signal_strength, theme_strength, risk_strength = _tag_strengths_from_documents(docs)
+    missing = [
+        dim
+        for dim, strength in (
+            ("themes", theme_strength),
+            ("risks", risk_strength),
+            ("signals", signal_strength),
+        )
+        if strength == 0
+    ]
+    if missing:
+        logger.warning(
+            "Taxonomy gap: query %r retrieved evidence with no %s tags; refusing "
+            "to build a partial thesis. Sources: %s",
+            query,
+            "/".join(missing),
+            [d.metadata.get("url") for d in docs if getattr(d, "metadata", None)],
+        )
+        raise _error(
+            422,
+            "insufficient_evidence",
+            "The retrieved sources don't cover themes, risks, and investment "
+            "signals for this query, so a complete thesis can't be built. Try a "
+            "broader or more established fintech topic.",
+        )
+
     try:
         thesis = await container.get_thesis_service().generate_thesis(query, docs)
     except Exception:
@@ -207,9 +241,11 @@ async def create_thesis(
         raise _error(502, "generation_failed", "The language model failed to generate a thesis")
 
     try:
-        job = await jm.create_job(query)
-        await jm.update_job(
-            job.id,
+        # One atomic insert with the full completed state: a failure (or crash)
+        # here creates NO row, so a half-written pending job can never appear
+        # in the library.
+        job = await jm.create_job(
+            query,
             status=JobStatus.COMPLETED,
             thesis=thesis,
             retrieved_docs=docs,
@@ -237,7 +273,7 @@ async def list_theses(
     status: Optional[RefinementStatus] = Query(
         None, description="Filter by refinement_status (e.g. 'refining' for the resume picker)"
     ),
-    jm: IJobManager = Depends(get_job_manager),
+    jm: IJobManager = Depends(get_user_job_manager),
 ):
     """List thesis jobs, most recent first (slim representations).
 
@@ -262,7 +298,7 @@ async def list_theses(
 
 
 @router.get("/theses/{job_id}", response_model=JobResponse, tags=["theses"])
-async def get_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
+async def get_thesis(job_id: str, jm: IJobManager = Depends(get_user_job_manager)):
     """Full state of one thesis job (rehydrates everything the UI shows)."""
     job = await _get_job_or_404(jm, job_id)
     return await _job_to_response(job, jm)
@@ -271,7 +307,6 @@ async def get_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
 @router.post(
     "/theses/{job_id}/refinements",
     response_model=JobResponse,
-    dependencies=[Depends(require_api_key)],
     tags=["theses"],
 )
 @limiter.limit(REFINE_LIMIT)
@@ -280,7 +315,7 @@ async def create_refinement(
     job_id: str,
     payload: RefinementRequest,
     container: ServiceContainer = Depends(get_container),
-    jm: IJobManager = Depends(get_job_manager),
+    jm: IJobManager = Depends(get_user_job_manager),
 ):
     """Run one refinement round and return the updated thesis state.
 
@@ -299,10 +334,6 @@ async def create_refinement(
         graph, langfuse_handler = await asyncio.to_thread(container.get_refinement_graph)
     except NotImplementedError as e:
         raise _error(501, "refinement_not_supported", str(e))
-
-    # Snapshot the current thesis into history before refining, so the
-    # Previous Versions panel keeps every round (mirrors the Streamlit flow).
-    thesis_history = list(job.thesis_history) + [job.thesis]
 
     langgraph_state = {
         "topic": job.query,
@@ -327,20 +358,42 @@ async def create_refinement(
     detector = HallucinationDetector()
     hallucination = detector.analyze(result_state.get("messages", []))
 
+    # Snapshot the pre-refinement thesis into history (the Previous Versions
+    # panel) only when this round actually changed it. Escalate and skip
+    # rounds leave the thesis as-is; snapshotting those would persist a
+    # duplicate "version" identical to the current thesis.
+    new_thesis = result_state["current_thesis"]
+    if new_thesis != job.thesis:
+        thesis_history = list(job.thesis_history) + [job.thesis]
+    else:
+        thesis_history = job.thesis_history
+
     try:
-        await jm.update_job(
+        # Guarded persist (optimistic concurrency): only write if no other
+        # request touched the job while the agent ran - an approval landing
+        # mid-refinement (Approve stays clickable in the UI) or a second tab
+        # refining the same job. A lost race returns False; DB errors raise.
+        persisted = await jm.update_job_guarded(
             job_id,
-            thesis=result_state["current_thesis"],
+            {"refinement_count": job.refinement_count, "approved_at": None},
+            thesis=new_thesis,
             thesis_history=thesis_history,
             refinement_count=result_state["refinement_count"],
             refinement_status=result_state["status"],
             feedback_history=result_state["feedback_history"],
             execution_log=result_state.get("execution_log", []),
         )
-        updated = await jm.get_job(job_id)
+        updated = await jm.get_job(job_id) if persisted else None
     except Exception:
         logger.exception("Failed to persist refinement")
         raise _error(500, "persistence_failed", "Refinement ran but could not be saved")
+    if not persisted:
+        raise _error(
+            409,
+            "conflict",
+            "This thesis was approved or refined elsewhere while the refinement "
+            "ran; the round was discarded. Reload to see the latest state.",
+        )
 
     return await _job_to_response(updated, jm, hallucination=hallucination)
 
@@ -348,24 +401,23 @@ async def create_refinement(
 @router.put(
     "/theses/{job_id}/approval",
     response_model=JobResponse,
-    dependencies=[Depends(require_api_key)],
     tags=["theses"],
 )
-async def approve_thesis(job_id: str, jm: IJobManager = Depends(get_job_manager)):
+async def approve_thesis(job_id: str, jm: IJobManager = Depends(get_user_job_manager)):
     """Approve a thesis (idempotent: re-approving returns the existing state).
 
-    Approval is terminal: the approval time is stamped and the run is marked
-    "refined" so it no longer appears as resumable.
+    Approval stamps approved_at and is terminal & refinement_status tracks refinement alone.
     """
     job = await _get_job_or_404(jm, job_id)
     if not job.thesis:
         raise _error(409, "thesis_not_generated", "Thesis not yet generated")
     if not job.approved_at:
         ts = datetime.now(timezone.utc).isoformat()
+        updates = {"approved_at": ts}
+        if job.refinement_status == RefinementStatus.REFINING:
+            updates["refinement_status"] = RefinementStatus.REFINED
         try:
-            await jm.update_job(
-                job_id, approved_at=ts, refinement_status=RefinementStatus.REFINED
-            )
+            await jm.update_job(job_id, **updates)
             job = await jm.get_job(job_id)
         except Exception:
             logger.exception("Failed to record approval")

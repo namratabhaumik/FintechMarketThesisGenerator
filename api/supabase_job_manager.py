@@ -10,11 +10,11 @@ import logging
 import uuid
 from typing import Any, Dict, Optional
 
+from postgrest.types import CountMethod
 from supabase import AsyncClient
 
 from api.schemas import JobStatus
 from api.serializers import (
-    rehydrate_articles,
     rehydrate_docs,
     rehydrate_query_embedding,
     rehydrate_thesis,
@@ -38,8 +38,14 @@ class SupabaseJobManager(IJobManager):
         self._client = client
         logger.info("SupabaseJobManager connected")
 
-    async def create_job(self, query: str):
-        """Create a new job row and return it."""
+    async def create_job(self, query: str, **fields):
+        """Create a new job row and return it.
+
+        Extra fields (thesis, retrieved_docs, status, ...) are serialised and
+        merged over the defaults (a caller holding a finished result persists 
+        the whole job in ONE atomic insert); a crash never strand a half-written 
+        (pending, thesis-less) row.
+        """
         job_id = uuid.uuid4().hex[:12]
         row: Dict[str, Any] = {
             "id": job_id,
@@ -47,7 +53,6 @@ class SupabaseJobManager(IJobManager):
             "status": JobStatus.PENDING.value,
             "progress": None,
             "thesis": None,
-            "articles": [],
             "error": None,
             "refinement_count": 0,
             "refinement_status": "N/A",  # becomes "refining" only once the user refines
@@ -55,6 +60,7 @@ class SupabaseJobManager(IJobManager):
             "execution_log": [],
             "retrieved_docs": [],
         }
+        row.update(serialise_job_fields(**fields))
         await self._client.table(TABLE).insert(row).execute()
         logger.info(f"Job created in Supabase: {job_id} for query: {query!r}")
         return _RowProxy(row)
@@ -86,6 +92,41 @@ class SupabaseJobManager(IJobManager):
         payload = serialise_job_fields(**fields)
         if payload:
             await self._client.table(TABLE).update(payload).eq("id", job_id).execute()
+
+    async def update_job_guarded(
+        self, job_id: str, guards: Dict[str, Any], **fields
+    ) -> bool:
+        """Persist field updates only if the row still matches `guards`.
+
+        Optimistic concurrency for racing writers (approve during an in-flight
+        refinement, or two tabs refining the same job): each guard column must
+        still hold its expected value (None means IS NULL), checked atomically
+        in the UPDATE's WHERE clause. Returns False when another writer got
+        there first - the caller decides how to surface the conflict.
+
+        DB errors intentionally propagate: the caller must tell a failed persist 
+        (exception -> 500) apart from a lost race (False -> 409); swallowing 
+        errors into False would report an outage as a user conflict.
+        """
+        payload = serialise_job_fields(**fields)
+        if not payload:
+            return True
+        query = self._client.table(TABLE).update(
+            payload, count=CountMethod.exact
+        ).eq("id", job_id)
+        for column, expected in guards.items():
+            if expected is None:
+                query = query.is_(column, "null")
+            else:
+                query = query.eq(column, expected)
+        resp = await query.execute()
+        # count is authoritative when present; representation rows otherwise.
+        updated = bool(getattr(resp, "count", None) or getattr(resp, "data", None))
+        if not updated:
+            logger.warning(
+                f"Guarded update lost the race for job {job_id} (guards={guards})"
+            )
+        return updated
 
     async def list_jobs(
         self,
@@ -140,7 +181,6 @@ class _RowProxy:
     """
 
     def __init__(self, data: dict):
-        self._data = data
         self.id: str = data["id"]
         self.query: str = data["query"]
         self.status: JobStatus = JobStatus(data["status"])
@@ -160,5 +200,4 @@ class _RowProxy:
             t for t in (rehydrate_thesis(x) for x in data.get("thesis_history") or [])
             if t is not None
         ]
-        self.articles = rehydrate_articles(data.get("articles", []))
         self.retrieved_docs = rehydrate_docs(data.get("retrieved_docs", []))

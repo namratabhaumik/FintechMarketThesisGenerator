@@ -6,10 +6,15 @@ from typing import List, Dict
 
 from langchain_core.documents import Document
 
-from core.interfaces.llm import ILanguageModel
+from core.interfaces.llm import (
+    SOURCE_LLM,
+    SOURCE_LOCAL,
+    ILanguageModel,
+    summary_source_var,
+)
 from core.implementations.llm.cache_manager import CacheManager
 from core.implementations.llm.cost_tracker import CostTracker
-from core.implementations.llm.routing_strategy import get_strategy
+from core.implementations.llm.routing_strategy import ROUTE_PRIMARY, get_strategy
 from config.settings import AIGatewayConfig
 
 logger = logging.getLogger(__name__)
@@ -67,29 +72,32 @@ class AIGateway(ILanguageModel):
         return "".join(doc.page_content for doc in documents)
 
     def _select_provider(self, documents: List[Document], topic: str) -> tuple[str, ILanguageModel]:
-        """Use routing strategy to select provider and get LLM instance.
+        """Use the routing strategy to pick a route and resolve the LLM.
+
+        The strategy decides a role (primary vs fallback), not a vendor; the
+        label returned here is that role ("primary" / "local"), and callers
+        log the resolved llm's own model name - so logs and cost records stay
+        truthful whichever provider LLM_PROVIDER wires in as primary.
 
         Args:
             documents: List of documents.
             topic: Query topic.
 
         Returns:
-            Tuple of (provider_name, llm_instance).
+            Tuple of (provider_label, llm_instance).
         """
         daily_spend = self._cost_tracker.get_daily_spend()
 
-        provider, model = self._routing_strategy.select_provider(
+        route = self._routing_strategy.select_route(
             documents=documents,
             topic=topic,
             daily_spend=daily_spend,
             daily_limit=self._config.cost_limit_daily,
         )
 
-        # Map provider to LLM instance
-        if provider == "gemini":
-            return provider, self._primary_llm
-        else:
-            return provider, self._fallback_llm
+        if route == ROUTE_PRIMARY:
+            return "primary", self._primary_llm
+        return "local", self._fallback_llm
 
     async def summarize(self, documents: List[Document]) -> str:
         """Summarize documents with caching, cost optimization, and routing.
@@ -124,6 +132,12 @@ class AIGateway(ILanguageModel):
 
             if cached_entry is not None:
                 logger.info(f"Cache hit for documents: {cache_key}")
+                # Restore provenance from the entry: a cached local-extractive
+                # summary must stay marked as such on later hits (no model runs
+                # on this path, so nothing else would set it).
+                summary_source_var.set(
+                    SOURCE_LOCAL if "local" in cached_entry.model else SOURCE_LLM
+                )
                 # Record cache hit
                 if self._config.track_metrics:
                     latency_ms = (time.time() - start_time) * 1000
@@ -164,7 +178,7 @@ class AIGateway(ILanguageModel):
 
         # Step 4: Call selected provider
         try:
-            logger.info(f"Calling {provider} LLM for summarization")
+            logger.info(f"Calling {llm.get_model_name()} for summarization ({provider} route)")
             result = await llm.summarize(documents)
 
             # Step 5: Cache result
@@ -193,12 +207,12 @@ class AIGateway(ILanguageModel):
                     output_tokens=int(output_tokens),
                     latency_ms=latency_ms,
                 )
-                logger.info(f"{provider} summarization succeeded - cost: ${cost:.6f}")
+                logger.info(f"{llm.get_model_name()} summarization succeeded - cost: ${cost:.6f}")
 
             return result
 
         except Exception as e:
-            logger.error(f"{provider} LLM failed: {e}")
+            logger.error(f"{llm.get_model_name()} failed: {e}")
             # Try fallback
             try:
                 logger.info("Attempting fallback LLM after primary failure")
@@ -294,7 +308,7 @@ class AIGateway(ILanguageModel):
 
         # Step 4: Call selected provider
         try:
-            logger.info(f"Calling {provider} LLM for refinement")
+            logger.info(f"Calling {llm.get_model_name()} for refinement ({provider} route)")
             result = await llm.refine(documents, current_thesis_text, feedback_items)
 
             # Step 5: Cache result
@@ -322,12 +336,12 @@ class AIGateway(ILanguageModel):
                     output_tokens=int(output_tokens),
                     latency_ms=latency_ms,
                 )
-                logger.info(f"{provider} refinement succeeded - cost: ${cost:.6f}")
+                logger.info(f"{llm.get_model_name()} refinement succeeded - cost: ${cost:.6f}")
 
             return result
 
         except Exception as e:
-            logger.error(f"{provider} LLM failed during refinement: {e}")
+            logger.error(f"{llm.get_model_name()} failed during refinement: {e}")
             # Try fallback
             try:
                 logger.info("Attempting fallback LLM after primary failure")

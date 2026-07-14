@@ -15,8 +15,12 @@ class IJobManager(ABC):
     """
 
     @abstractmethod
-    async def create_job(self, query: str) -> Any:
-        """Create a new job and return a job-like object."""
+    async def create_job(self, query: str, **fields) -> Any:
+        """Create a new job and return a job-like object.
+
+        Extra fields are persisted in the same (atomic) write, so a caller
+        with a finished result never leaves a half-written row behind.
+        """
         pass
 
     @abstractmethod
@@ -34,6 +38,19 @@ class IJobManager(ABC):
     @abstractmethod
     async def update_job(self, job_id: str, **fields) -> None:
         """Persist arbitrary field updates on the job."""
+        pass
+
+    @abstractmethod
+    async def update_job_guarded(
+        self, job_id: str, guards: dict, **fields
+    ) -> bool:
+        """Persist field updates only if the job still matches `guards`
+        (column -> expected value, None = IS NULL), atomically.
+
+        Returns False when a concurrent writer invalidated a guard; raises on
+        storage errors (a lost race and a failed persist are different
+        outcomes for callers).
+        """
         pass
 
     @abstractmethod

@@ -2,6 +2,7 @@
 
 import json
 import logging
+from datetime import datetime
 from typing import List, Optional, Set
 
 import numpy as np
@@ -88,10 +89,10 @@ class SupabaseVectorStoreImpl(IVectorStore):
         return self.open()
 
     def open(self) -> VectorStore:
-        """Open the existing persistent store for reading.
+        """Retriever-ready LangChain handle over the persisted store.
 
-        This is the read path a thesis request takes: it only retrieves from
-        what is already persisted, so build() reuses this for its final handle.
+        Only build() needs this (its return value); the API read path queries
+        the match_documents RPC directly via retrieve() below.
         """
         return SupabaseVectorStore(
             client=self._client,
@@ -102,7 +103,6 @@ class SupabaseVectorStoreImpl(IVectorStore):
 
     def retrieve(
         self,
-        vectorstore: VectorStore,
         query: str,
         k: int,
         fetch_k: int,
@@ -110,11 +110,14 @@ class SupabaseVectorStoreImpl(IVectorStore):
         window_days: Optional[int] = None,
         query_embedding: Optional[List[float]] = None,
         min_similarity: float = 0.0,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
     ) -> List[Document]:
         """Date-windowed MMR retrieval.
 
-        Pull `fetch_k` candidates from pgvector (within the last `window_days`
-        when set), drop any below `min_similarity`, then MMR-select `k`.
+        Pull `fetch_k` candidates from pgvector (within the last `window_days`,
+        or between `date_from`/`date_to` when those are set), drop any below
+        `min_similarity`, then MMR-select `k`.
 
         Reuse `query_embedding` when the caller already computed it (so the
         query is embedded once per run); otherwise embed `query` here.
@@ -127,6 +130,10 @@ class SupabaseVectorStoreImpl(IVectorStore):
         # here so match_documents falls back to NULL = whole corpus.
         if window_days and window_days > 0:
             params["window_days"] = window_days
+        if date_from is not None:
+            params["date_from"] = date_from.isoformat()
+        if date_to is not None:
+            params["date_to"] = date_to.isoformat()
         rows = self._client.rpc(QUERY_NAME, params).execute().data or []
 
         # Relevance floor: an off-topic query returns fewer/zero docs

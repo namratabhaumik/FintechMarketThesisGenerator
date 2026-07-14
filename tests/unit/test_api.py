@@ -40,11 +40,26 @@ class TestSupabaseJobManager:
         assert job.status == JobStatus.PENDING
         mock_client.table.return_value.insert.assert_called_once()
 
+    def test_create_job_with_fields_is_single_insert(self, jm, mock_client):
+        """Extra fields are serialised into the SAME insert (atomic write) -
+        no follow-up update that could strand a pending row."""
+        from core.models.thesis import StructuredThesis
+
+        thesis = StructuredThesis(key_themes=["Fintech"], opportunity_score=3.5)
+        job = asyncio.run(jm.create_job(
+            "digital lending", status=JobStatus.COMPLETED, thesis=thesis))
+
+        row = mock_client.table.return_value.insert.call_args.args[0]
+        assert row["status"] == "completed"
+        assert row["thesis"]["key_themes"] == ["Fintech"]  # serialised, not dataclass
+        mock_client.table.return_value.update.assert_not_called()
+        assert job.status == JobStatus.COMPLETED
+
     def test_get_job_found(self, jm, mock_client):
         """Test retrieving an existing job."""
         mock_client.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute = AsyncMock(
             return_value=Mock(
-                data={"id": "abc123", "query": "neobanking", "status": "completed", "progress": "Done", "thesis": None, "articles": [], "error": None}
+                data={"id": "abc123", "query": "neobanking", "status": "completed", "progress": "Done", "thesis": None, "error": None}
             )
         )
         job = asyncio.run(jm.get_job("abc123"))
@@ -81,13 +96,41 @@ class TestSupabaseJobManager:
         assert call_args["thesis"]["key_themes"] == ["AI"]
         assert call_args["thesis"]["risks"] == ["Regulatory"]
 
+    def test_update_job_guarded_true_when_row_matched(self, jm, mock_client):
+        """Guards become WHERE filters (eq for values, is null for None) and a
+        matched row returns True."""
+        chain = mock_client.table.return_value.update.return_value
+        chain.eq.return_value.eq.return_value.is_.return_value.execute = AsyncMock(
+            return_value=Mock(data=[{"id": "abc123"}], count=1)
+        )
+        ok = asyncio.run(jm.update_job_guarded(
+            "abc123", {"refinement_count": 2, "approved_at": None},
+            refinement_count=3))
+        assert ok is True
+        # id filter first, then the value guard, then the IS NULL guard.
+        chain.eq.assert_called_once_with("id", "abc123")
+        chain.eq.return_value.eq.assert_called_once_with("refinement_count", 2)
+        chain.eq.return_value.eq.return_value.is_.assert_called_once_with(
+            "approved_at", "null")
+
+    def test_update_job_guarded_false_when_race_lost(self, jm, mock_client):
+        """Zero matched rows (another writer invalidated a guard) returns False."""
+        chain = mock_client.table.return_value.update.return_value
+        chain.eq.return_value.eq.return_value.is_.return_value.execute = AsyncMock(
+            return_value=Mock(data=[], count=0)
+        )
+        ok = asyncio.run(jm.update_job_guarded(
+            "abc123", {"refinement_count": 2, "approved_at": None},
+            refinement_count=3))
+        assert ok is False
+
     def test_list_jobs(self, jm, mock_client):
         """Test listing jobs returns proxies ordered by created_at desc."""
         mock_client.table.return_value.select.return_value.order.return_value.execute = AsyncMock(
             return_value=Mock(
                 data=[
-                    {"id": "job2", "query": "second", "status": "pending", "articles": []},
-                    {"id": "job1", "query": "first", "status": "completed", "articles": []},
+                    {"id": "job2", "query": "second", "status": "pending"},
+                    {"id": "job1", "query": "first", "status": "completed"},
                 ]
             )
         )
@@ -108,34 +151,32 @@ class TestRowProxy:
             "thesis": {"key_themes": ["Fintech"], "risks": [], "investment_signals": [],
                        "sources": [], "raw_output": "text", "opportunity_score": 3.5,
                        "confidence_level": 0.8, "recommendation": "Pursue", "key_risk_factors": []},
-            "articles": [],
         }
         proxy = _RowProxy(row)
         assert proxy.thesis is not None
         assert proxy.thesis.key_themes == ["Fintech"]
         assert proxy.thesis.opportunity_score == 3.5
 
-    def test_rehydrates_articles(self):
-        """Test that stored article dicts become Article objects."""
-        from api.supabase_job_manager import _RowProxy
-        row = {
-            "id": "test2", "query": "q", "status": "pending",
-            "thesis": None,
-            "articles": [
-                {"title": "Test Article", "text": "Content here", "source": "techcrunch.com", "url": "https://example.com", "published_at": "2026-01-01T00:00:00+00:00"},
-            ],
-        }
-        proxy = _RowProxy(row)
-        assert len(proxy.articles) == 1
-        assert proxy.articles[0].title == "Test Article"
-        assert proxy.articles[0].published_at.year == 2026
-
     def test_null_thesis_stays_none(self):
         """Test that null thesis in DB stays None."""
         from api.supabase_job_manager import _RowProxy
-        row = {"id": "test3", "query": "q", "status": "pending", "thesis": None, "articles": []}
+        row = {"id": "test3", "query": "q", "status": "pending", "thesis": None}
         proxy = _RowProxy(row)
         assert proxy.thesis is None
+
+    def test_thesis_with_unknown_stored_key_still_rehydrates(self):
+        """A stored thesis carrying a key the dataclass no longer has (field
+        renamed/removed in a later schema) degrades gracefully instead of
+        raising TypeError on every read of the old row."""
+        from api.supabase_job_manager import _RowProxy
+        row = {
+            "id": "test4", "query": "q", "status": "completed",
+            "thesis": {"key_themes": ["Fintech"], "some_renamed_field": "old value"},
+        }
+        proxy = _RowProxy(row)
+        assert proxy.thesis is not None
+        assert proxy.thesis.key_themes == ["Fintech"]
+        assert not hasattr(proxy.thesis, "some_renamed_field")
 
 
 class TestSchemas:
@@ -197,7 +238,7 @@ def _row(job_id="test123", query="digital lending", **overrides):
                    "investment_signals": [], "sources": [], "raw_output": "text",
                    "opportunity_score": 3.5, "confidence_level": 0.8,
                    "recommendation": "Pursue", "key_risk_factors": []},
-        "articles": [], "error": None, "refinement_count": 0,
+        "error": None, "refinement_count": 0,
         "refinement_status": "N/A", "feedback_history": [], "execution_log": [],
         "retrieved_docs": [
             {"page_content": "chunk", "metadata": {
@@ -219,7 +260,8 @@ class TestAPIEndpoints:
         """Create a test client by overriding FastAPI dependencies."""
         from fastapi.testclient import TestClient
         from api.routes import router
-        from api.deps import get_container, get_job_manager
+        from api.auth import get_user_job_manager
+        from api.deps import get_container
         from fastapi import FastAPI
 
         # Job manager methods are async now -> AsyncMock so `await jm.x()` works.
@@ -228,13 +270,15 @@ class TestAPIEndpoints:
         mock_jm.list_jobs = AsyncMock(return_value=[])
         mock_jm.create_job = AsyncMock()
         mock_jm.update_job = AsyncMock()
+        mock_jm.update_job_guarded = AsyncMock(return_value=True)
         mock_jm.match_jobs = AsyncMock(return_value=[])
 
         mock_container = MagicMock()
 
         test_app = FastAPI()
         test_app.include_router(router)
-        test_app.dependency_overrides[get_job_manager] = lambda: mock_jm
+        # Override the per-request user-scoped manager (bypasses JWT auth in tests).
+        test_app.dependency_overrides[get_user_job_manager] = lambda: mock_jm
         test_app.dependency_overrides[get_container] = lambda: mock_container
 
         self._mock_jm = mock_jm
@@ -261,14 +305,16 @@ class TestAPIEndpoints:
 
         self._mock_container.get_embedding_model.return_value \
             .get_embeddings.return_value.embed_query.return_value = [0.1, 0.2]
+        # All three Silver tag dimensions present, so the taxonomy-gap guard
+        # lets the request through to generation.
         self._mock_container.get_retrieval_service.return_value \
-            .retrieve.return_value = [Document(page_content="chunk", metadata={})]
+            .retrieve.return_value = [Document(page_content="chunk", metadata={
+                "themes": ["Payments"], "risks": ["Regulatory"], "signals": ["Growth"]})]
         self._mock_container.get_thesis_service.return_value \
             .generate_thesis = AsyncMock(return_value=StructuredThesis(
                 key_themes=["Fintech"], recommendation="Pursue"))
 
-        self._mock_jm.create_job.return_value = _RowProxy(
-            _row(thesis=None, retrieved_docs=[], status="pending"))
+        self._mock_jm.create_job.return_value = _RowProxy(_row())
         self._mock_jm.get_job.return_value = _RowProxy(_row())
 
         response = client.post("/api/theses", json={"query": "digital lending"})
@@ -278,10 +324,12 @@ class TestAPIEndpoints:
         assert data["job_id"] == "test123"
         assert data["status"] == "completed"
         assert data["thesis"]["key_themes"] == ["Fintech"]
-        # The persisted write carries the completed state and the embedding.
-        update_kwargs = self._mock_jm.update_job.call_args.kwargs
-        assert update_kwargs["status"] == JobStatus.COMPLETED
-        assert update_kwargs["query_embedding"] == [0.1, 0.2]
+        # ONE atomic write carries the full completed state and the embedding;
+        # there is no separate update that could strand a pending row.
+        create_kwargs = self._mock_jm.create_job.call_args.kwargs
+        assert create_kwargs["status"] == JobStatus.COMPLETED
+        assert create_kwargs["query_embedding"] == [0.1, 0.2]
+        self._mock_jm.update_job.assert_not_called()
 
     def test_create_thesis_no_docs_returns_422(self, client):
         """Test that an empty retrieval creates no job and returns 422."""
@@ -337,14 +385,79 @@ class TestAPIEndpoints:
         assert response.status_code == 409
         assert response.json()["detail"]["code"] == "already_approved"
 
+    def _refine_with_graph(self, client, result_status="refining", change_thesis=True):
+        """POST a refinement with the graph mocked to one round.
+
+        change_thesis=False models an escalate/skip round: the graph returns
+        with the thesis untouched."""
+        from dataclasses import replace
+
+        from api.supabase_job_manager import _RowProxy
+
+        self._mock_jm.get_job.return_value = _RowProxy(_row())
+
+        async def fake_ainvoke(state, config=None):
+            thesis = state["current_thesis"]
+            if change_thesis:
+                thesis = replace(thesis, raw_output="rewritten narrative")
+            return {
+                "current_thesis": thesis,
+                "refinement_count": state["refinement_count"] + 1,
+                "status": result_status,
+                "feedback_history": state["feedback_history"],
+                "execution_log": [],
+                "messages": [],
+            }
+
+        graph = MagicMock()
+        graph.ainvoke = AsyncMock(side_effect=fake_ainvoke)
+        self._mock_container.get_refinement_graph.return_value = (graph, None)
+        return client.post(
+            "/api/theses/test123/refinements", json={"feedback": ["Too broad"]})
+
+    def test_refine_persists_guarded(self, client):
+        """A refinement persists via the guarded update, keyed on the count it
+        read and on the job being unapproved; the changed round snapshots the
+        prior thesis into history."""
+        response = self._refine_with_graph(client)
+        assert response.status_code == 200
+        args, kwargs = self._mock_jm.update_job_guarded.call_args
+        assert args[0] == "test123"
+        assert args[1] == {"refinement_count": 0, "approved_at": None}
+        assert kwargs["refinement_count"] == 1
+        assert kwargs["thesis"].raw_output == "rewritten narrative"
+        # Previous Versions gains exactly the pre-refinement thesis.
+        assert [t.raw_output for t in kwargs["thesis_history"]] == ["text"]
+        self._mock_jm.update_job.assert_not_called()
+
+    def test_refine_unchanged_round_adds_no_history_entry(self, client):
+        """A round that leaves the thesis untouched (escalate, or a planner
+        skip) must NOT snapshot a duplicate 'previous version'."""
+        response = self._refine_with_graph(client, change_thesis=False)
+        assert response.status_code == 200
+        kwargs = self._mock_jm.update_job_guarded.call_args.kwargs
+        assert kwargs["thesis_history"] == []
+
+    def test_refine_lost_race_returns_409_conflict(self, client):
+        """If an approval (or a second tab's refinement) lands while the agent
+        runs, the guarded update matches no row and the round is discarded
+        with a 409 instead of silently overwriting the newer state."""
+        self._mock_jm.update_job_guarded = AsyncMock(return_value=False)
+        response = self._refine_with_graph(client)
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "conflict"
+
     def test_approve_stamps_and_is_idempotent(self, client):
-        """Test approval persists a timestamp once and re-approval is a no-op."""
+        """Test approval persists a timestamp once and re-approval is a no-op.
+
+        refinement_status is decoupled from approval: a never-refined job (N/A)
+        keeps its status untouched (only approved_at is written)."""
         from api.supabase_job_manager import _RowProxy
         self._mock_jm.get_job.return_value = _RowProxy(_row())
         response = client.put("/api/theses/test123/approval")
         assert response.status_code == 200
         update_kwargs = self._mock_jm.update_job.call_args.kwargs
-        assert update_kwargs["refinement_status"] == "refined"
+        assert "refinement_status" not in update_kwargs
         assert update_kwargs["approved_at"]
 
         # Already approved: no further write, same state returned.
@@ -355,6 +468,18 @@ class TestAPIEndpoints:
         assert response.status_code == 200
         assert response.json()["approved_at"] == "2026-07-01T12:00:00+00:00"
         self._mock_jm.update_job.assert_not_called()
+
+    def test_approve_mid_refinement_finalizes_status(self, client):
+        """Approving a job that is mid-refinement finalizes refinement_status
+        to "refined" alongside the approval timestamp."""
+        from api.supabase_job_manager import _RowProxy
+        self._mock_jm.get_job.return_value = _RowProxy(
+            _row(refinement_status="refining", refinement_count=1))
+        response = client.put("/api/theses/test123/approval")
+        assert response.status_code == 200
+        update_kwargs = self._mock_jm.update_job.call_args.kwargs
+        assert update_kwargs["refinement_status"] == "refined"
+        assert update_kwargs["approved_at"]
 
     def test_feedback_options(self, client):
         """Test the feedback options endpoint serves the configured list."""

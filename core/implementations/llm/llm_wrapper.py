@@ -9,6 +9,7 @@ from tenacity import (
     before_sleep_log,
     retry_if_not_exception_type,
     stop_after_attempt,
+    stop_after_delay,
     wait_exponential,
 )
 
@@ -20,7 +21,9 @@ logger = logging.getLogger(__name__)
 class LLMWrapper(ILanguageModel):
     """Wraps an LLM with retry logic and automatic fallback.
 
-    Implements pattern: Try primary LLM with retries, then fall back to secondary.
+    Implements pattern: Try primary LLM with retries, then fall back to
+    secondary. Fallback applies to summarize only; refine propagates after
+    retries (see refine's docstring).
     """
 
     def __init__(
@@ -29,6 +32,7 @@ class LLMWrapper(ILanguageModel):
         fallback_llm: ILanguageModel,
         max_retries: int = 2,
         initial_delay_seconds: float = 1.0,
+        retry_budget_seconds: float = 60.0,
     ):
         """Initialize with primary and fallback LLMs.
 
@@ -37,21 +41,32 @@ class LLMWrapper(ILanguageModel):
             fallback_llm: Fallback LLM (e.g., Local). Used if primary exhausts retries.
             max_retries: Number of times to retry primary before fallback.
             initial_delay_seconds: Initial delay between retries (exponential backoff).
+            retry_budget_seconds: Total wall-clock ceiling across ALL attempts of
+                one call. Retrying stops once it is exceeded even if attempts
+                remain, so slow hangs (per-attempt timeouts) cannot stack past a
+                platform gateway timeout: budget + one in-flight attempt is the true worst case.
         """
         self._primary_llm = primary_llm
         self._fallback_llm = fallback_llm
         self._max_retries = max_retries
         self._initial_delay_seconds = initial_delay_seconds
+        self._retry_budget_seconds = retry_budget_seconds
         logger.info(
             f"LLMWrapper initialized: "
             f"primary={primary_llm.get_model_name()}, "
             f"fallback={fallback_llm.get_model_name()}, "
-            f"max_retries={max_retries}"
+            f"max_retries={max_retries}, "
+            f"retry_budget={retry_budget_seconds}s"
         )
 
     def _make_retrying(self, **kwargs) -> AsyncRetrying:
         return AsyncRetrying(
-            stop=stop_after_attempt(self._max_retries + 1),
+            # Whichever binds first: the attempt cap (fast failures) or the
+            # wall-clock budget (slow hangs at the per-attempt timeout).
+            stop=(
+                stop_after_attempt(self._max_retries + 1)
+                | stop_after_delay(self._retry_budget_seconds)
+            ),
             wait=wait_exponential(
                 multiplier=self._initial_delay_seconds,
                 min=self._initial_delay_seconds,
@@ -103,9 +118,14 @@ class LLMWrapper(ILanguageModel):
         current_thesis_text: str,
         feedback_items: List[str],
     ) -> str:
-        """Refine thesis with retry logic and fallback.
+        """Refine thesis with retry logic on the primary LLM only.
 
-        NotImplementedError is re-raised immediately — no retry, no fallback.
+        Unlike summarize, refine has NO fallback: the local summarizer cannot
+        rewrite a thesis (its refine raises NotImplementedError), so once the
+        primary exhausts its retries the error propagates to the caller, which
+        surfaces it and persists nothing.
+
+        NotImplementedError is re-raised immediately — no retry.
 
         Args:
             documents: Source documents for context.
@@ -133,17 +153,9 @@ class LLMWrapper(ILanguageModel):
                 f"{self._primary_llm.get_model_name()} does not support refinement"
             )
             raise
-        except Exception:
-            logger.warning(
-                f"Primary LLM ({self._primary_llm.get_model_name()}) exhausted. "
-                f"Falling back to {self._fallback_llm.get_model_name()}"
+        except Exception as e:
+            logger.error(
+                f"Primary LLM ({self._primary_llm.get_model_name()}) exhausted "
+                f"retries; refinement failed (no fallback): {e}"
             )
-            try:
-                result = await self._fallback_llm.refine(
-                    documents, current_thesis_text, feedback_items
-                )
-                logger.info("Fallback LLM refinement succeeded")
-                return result
-            except Exception as e:
-                logger.error(f"Fallback LLM also failed: {e}")
-                raise
+            raise

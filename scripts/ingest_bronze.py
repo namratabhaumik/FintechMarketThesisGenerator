@@ -33,8 +33,8 @@ def main() -> None:
     config = AppConfig.from_env()
     container = ServiceContainer(config)
 
-    # No classifier / scraper: Bronze lands raw entries only.
-    source = RSSArticleSource(config.rss_feeds, scraper=None, classifier=None)
+    # Bronze lands raw entries only; classify/scrape happen in Silver.
+    source = RSSArticleSource(config.rss_feeds)
     repo = container.get_article_repository()
 
     before = repo.count()

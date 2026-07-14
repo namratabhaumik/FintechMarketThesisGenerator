@@ -35,20 +35,27 @@ create table documents (
 create index on documents using hnsw (embedding vector_cosine_ops);
 
 -- match_documents: nearest chunks by cosine distance, optionally restricted to
--- the last `window_days`. Drop EVERY plausible overload first: Postgres treats
--- a different arg-type order as a separate function, so a single drop can leave
--- a stale overload behind and make PostgREST RPC resolution ambiguous. These
--- cover the canonical order, the (window_days, filter)-swapped order, and the
--- 3-arg legacy form.
+-- the last `window_days` OR an explicit `date_from`/`date_to` range (used
+-- when the query names one, e.g. "since March 2024" - see
+-- core/utils/date_intent.py; the retrieval service sets only one of
+-- window_days or date_from/date_to per call, never both). Drop EVERY
+-- plausible overload first: Postgres treats a different arg-type order as a
+-- separate function, so a single drop can leave a stale overload behind and
+-- make PostgREST RPC resolution ambiguous. These cover the canonical order,
+-- the (window_days, filter)-swapped order, the 3-arg legacy form, and the
+-- prior 4-arg form (before date_from/date_to were added).
 drop function if exists match_documents(vector, int, jsonb, int);
 drop function if exists match_documents(vector, int, int, jsonb);
 drop function if exists match_documents(vector, int, jsonb);
+drop function if exists match_documents(vector, int, jsonb, int, timestamptz, timestamptz);
 
 create function match_documents (
   query_embedding vector(512),
   match_count int default null,
   filter jsonb default '{}',
-  window_days int default null
+  window_days int default null,
+  date_from timestamptz default null,
+  date_to timestamptz default null
 ) returns table (
   id uuid,
   content text,
@@ -71,6 +78,14 @@ begin
     and (
       window_days is null
       or (documents.metadata->>'published_at')::timestamptz >= now() - make_interval(days => window_days)
+    )
+    and (
+      date_from is null
+      or (documents.metadata->>'published_at')::timestamptz >= date_from
+    )
+    and (
+      date_to is null
+      or (documents.metadata->>'published_at')::timestamptz <= date_to
     )
   order by documents.embedding <=> query_embedding
   limit match_count;
