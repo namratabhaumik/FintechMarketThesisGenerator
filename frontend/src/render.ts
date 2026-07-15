@@ -7,6 +7,7 @@ import { RefinementStatus } from "./types";
 import type {
   ApproveHandler,
   CompareHandler,
+  DeleteHandler,
   ExecutionEvent,
   HallucinationAnalysis,
   JobResponse,
@@ -596,6 +597,9 @@ export function renderPastTheses(
   onNextPage?: () => void,
   canPrevPage?: boolean,
   canNextPage?: boolean,
+  isAdmin?: boolean,
+  onDelete?: DeleteHandler,
+  title = "Past theses",
 ): HTMLElement | null {
   const paginated = Boolean(onPrevPage || onNextPage);
   // Without pagination, an empty list means nothing to show - collapse entirely.
@@ -623,12 +627,34 @@ export function renderPastTheses(
     let meta = parts.filter(Boolean).join(" · ");
     if (j.approved_at) meta += " · approved";
     else if (j.refinement_status && j.refinement_status !== "N/A") meta += ` · ${j.refinement_status}`;
+    // In the admin (all-users) view, label whose thesis each row is. Only the
+    // the short prefix of the owner UUID is available.
+    if (isAdmin && j.user_id) meta += ` · owner ${j.user_id.slice(0, 8)}`;
     left.append(el("span", meta, "text-[10px] text-base-content/60 font-mono"));
     item.append(left);
 
     const right = el("div", undefined, "flex items-center gap-3 flex-shrink-0 ml-4");
     if (j.recommendation) {
       right.append(el("span", j.recommendation, recommendationBadgeClass(j.recommendation)));
+    }
+    if (isAdmin && onDelete) {
+      const deleteBtn = el("button", undefined, "btn btn-ghost btn-xs text-error/70 hover:text-error");
+      deleteBtn.setAttribute("aria-label", `Delete thesis: ${j.query}`);
+      deleteBtn.title = "Delete (admin)";
+      // Static icon markup (not user/LLM data) - safe as innerHTML.
+      deleteBtn.innerHTML =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<polyline points="3 6 5 6 21 6"/>' +
+        '<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>' +
+        '<path d="M10 11v6"/><path d="M14 11v6"/>' +
+        '<path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>';
+      deleteBtn.addEventListener("click", () => {
+        if (window.confirm(`Delete this thesis permanently?\n\n"${j.query}"`)) {
+          onDelete(j.job_id);
+        }
+      });
+      right.append(deleteBtn);
     }
     item.append(right);
 
@@ -652,7 +678,7 @@ export function renderPastTheses(
     wrap.append(pagination);
   }
 
-  return collapsible(`Past theses (${jobs.length})`, wrap);
+  return collapsible(`${title} (${jobs.length})`, wrap);
 }
 
 // --- Resume picker (controller filters the list; view builds the widget) ---

@@ -137,20 +137,33 @@ export async function getThesis(jobId: string): Promise<JobResponse> {
   return (await res.json()) as JobResponse;
 }
 
-/** Slim list of past jobs, most recent first (optionally filter by
- * refinement_status server-side ). */
+/** Slim list of past jobs, most recent first. Scoped to the caller's own jobs
+ * unless allUsers=true (admin only; the backend 403s for non-admins). Optionally
+ * filter by refinement_status server-side. */
 export async function listTheses(
   limit = 20,
   offset = 0,
   status?: string,
+  allUsers = false,
 ): Promise<ThesisSummaryResponse[]> {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (status) params.set("status", status);
+  if (allUsers) params.set("all", "true");
   const res = await authedFetch(`${API_BASE}/api/theses?${params.toString()}`);
   if (!res.ok) {
     throw await toApiError(res);
   }
   return (await res.json()) as ThesisSummaryResponse[];
+}
+
+/** Delete a thesis job (admin only). */
+export async function deleteThesis(jobId: string): Promise<void> {
+  const res = await authedFetch(`${API_BASE}/api/theses/${encodeURIComponent(jobId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    throw await toApiError(res);
+  }
 }
 
 /** The fixed set of refinement feedback reasons the UI offers. */

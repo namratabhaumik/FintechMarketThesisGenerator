@@ -48,6 +48,7 @@ function render(session: Session | null): void {
     if (session) {
       FinThesisApp.mount("#app", {
         email: session.user.email,
+        isAdmin: session.user.app_metadata?.role === "admin",
         onSignOut: () => void signOut(),
       });
     } else {

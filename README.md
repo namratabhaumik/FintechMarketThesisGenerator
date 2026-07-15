@@ -98,3 +98,5 @@ Frontend and backend are decoupled and deployed as separate Render services, acr
 
 **CI/CD (GitHub Actions).** On every push, a read-only job runs the tests and builds the vanilla-TS frontend bundle with that environment's API base URL compiled in. A separate job (with write access) then publishes just the built static assets to a per-environment deploy branch (`deploy-dev` / `deploy-prod`) that the corresponding Render Static Site serves. The FastAPI backend deploys per source branch. A failing test skips the deploy entirely.
 
+**API documentation.** Interactive Swagger docs at `/docs` and ReDoc at `/redoc` are gated behind the `ENABLE_DOCS` flag (enabled locally and on dev - [fintechmarketthesisgenerator.onrender.com/docs](https://fintechmarketthesisgenerator.onrender.com/docs)).
+

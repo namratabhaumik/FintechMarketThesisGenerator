@@ -1,6 +1,6 @@
 """Tests for the API security layer: per-user JWT auth wiring + rate limiting."""
 
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
@@ -47,10 +47,49 @@ class TestAuthWiredToRoutes:
     def test_get_401_without_token(self):
         assert _client().get("/api/theses/x").status_code == 401
 
+    def test_delete_401_without_token(self):
+        assert _client().delete("/api/theses/x").status_code == 401
+
     def test_public_meta_endpoints_stay_open(self):
         client = _client()
         assert client.get("/api/feedback-options").status_code == 200
         assert client.get("/api/health").status_code == 200
+
+
+class TestRequireAdmin:
+    """The delete endpoint is admin-only: require_admin gates on the JWT's
+    app_metadata.role claim before the handler (and RLS) ever run."""
+
+    def _client_as(self, role: str) -> TestClient:
+        from api.auth import AuthUser, get_current_user, get_user_job_manager
+        from api.deps import get_container
+        from api.routes import router
+
+        mock_jm = MagicMock()
+        mock_jm.get_job = AsyncMock(return_value=MagicMock(id="x"))
+        mock_jm.delete_job = AsyncMock()
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user] = lambda: AuthUser(
+            id="u1", token="t", role=role
+        )
+        app.dependency_overrides[get_user_job_manager] = lambda: mock_jm
+        app.dependency_overrides[get_container] = lambda: MagicMock()
+        client = TestClient(app)
+        client._mock_jm = mock_jm  # type: ignore[attr-defined]
+        return client
+
+    def test_delete_403_for_non_admin(self):
+        res = self._client_as("user").delete("/api/theses/x")
+        assert res.status_code == 403
+        assert res.json()["detail"]["code"] == "forbidden"
+
+    def test_delete_204_for_admin(self):
+        client = self._client_as("admin")
+        res = client.delete("/api/theses/x")
+        assert res.status_code == 204
+        client._mock_jm.delete_job.assert_awaited_once_with("x")  # type: ignore[attr-defined]
 
 
 class TestRateLimitKey:
