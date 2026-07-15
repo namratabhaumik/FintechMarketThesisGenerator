@@ -140,8 +140,13 @@ class AIGatewayConfig:
     enabled: bool = True
     strategy: str = "hybrid"  # cost_optimized | quality_first | hybrid
     cache_enabled: bool = True
-    cache_type: str = "memory"  # memory | sqlite
+    cache_type: str = "memory"  # memory | supabase
     cache_ttl_seconds: int = 604800  # 7 days
+    # Cache-busting tag folded into every key. Empty -> the container defaults it
+    # to the primary model name (so a model swap busts). Bump it (or set an env)
+    # after a prompt change to invalidate a persistent cache that a deploy alone
+    # would not clear.
+    cache_version: str = ""
     cost_limit_daily: float = 5.0
     cost_limit_monthly: float = 100.0
     track_metrics: bool = True
@@ -278,6 +283,7 @@ class AppConfig:
         ai_gateway_cache_enabled = os.getenv("AI_GATEWAY_CACHE_ENABLED", "true").lower() == "true"
         ai_gateway_cache_type = os.getenv("AI_GATEWAY_CACHE_TYPE", "memory")
         ai_gateway_cache_ttl = int(os.getenv("AI_GATEWAY_CACHE_TTL_SECONDS", "604800"))
+        ai_gateway_cache_version = os.getenv("AI_GATEWAY_CACHE_VERSION", "")
         ai_gateway_cost_limit_daily = float(os.getenv("AI_GATEWAY_COST_LIMIT_DAILY", "5.0"))
         ai_gateway_cost_limit_monthly = float(os.getenv("AI_GATEWAY_COST_LIMIT_MONTHLY", "100.0"))
         ai_gateway_track_metrics = os.getenv("AI_GATEWAY_TRACK_METRICS", "true").lower() == "true"
@@ -316,6 +322,7 @@ class AppConfig:
                 cache_enabled=ai_gateway_cache_enabled,
                 cache_type=ai_gateway_cache_type,
                 cache_ttl_seconds=ai_gateway_cache_ttl,
+                cache_version=ai_gateway_cache_version,
                 cost_limit_daily=ai_gateway_cost_limit_daily,
                 cost_limit_monthly=ai_gateway_cost_limit_monthly,
                 track_metrics=ai_gateway_track_metrics,

@@ -1,18 +1,19 @@
 """AI Gateway for cost-optimized LLM routing with caching and cost tracking."""
 
+import asyncio
 import logging
 import time
 from typing import List, Dict
 
 from langchain_core.documents import Document
 
+from core.interfaces.cache import ICacheManager
 from core.interfaces.llm import (
     SOURCE_LLM,
     SOURCE_LOCAL,
     ILanguageModel,
     summary_source_var,
 )
-from core.implementations.llm.cache_manager import CacheManager
 from core.implementations.llm.cost_tracker import CostTracker
 from core.implementations.llm.routing_strategy import ROUTE_PRIMARY, get_strategy
 from config.settings import AIGatewayConfig
@@ -35,7 +36,7 @@ class AIGateway(ILanguageModel):
         primary_llm: ILanguageModel,
         fallback_llm: ILanguageModel,
         config: AIGatewayConfig,
-        cache_manager: CacheManager,
+        cache_manager: ICacheManager,
         cost_tracker: CostTracker,
     ):
         """Initialize AI Gateway.
@@ -128,7 +129,7 @@ class AIGateway(ILanguageModel):
         # Step 1: Check cache
         if self._config.cache_enabled:
             cache_key = self._cache_manager.generate_key(docs_text, topic, "combined")
-            cached_entry = self._cache_manager.get(cache_key)
+            cached_entry = await asyncio.to_thread(self._cache_manager.get, cache_key)
 
             if cached_entry is not None:
                 logger.info(f"Cache hit for documents: {cache_key}")
@@ -187,7 +188,8 @@ class AIGateway(ILanguageModel):
                 # Estimate tokens (rough approximation)
                 input_tokens = len(docs_text.split()) * 1.3
                 output_tokens = len(result.split()) * 1.3
-                self._cache_manager.set(
+                await asyncio.to_thread(
+                    self._cache_manager.set,
                     key=cache_key,
                     response=result,
                     model=llm.get_model_name(),
@@ -261,7 +263,7 @@ class AIGateway(ILanguageModel):
         # Step 1: Check cache
         if self._config.cache_enabled:
             cache_key = self._cache_manager.generate_key(cache_input, topic, "refine")
-            cached_entry = self._cache_manager.get(cache_key)
+            cached_entry = await asyncio.to_thread(self._cache_manager.get, cache_key)
 
             if cached_entry is not None:
                 logger.info(f"Cache hit for refinement: {cache_key}")
@@ -316,7 +318,8 @@ class AIGateway(ILanguageModel):
                 cache_key = self._cache_manager.generate_key(cache_input, topic, "refine")
                 input_tokens = len(cache_input.split()) * 1.3
                 output_tokens = len(result.split()) * 1.3
-                self._cache_manager.set(
+                await asyncio.to_thread(
+                    self._cache_manager.set,
                     key=cache_key,
                     response=result,
                     model=llm.get_model_name(),

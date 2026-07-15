@@ -12,10 +12,21 @@ from core.interfaces.llm import ILanguageModel
 
 @pytest.fixture
 def test_documents():
-    """Create test documents."""
+    """Create test documents.
+
+    The page content is real, extractable prose (>20 chars, sentence-final
+    punctuation) so tests that exercise the real local summarizer fallback get a
+    non-empty extractive summary; the mock-LLM tests ignore the content.
+    """
     return [
-        Document(page_content="Test content 1", metadata={"url": "http://test1.com"}),
-        Document(page_content="Test content 2", metadata={"url": "http://test2.com"}),
+        Document(
+            page_content="Fintech adoption is accelerating across emerging markets this year.",
+            metadata={"url": "http://test1.com"},
+        ),
+        Document(
+            page_content="Digital payment platforms are attracting significant investment momentum.",
+            metadata={"url": "http://test2.com"},
+        ),
     ]
 
 
