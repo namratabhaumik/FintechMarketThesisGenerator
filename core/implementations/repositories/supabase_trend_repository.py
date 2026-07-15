@@ -1,7 +1,7 @@
 """Supabase-backed trend metrics store"""
 
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Optional
 
 from supabase import Client
@@ -33,6 +33,11 @@ class SupabaseTrendRepository(ITrendRepository):
         self._client = client
 
     def upsert(self, metrics: List[TrendMetric]) -> int:
+        # Lineage: one computed_at per recompute (one upsert call) stamps every
+        # bucket this run writes. Gold aggregates across many ingestion loads, so
+        # a per-load id can't map to a bucket; the useful question is "which 
+        # recompute produced this current count".
+        computed_at = datetime.now(timezone.utc).isoformat()
         # each TrendMetric --> shape into a row keyed by week + dimension +
         # category with its article count --> collect into `rows`. week_start is
         # a date, so it is serialized to an ISO string.
@@ -42,6 +47,8 @@ class SupabaseTrendRepository(ITrendRepository):
                 "dimension": m.dimension,
                 "category": m.category,
                 "article_count": m.article_count,
+                "computed_at": computed_at,
+                "load_ids": m.load_ids,
             }
             for m in metrics
         ]
@@ -112,4 +119,5 @@ class SupabaseTrendRepository(ITrendRepository):
             dimension=row["dimension"],
             category=row["category"],
             article_count=row["article_count"],
+            load_ids=row.get("load_ids") or [],
         )

@@ -1,7 +1,7 @@
 """Silver verdict model"""
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 
 @dataclass
@@ -30,6 +30,9 @@ class SilverVerdict:
     risks: List[str] = field(default_factory=list)
     # Investment-signal categories present in the text (e.g. "Payment Infrastructure").
     signals: List[str] = field(default_factory=list)
+    # Lineage: the Bronze ingestion run the decided article came from, carried
+    # through from the RawArticle.
+    load_id: Optional[str] = None
 
     def __post_init__(self):
         # The URL is the identity of the verdict, so it must be present.

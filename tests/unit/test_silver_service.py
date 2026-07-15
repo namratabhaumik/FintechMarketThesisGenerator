@@ -186,6 +186,26 @@ def test_embeds_fintech_persists_text_and_records_themes():
     assert by_url["https://x/2"].fintech_relevant is False
 
 
+def test_carries_bronze_load_id_into_verdict_and_content():
+    """Lineage: the Bronze load_id rides forward onto the Silver verdict and the
+    persisted content, for both accepted and rejected articles."""
+    raw = [
+        RawArticle(title="Fintech A", url="https://x/1", published_at=PUB,
+                   summary="d", source="x.com", load_id="load-1"),
+        RawArticle(title="Space B", url="https://x/2", published_at=PUB,
+                   summary="d", source="x.com", load_id="load-1"),
+    ]
+    silver_repo = _FakeSilverRepo()
+    content_repo = _FakeContentRepo()
+
+    _service(raw, silver_repo, _FakeVectorStore(), content_repo=content_repo).build()
+
+    by_url = {v.url: v for v in silver_repo.recorded}
+    assert by_url["https://x/1"].load_id == "load-1"  # accepted verdict
+    assert by_url["https://x/2"].load_id == "load-1"  # rejected verdict
+    assert content_repo.saved[0].load_id == "load-1"  # persisted content
+
+
 def test_reuses_persisted_text_and_skips_scrape():
     raw = [_raw("Fintech A", "https://x/1")]
     persisted = Article(

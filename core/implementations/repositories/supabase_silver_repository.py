@@ -65,6 +65,7 @@ class SupabaseSilverRepository(ISilverRepository):
                 "themes": v.themes,
                 "risks": v.risks,
                 "signals": v.signals,
+                "load_id": v.load_id,
             }
             for v in verdicts
         ]
