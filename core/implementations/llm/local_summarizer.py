@@ -102,6 +102,18 @@ class LocalSummarizerModel(ILanguageModel):
             # Score each sentence by fintech keyword count, boosted by
             # topic-term hits so the extract centres on the user's query.
             topic_terms = self._topic_terms(topic)
+
+            # If the query has terms to check against and none of them
+            # appear anywhere in the documents, the extraction would just be
+            # generic fintech content unrelated to what was asked - refuse.
+            if topic_terms and not any(
+                term in sent.lower()
+                for sent in complete_sentences
+                for term in topic_terms
+            ):
+                logger.warning("No topic-relevant sentences found locally")
+                return "REFUSED: "
+
             scored_sentences = [
                 (sent, self._score_sentence(sent, topic_terms))
                 for sent in complete_sentences

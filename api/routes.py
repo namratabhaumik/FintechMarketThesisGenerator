@@ -71,6 +71,7 @@ def _thesis_to_response(thesis) -> ThesisResponse:
         recommendation=thesis.recommendation,
         key_risk_factors=thesis.key_risk_factors,
         summary_source=thesis.summary_source,
+        summary_status=thesis.summary_status,
     )
 
 
@@ -231,9 +232,8 @@ async def create_thesis(
         raise _error(
             422,
             "insufficient_evidence",
-            "The retrieved sources don't cover themes, risks, and investment "
-            "signals for this query, so a complete thesis can't be built. Try a "
-            "broader or more established fintech topic.",
+            "The sources retrieved for this specific query don't span themes, "
+            "risks, and investment signals together. Try broadening the query.",
         )
 
     try:

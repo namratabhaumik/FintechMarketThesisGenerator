@@ -61,6 +61,8 @@ class ThesisResponse(BaseModel):
     key_risk_factors: List[str] = []
     # What produced raw_output: "llm" or "local" (extractive fallback).
     summary_source: str = "llm"
+    # "refused" when the summarizer found the sources insufficient for the query.
+    summary_status: str = "ok"
 
 
 class RelatedThesisResponse(BaseModel):

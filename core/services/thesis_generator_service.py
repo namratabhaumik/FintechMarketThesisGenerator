@@ -216,6 +216,8 @@ class ThesisGeneratorService:
             logger.error("Empty summary returned by LLM")
             raise RuntimeError("Failed to generate summary")
 
+        summary_status = "refused" if summary.startswith("REFUSED:") else "ok"
+
         # Step 2: Derive the structured tags - still deterministic, no LLM.
         # Previously this keyword-scanned the LLM summary above; now it
         # frequency-ranks the Silver tags already carried in each retrieved
@@ -279,6 +281,7 @@ class ThesisGeneratorService:
             recommendation=score_result["recommendation"],
             key_risk_factors=score_result["key_risks"],
             summary_source=summary_source,
+            summary_status=summary_status,
         )
 
     async def refine_thesis(

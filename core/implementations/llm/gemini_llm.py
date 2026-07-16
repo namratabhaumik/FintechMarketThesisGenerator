@@ -57,6 +57,8 @@ class GeminiLanguageModel(ILanguageModel):
 
 Write in paragraphs.
 
+If the source documents do not contain enough information to address the topic, respond with exactly "REFUSED: ".
+
 {wrap_untrusted(doc_content, label="documents")}"""
 
             result = await self._llm.ainvoke([HumanMessage(content=prompt)])

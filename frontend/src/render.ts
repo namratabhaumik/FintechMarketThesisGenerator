@@ -126,7 +126,7 @@ function renderSourceItem(s: SourceResponse): HTMLElement {
     li.append(
       el(
         "span",
-        ` · ${Math.round(s.similarity * 100)}% match`,
+        ` · ${Math.round(s.similarity * 100)}% relevant to your query`,
         "text-xs text-base-content/50",
       ),
     );
@@ -806,13 +806,32 @@ export function renderJob(
         ),
       );
     }
-    body.append(
-      el(
-        "p",
-        thesis.raw_output,
-        "text-sm text-base-content/60 leading-relaxed whitespace-pre-wrap",
-      ),
-    );
+    if (thesis.summary_status === "refused") {
+      const dims = [
+        [thesis.key_themes.length, "theme"],
+        [thesis.risks.length, "risk"],
+        [thesis.investment_signals.length, "signal"],
+      ] as const;
+      const parts = dims.map(([n, label]) => `${n} ${label}${n === 1 ? "" : "s"}`);
+      const dimsList = parts.length > 1
+        ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
+        : parts[0];
+      body.append(
+        el(
+          "p",
+          `The sources didn't give us enough to write a reliable narrative for this query - but the ${dimsList} below are grounded in the same sources and worth reviewing directly.`,
+          "text-sm text-base-content/60 leading-relaxed",
+        ),
+      );
+    } else {
+      body.append(
+        el(
+          "p",
+          thesis.raw_output,
+          "text-sm text-base-content/60 leading-relaxed whitespace-pre-wrap",
+        ),
+      );
+    }
     card.append(collapsible("Raw Summary", body, true));
   }
 
