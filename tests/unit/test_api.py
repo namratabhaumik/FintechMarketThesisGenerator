@@ -217,7 +217,8 @@ def _row(job_id="test123", query="digital lending", **overrides):
         "retrieved_docs": [
             {"page_content": "chunk", "metadata": {
                 "title": "Article A", "url": "https://a.example",
-                "published_at": "2026-06-01T00:00:00+00:00"}},
+                "published_at": "2026-06-01T00:00:00+00:00",
+                "similarity": 0.8123}},
         ],
         "created_at": "2026-07-01T00:00:00+00:00", "approved_at": None,
         "query_embedding": None, "thesis_history": [],
@@ -326,7 +327,8 @@ class TestAPIEndpoints:
         data = response.json()
         assert data["sources"] == [{
             "title": "Article A", "url": "https://a.example",
-            "published_at": "2026-06-01T00:00:00+00:00"}]
+            "published_at": "2026-06-01T00:00:00+00:00",
+            "similarity": 0.8123}]
         assert data["thesis_history"] == []
         assert data["approved_at"] is None
 

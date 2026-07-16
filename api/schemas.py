@@ -42,6 +42,9 @@ class SourceResponse(BaseModel):
     title: str = "Untitled"
     url: Optional[str] = None
     published_at: Optional[str] = None
+    # Query-to-chunk cosine similarity of the article's best retrieved chunk
+    # (0-1), as match_documents defines it.
+    similarity: Optional[float] = None
 
 
 class ThesisResponse(BaseModel):

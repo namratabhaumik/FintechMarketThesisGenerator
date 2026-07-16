@@ -94,6 +94,10 @@ def _sources_from_docs(docs) -> List[SourceResponse]:
                     title=meta.get("title") or "Untitled",
                     url=url or None,
                     published_at=meta.get("published_at"),
+                    # Dedupe keeps the first chunk per URL in MMR order, i.e.
+                    # the article's most relevant selected chunk - its
+                    # similarity stands for the source.
+                    similarity=meta.get("similarity"),
                 )
             )
         except Exception:

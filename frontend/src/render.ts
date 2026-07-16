@@ -120,6 +120,17 @@ function renderSourceItem(s: SourceResponse): HTMLElement {
   } else {
     li.textContent = s.title;
   }
+  // Query-to-article retrieval similarity; absent on jobs stored before
+  // retrieval carried it.
+  if (s.similarity != null) {
+    li.append(
+      el(
+        "span",
+        ` · ${Math.round(s.similarity * 100)}% match`,
+        "text-xs text-base-content/50",
+      ),
+    );
+  }
   return li;
 }
 
@@ -373,7 +384,9 @@ function renderRelated(
     item.append(left);
 
     const right = el("div", undefined, "flex items-center gap-3 flex-shrink-0 ml-4");
-    right.append(el("span", `sim ${r.similarity}`, "text-[10px] text-base-content/60 font-mono"));
+    right.append(
+      el("span", `${Math.round(r.similarity * 100)}% match`, "text-[10px] text-base-content/60 font-mono"),
+    );
     right.append(el("span", r.recommendation, recommendationBadgeClass(r.recommendation)));
     item.append(right);
 
