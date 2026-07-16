@@ -384,11 +384,14 @@ async def create_refinement(
     hallucination = detector.analyze(result_state.get("messages", []))
 
     # Snapshot the pre-refinement thesis into history (the Previous Versions
-    # panel) only when this round actually changed it. Escalate and skip
-    # rounds leave the thesis as-is; snapshotting those would persist a
-    # duplicate "version" identical to the current thesis.
+    # panel) whenever this round actually executed a tool - kept 1:1 with the
+    # Execution Trace, even for a round that changed nothing (e.g. a
+    # re-refusal). True skips (no tool call, parse error, unknown tool) leave
+    # the thesis untouched and are excluded, since nothing ran to snapshot.
     new_thesis = result_state["current_thesis"]
-    if new_thesis != job.thesis:
+    execution_log = result_state.get("execution_log", [])
+    executed_this_round = bool(execution_log) and execution_log[-1].get("status") == "executed"
+    if executed_this_round:
         thesis_history = list(job.thesis_history) + [job.thesis]
     else:
         thesis_history = job.thesis_history
@@ -406,7 +409,7 @@ async def create_refinement(
             refinement_count=result_state["refinement_count"],
             refinement_status=result_state["status"],
             feedback_history=result_state["feedback_history"],
-            execution_log=result_state.get("execution_log", []),
+            execution_log=execution_log,
         )
         updated = await jm.get_job(job_id) if persisted else None
     except Exception:

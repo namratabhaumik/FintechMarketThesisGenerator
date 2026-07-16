@@ -316,14 +316,21 @@ class ThesisGeneratorService:
         """
         logger.info(f"Refining thesis for topic: {topic} based on {len(feedback_items)} feedback items")
 
-        # Step 1: Get refined summary from LLM using feedback
+        # Step 1: Get refined summary from LLM using feedback. If the original
+        # summary was refused, there's no real narrative to revise - skip the 
+        # call and keep the refusal as-is.
         current_thesis_text = current_thesis.raw_output or ""
-        logger.info("Step 1: Refining thesis with LLM feedback...")
-        refined_summary = await self._llm.refine(documents, current_thesis_text, feedback_items)
+        summary_status = current_thesis.summary_status
+        if summary_status == "refused":
+            logger.info("Step 1: Original summary was refused; skipping rewrite")
+            refined_summary = current_thesis_text
+        else:
+            logger.info("Step 1: Refining thesis with LLM feedback...")
+            refined_summary = await self._llm.refine(documents, current_thesis_text, feedback_items)
 
-        if not refined_summary:
-            logger.error("Empty refined summary returned by LLM")
-            raise RuntimeError("Failed to refine thesis")
+            if not refined_summary:
+                logger.error("Empty refined summary returned by LLM")
+                raise RuntimeError("Failed to refine thesis")
 
         # Step 2: Derive grounded tags from the retrieved docs; apply the
         # quantitative effect of the feedback via the planner-LLM-proposed
@@ -348,4 +355,5 @@ class ThesisGeneratorService:
             investment_signals=investment_signals,
             sources=sources,
             raw_output=refined_summary,
+            summary_status=summary_status,
         )

@@ -85,6 +85,7 @@ def create_thesis_tools(
             "investment_signals": refined.investment_signals,
             "sources": refined.sources,
             "raw_output": refined.raw_output,
+            "summary_status": refined.summary_status,
         })
 
     return [refine_thesis]

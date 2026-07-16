@@ -1,6 +1,6 @@
 // formatting helpers for dates and the source-articles label
 
-import type { SourceResponse } from "./types";
+import type { SourceResponse, ThesisResponse } from "./types";
 
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -34,4 +34,22 @@ export function sourcesLabel(sources: SourceResponse[]): string {
   const hi = fmtDate(toDateOnly(Math.max(...times)));
   const span = lo === hi ? lo : `${lo} - ${hi}`;
   return `Source Articles (${span})`;
+}
+
+/**
+ * The friendly stand-in for `raw_output` when the summarizer refused to
+ * write a narrative, naming what's still grounded so the reader has
+ * somewhere to look instead of an opaque "REFUSED:" sentinel.
+ */
+export function refusalSummaryMessage(thesis: ThesisResponse): string {
+  const dims = [
+    [thesis.key_themes.length, "theme"],
+    [thesis.risks.length, "risk"],
+    [thesis.investment_signals.length, "signal"],
+  ] as const;
+  const parts = dims.map(([n, label]) => `${n} ${label}${n === 1 ? "" : "s"}`);
+  const dimsList = parts.length > 1
+    ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
+    : parts[0];
+  return `The sources didn't give us enough to write a reliable narrative for this query - but the ${dimsList} below are grounded in the same sources and worth reviewing directly.`;
 }
