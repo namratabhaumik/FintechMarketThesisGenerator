@@ -6,7 +6,7 @@
     and a clean paraphrase; if it cannot tell the apart, the scores are untrustworthy.
 
     dataset  -> a few (topic, fixture documents) pairs
-    task     -> llm.summarize(documents) [Gemini] -> narrative
+    task     -> llm.summarize(documents, topic) [Gemini] -> narrative
     scorers  -> faithful (judge), relevant (judge), non_degenerate (deterministic)
 
 Run from the repo root:
@@ -116,7 +116,7 @@ def build_task(llm):
     def task(*, item, **kwargs) -> dict:
         topic = item["input"]["topic"]
         docs = FIXTURES[topic]
-        summary = asyncio.run(llm.summarize(docs))
+        summary = asyncio.run(llm.summarize(docs, topic))
         return {
             "summary": summary,
             "docs_text": "\n".join(d.page_content for d in docs),

@@ -23,7 +23,7 @@ class MockWebScraper(IWebScraper):
 class MockLanguageModel(ILanguageModel):
     """Mock LLM for testing."""
 
-    async def summarize(self, documents) -> str:
+    async def summarize(self, documents, topic: str = "") -> str:
         """Return mock summary."""
         return "Mock summary: " + " ".join([d.page_content[:50] for d in documents])
 

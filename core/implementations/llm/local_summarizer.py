@@ -2,7 +2,7 @@
 
 import logging
 import re
-from typing import List
+from typing import List, Optional
 
 from langchain_core.documents import Document
 
@@ -62,11 +62,13 @@ class LocalSummarizerModel(ILanguageModel):
         self._config = config
         logger.info("Initializing Local Extractive Summarizer (no API calls)")
 
-    async def summarize(self, documents: List[Document]) -> str:
+    async def summarize(self, documents: List[Document], topic: str = "") -> str:
         """Extract summary from documents using keyword scoring.
 
         Args:
             documents: List of LangChain Document objects.
+            topic: The user's query; sentences containing its terms are
+                weighted above generic fintech-keyword hits.
 
         Returns:
             Summarized text (extractive - combination of top sentences).
@@ -97,9 +99,11 @@ class LocalSummarizerModel(ILanguageModel):
             if not complete_sentences:
                 complete_sentences = all_sentences  # Fallback if all filtered
 
-            # Score each sentence by fintech keyword count
+            # Score each sentence by fintech keyword count, boosted by
+            # topic-term hits so the extract centres on the user's query.
+            topic_terms = self._topic_terms(topic)
             scored_sentences = [
-                (sent, self._score_sentence(sent))
+                (sent, self._score_sentence(sent, topic_terms))
                 for sent in complete_sentences
             ]
 
@@ -171,18 +175,30 @@ class LocalSummarizerModel(ILanguageModel):
                 return True
         return False
 
-    def _score_sentence(self, sentence: str) -> int:
-        """Score sentence by fintech keyword count.
+    @staticmethod
+    def _topic_terms(topic: str) -> List[str]:
+        """Extract scoring terms from the user's query.
+
+        Short tokens (< 4 chars) are dropped to skip stopwords like
+        "the" / "how" / "in" that would match everywhere.
+        """
+        return [t for t in re.findall(r"[a-z0-9-]+", topic.lower()) if len(t) >= 4]
+
+    def _score_sentence(self, sentence: str, topic_terms: Optional[List[str]] = None) -> int:
+        """Score sentence by fintech keyword count plus topic-term hits.
 
         Args:
             sentence: Text to score.
+            topic_terms: Terms from the user's query; each hit counts double
+                a generic keyword hit, so query-relevant sentences win ties.
 
         Returns:
-            Count of fintech keywords found.
+            Weighted keyword score.
         """
         sentence_lower = sentence.lower()
         score = sum(
             1 for keyword in self.FINTECH_KEYWORDS
             if keyword in sentence_lower
         )
+        score += sum(2 for term in topic_terms or [] if term in sentence_lower)
         return score

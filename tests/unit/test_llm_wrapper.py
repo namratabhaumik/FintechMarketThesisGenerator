@@ -234,7 +234,7 @@ class TestLLMWrapperEdgeCases:
         result = asyncio.run(wrapper.summarize([]))
 
         assert result == "Empty summary"
-        mock_primary_llm.summarize.assert_called_once_with([])
+        mock_primary_llm.summarize.assert_called_once_with([], "")
 
     def test_fallback_summary_marks_local_provenance(self, test_documents, mock_primary_llm):
         """A summary served by the real local fallback flips the per-call

@@ -100,11 +100,11 @@ class AIGateway(ILanguageModel):
             return "primary", self._primary_llm
         return "local", self._fallback_llm
 
-    async def summarize(self, documents: List[Document]) -> str:
+    async def summarize(self, documents: List[Document], topic: str = "") -> str:
         """Summarize documents with caching, cost optimization, and routing.
 
         Flow:
-        1. Check cache for identical documents → return if hit
+        1. Check cache for identical documents + topic → return if hit
         2. Use routing strategy to select provider
         3. Check cost limits
         4. Call selected provider
@@ -114,6 +114,7 @@ class AIGateway(ILanguageModel):
 
         Args:
             documents: List of LangChain Document objects.
+            topic: The user's query.
 
         Returns:
             Summarized text.
@@ -124,7 +125,6 @@ class AIGateway(ILanguageModel):
         """
         start_time = time.time()
         docs_text = self._get_documents_text(documents)
-        topic = "fintech"  # Default topic since not passed in
 
         # Step 1: Check cache
         if self._config.cache_enabled:
@@ -159,7 +159,7 @@ class AIGateway(ILanguageModel):
             # Use fallback to avoid charges
             try:
                 logger.info("Using fallback LLM due to cost limit")
-                result = await self._fallback_llm.summarize(documents)
+                result = await self._fallback_llm.summarize(documents, topic)
                 latency_ms = (time.time() - start_time) * 1000
                 if self._config.track_metrics:
                     self._cost_tracker.record_call(
@@ -180,7 +180,7 @@ class AIGateway(ILanguageModel):
         # Step 4: Call selected provider
         try:
             logger.info(f"Calling {llm.get_model_name()} for summarization ({provider} route)")
-            result = await llm.summarize(documents)
+            result = await llm.summarize(documents, topic)
 
             # Step 5: Cache result
             if self._config.cache_enabled:
@@ -218,7 +218,7 @@ class AIGateway(ILanguageModel):
             # Try fallback
             try:
                 logger.info("Attempting fallback LLM after primary failure")
-                result = await self._fallback_llm.summarize(documents)
+                result = await self._fallback_llm.summarize(documents, topic)
 
                 if self._config.track_metrics:
                     latency_ms = (time.time() - start_time) * 1000

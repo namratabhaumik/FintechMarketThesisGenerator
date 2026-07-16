@@ -242,7 +242,7 @@ class TestThesisGeneratorService:
 
         llm = Mock()
 
-        async def local_summarize(documents):
+        async def local_summarize(documents, topic=""):
             summary_source_var.set(SOURCE_LOCAL)
             return "extractive summary"
 

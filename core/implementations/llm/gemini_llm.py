@@ -34,11 +34,12 @@ class GeminiLanguageModel(ILanguageModel):
             max_output_tokens=config.max_output_tokens,
         )
 
-    async def summarize(self, documents: List[Document]) -> str:
-        """Generate summary from documents using Gemini.
+    async def summarize(self, documents: List[Document], topic: str = "") -> str:
+        """Generate a topic-focused summary from documents using Gemini.
 
         Args:
             documents: List of LangChain Document objects.
+            topic: The user's query.
 
         Returns:
             Summarized text.
@@ -52,11 +53,11 @@ class GeminiLanguageModel(ILanguageModel):
             # Combine documents for summarization
             doc_content = "\n\n".join(doc.page_content for doc in documents)
 
-            prompt = f"""Provide a concise summary of the following documents:
+            prompt = f"""You are a fintech market analyst. Using ONLY the source documents below, write a concise summary on: {topic}
 
-{wrap_untrusted(doc_content, label="documents")}
+Write in paragraphs.
 
-Summary:"""
+{wrap_untrusted(doc_content, label="documents")}"""
 
             result = await self._llm.ainvoke([HumanMessage(content=prompt)])
             return result.content

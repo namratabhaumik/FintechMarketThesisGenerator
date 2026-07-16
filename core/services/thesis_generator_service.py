@@ -209,7 +209,7 @@ class ThesisGeneratorService:
         # response), it flips this to "local" and the thesis records it.
         logger.info("Step 1: Summarizing retrieved documents...")
         summary_source_var.set(SOURCE_LLM)
-        summary = await self._llm.summarize(documents)
+        summary = await self._llm.summarize(documents, topic)
         summary_source = summary_source_var.get()
 
         if not summary:

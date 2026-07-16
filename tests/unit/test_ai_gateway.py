@@ -356,7 +356,7 @@ class TestAIGateway:
         )
 
         docs = [Document(page_content="content")]
-        result = asyncio.run(gateway.summarize(docs))
+        result = asyncio.run(gateway.summarize(docs, "fintech"))
 
         assert result == "Cached response"
         # Primary should not be called on cache hit
