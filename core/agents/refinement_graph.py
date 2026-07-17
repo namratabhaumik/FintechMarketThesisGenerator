@@ -109,7 +109,8 @@ def _resolve_components(tool_name: str, result: dict, current: StructuredThesis)
 
     Returns:
         Tuple (key_themes, risks, investment_signals, sources, raw_output,
-        summary_status), or None when the tool name is not recognized.
+        summary_status, refusal_reason), or None when the tool name is not
+        recognized.
     """
     if tool_name == "refine_thesis":
         return (
@@ -119,6 +120,7 @@ def _resolve_components(tool_name: str, result: dict, current: StructuredThesis)
             result.get("sources", current.sources),
             result.get("raw_output", current.raw_output),
             result.get("summary_status", current.summary_status),
+            result.get("refusal_reason", current.refusal_reason),
         )
     return None
 
@@ -133,9 +135,9 @@ def _score_and_build(components, current: StructuredThesis) -> StructuredThesis:
     tags) is swapped in; key risks follow the refined risk list.
 
     components is (key_themes, risks, investment_signals, sources, raw_output,
-    summary_status).
+    summary_status, refusal_reason).
     """
-    key_themes, risks, investment_signals, sources, raw_output, summary_status = components
+    key_themes, risks, investment_signals, sources, raw_output, summary_status, refusal_reason = components
     return StructuredThesis(
         key_themes=key_themes,
         risks=risks,
@@ -148,6 +150,7 @@ def _score_and_build(components, current: StructuredThesis) -> StructuredThesis:
         recommendation=current.recommendation,
         key_risk_factors=risks[:min(3, len(risks))],
         summary_status=summary_status,
+        refusal_reason=refusal_reason,
     )
 
 

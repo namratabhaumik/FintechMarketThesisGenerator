@@ -39,7 +39,8 @@ export function sourcesLabel(sources: SourceResponse[]): string {
 /**
  * The friendly stand-in for `raw_output` when the summarizer refused to
  * write a narrative, naming what's still grounded so the reader has
- * somewhere to look instead of an opaque "REFUSED:" sentinel.
+ * somewhere to look instead of an opaque "REFUSED:" sentinel. Wording
+ * differs by refusal_reason.
  */
 export function refusalSummaryMessage(thesis: ThesisResponse): string {
   const dims = [
@@ -51,5 +52,8 @@ export function refusalSummaryMessage(thesis: ThesisResponse): string {
   const dimsList = parts.length > 1
     ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
     : parts[0];
-  return `The sources didn't give us enough to write a reliable narrative for this query - but the ${dimsList} below are grounded in the same sources and worth reviewing directly.`;
+  const reason = thesis.refusal_reason === "llm_judgment"
+    ? "The sources touch on related fintech topics but don't specifically address this query"
+    : "The sources didn't give us enough to write a reliable narrative for this query";
+  return `${reason} - but the ${dimsList} below are grounded in the same sources and worth reviewing directly.`;
 }

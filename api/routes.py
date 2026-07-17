@@ -72,6 +72,7 @@ def _thesis_to_response(thesis) -> ThesisResponse:
         key_risk_factors=thesis.key_risk_factors,
         summary_source=thesis.summary_source,
         summary_status=thesis.summary_status,
+        refusal_reason=thesis.refusal_reason,
     )
 
 

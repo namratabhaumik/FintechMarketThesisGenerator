@@ -379,12 +379,16 @@ class TestAPIEndpoints:
             thesis = state["current_thesis"]
             if change_thesis:
                 thesis = replace(thesis, raw_output="rewritten narrative")
+            # Mirrors assemble_node: "executed" for a tool that ran (whether or
+            # not it changed anything), "skipped" for escalate/no-tool rounds.
+            status = "executed" if change_thesis else "skipped"
             return {
                 "current_thesis": thesis,
                 "refinement_count": state["refinement_count"] + 1,
                 "status": result_status,
                 "feedback_history": state["feedback_history"],
-                "execution_log": [],
+                "execution_log": [{"tool_name": "refine_thesis", "status": status,
+                                    "refinement_number": state["refinement_count"] + 1}],
                 "messages": [],
             }
 

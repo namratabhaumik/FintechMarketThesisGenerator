@@ -101,6 +101,9 @@ address the reader's feedback, staying grounded in the source documents.
 Write a clear, concise narrative analysis in prose. Do NOT use headings, bullet
 lists, JSON, just paragraphs.
 
+If the source documents do not contain enough information to address the
+feedback, respond with exactly "REFUSED: ".
+
 CURRENT THESIS:
 {current_thesis_text}
 

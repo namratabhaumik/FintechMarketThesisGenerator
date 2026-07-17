@@ -25,3 +25,6 @@ class StructuredThesis:
     # "refused" when the summarizer (LLM or local) found the sources
     # insufficient/off-topic for the query instead of writing a summary.
     summary_status: str = "ok"
+    # Why summary_status is "refused": "tag_strength_floor" (deterministic)
+    # or "llm_judgment". None when summary_status is "ok".
+    refusal_reason: Optional[str] = None

@@ -52,9 +52,10 @@ class TestResolveComponents:
         result = {
             "tool": "refine_thesis", "key_themes": ["A", "B"], "risks": ["R"],
             "investment_signals": ["S"], "sources": ["x"], "raw_output": "new",
+            "summary_status": "refused", "refusal_reason": "llm_judgment",
         }
         assert _resolve_components("refine_thesis", result, current_thesis) == (
-            ["A", "B"], ["R"], ["S"], ["x"], "new"
+            ["A", "B"], ["R"], ["S"], ["x"], "new", "refused", "llm_judgment"
         )
 
     def test_refine_thesis_falls_back_to_current_for_missing_keys(self, current_thesis):
@@ -62,7 +63,8 @@ class TestResolveComponents:
         assert comp == (
             current_thesis.key_themes, current_thesis.risks,
             current_thesis.investment_signals, current_thesis.sources,
-            current_thesis.raw_output,
+            current_thesis.raw_output, current_thesis.summary_status,
+            current_thesis.refusal_reason,
         )
 
     def test_unknown_tool_returns_none(self, current_thesis):
@@ -79,7 +81,8 @@ class TestScoreAndBuild:
 
     def test_freezes_numbers_and_swaps_content(self, current_thesis):
         components = (["Digital Payments"], ["Regulatory Risk", "Credit Risk"],
-                      ["Payment Infrastructure"], ["u1", "u2"], "new prose")
+                      ["Payment Infrastructure"], ["u1", "u2"], "new prose",
+                      "ok", None)
         thesis = _score_and_build(components, current_thesis)
 
         assert isinstance(thesis, StructuredThesis)
@@ -92,12 +95,14 @@ class TestScoreAndBuild:
         assert thesis.recommendation == current_thesis.recommendation
         # key_risk_factors follows the refined (displayed) risks, top 3.
         assert thesis.key_risk_factors == ["Regulatory Risk", "Credit Risk"]
+        assert thesis.summary_status == "ok"
+        assert thesis.refusal_reason is None
 
     def test_numbers_frozen_regardless_of_content(self, current_thesis):
         # Different refined prose / tags must NOT move any number - they reflect
         # the retrieved evidence and Gold snapshot, which a refinement leaves alone.
-        a = _score_and_build(([], [], [], [], SIGNAL_RICH), current_thesis)
-        b = _score_and_build((["T"], ["R1", "R2"], ["S"], ["u"], RISK_HEAVY), current_thesis)
+        a = _score_and_build(([], [], [], [], SIGNAL_RICH, "ok", None), current_thesis)
+        b = _score_and_build((["T"], ["R1", "R2"], ["S"], ["u"], RISK_HEAVY, "ok", None), current_thesis)
         assert a.opportunity_score == b.opportunity_score == current_thesis.opportunity_score
         assert a.confidence_level == b.confidence_level == current_thesis.confidence_level
 

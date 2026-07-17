@@ -63,6 +63,9 @@ class ThesisResponse(BaseModel):
     summary_source: str = "llm"
     # "refused" when the summarizer found the sources insufficient for the query.
     summary_status: str = "ok"
+    # Why summary_status is "refused": "tag_strength_floor" or "llm_judgment".
+    # None when summary_status is "ok".
+    refusal_reason: Optional[str] = None
 
 
 class RelatedThesisResponse(BaseModel):
