@@ -1,6 +1,6 @@
 // formatting helpers for dates and the source-articles label
 
-import type { SourceResponse, ThesisResponse } from "./types";
+import type { ExecutionEvent, SourceResponse, ThesisResponse } from "./types";
 
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -34,6 +34,22 @@ export function sourcesLabel(sources: SourceResponse[]): string {
   const hi = fmtDate(toDateOnly(Math.max(...times)));
   const span = lo === hi ? lo : `${lo} - ${hi}`;
   return `Source Articles (${span})`;
+}
+
+/**
+ * True when an executed refinement round left the thesis untouched. Newer
+ * rounds carry an explicit "No changes made" line from the backend
+ * (_diff_thesis); rounds stored before that line existed are recognized by
+ * their change list. Both strings must stay in sync with _diff_thesis.
+ */
+export function isNoOpRound(event: ExecutionEvent | undefined): boolean {
+  if (!event || event.status !== "executed") return false;
+  const changes = event.changes ?? [];
+  return changes.every(
+    (c) =>
+      c === "Score, confidence, recommendation unchanged" ||
+      c.startsWith("No changes made"),
+  );
 }
 
 /**

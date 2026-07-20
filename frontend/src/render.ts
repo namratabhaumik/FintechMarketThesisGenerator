@@ -2,7 +2,7 @@
 
 import { bulletList, el } from "./dom";
 import { copyToClipboard, downloadFile, jobToMarkdown, jobToText, shareableUrl } from "./export";
-import { fmtDate, refusalSummaryMessage, sourcesLabel } from "./format";
+import { fmtDate, isNoOpRound, refusalSummaryMessage, sourcesLabel } from "./format";
 import { RefinementStatus } from "./types";
 import type {
   ApproveHandler,
@@ -593,6 +593,13 @@ function renderExecutionTrace(log: unknown[]): HTMLElement | null {
     }
     if (event.reason) {
       list.append(el("li", `Reason: ${event.reason}`, "text-[10px] font-mono text-base-content/60"));
+    }
+    // Rounds logged before the backend emitted an explicit "No changes made"
+    // line get the same label retroactively, detected from the stored diff.
+    if (isNoOpRound(event) && !(event.changes ?? []).some((c) => c.startsWith("No changes made"))) {
+      list.append(
+        el("li", "No changes made this round", "text-[10px] font-mono text-base-content/60"),
+      );
     }
     for (const change of event.changes ?? []) {
       list.append(el("li", change, "text-[10px] font-mono text-base-content/60"));
