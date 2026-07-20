@@ -13,8 +13,10 @@ from core.implementations.embeddings.fastembed_embeddings import (
     FastEmbedEmbeddingModel,
 )
 from finthesis_internal.keyword_scoring_strategy import KeywordCountScoringStrategy
+from finthesis_internal.semantic_scoring_strategy import SemanticScoringStrategy
 from core.implementations.llm.ai_gateway import AIGateway
 from core.implementations.llm.cache_manager import CacheManager
+from core.implementations.llm.supabase_cache_manager import SupabaseCacheManager
 from core.implementations.llm.cost_tracker import CostTracker
 from core.implementations.llm.gemini_llm import GeminiLanguageModel
 from core.implementations.llm.local_summarizer import LocalSummarizerModel
@@ -39,6 +41,7 @@ from core.implementations.repositories.supabase_untagged_repository import (
     SupabaseUntaggedRepository,
 )
 from core.implementations.vectorstores.supabase_vector_store import SupabaseVectorStoreImpl
+from core.interfaces.cache import ICacheManager
 from core.interfaces.article_content_repository import IArticleContentRepository
 from core.interfaces.article_repository import IArticleRepository
 from core.interfaces.quarantine_repository import IQuarantineRepository
@@ -160,9 +163,10 @@ class ServiceContainer:
         self._untagged_repository: Optional[IUntaggedRepository] = None
         self._llm: Optional[ILanguageModel] = None
         self._scoring_strategy: Optional[IScoringStrategy] = None
+        self._silver_scoring_strategy: Optional[IScoringStrategy] = None
 
         # AI Gateway components (singletons)
-        self._cache_manager: Optional[CacheManager] = None
+        self._cache_manager: Optional[ICacheManager] = None
         self._cost_tracker: Optional[CostTracker] = None
 
         # Services
@@ -453,20 +457,45 @@ class ServiceContainer:
             self._untagged_repository = SupabaseUntaggedRepository(client)
         return self._untagged_repository
 
-    def get_cache_manager(self) -> CacheManager:
+    def get_cache_manager(self) -> ICacheManager:
         """Get or create cache manager for AI Gateway.
 
         Builds the response cache (TTL from config) the AI Gateway uses to avoid
-        repeating identical LLM calls. Only wired in when the gateway is enabled.
+        repeating identical LLM calls. cache_type selects the backend: "memory"
+        (per-process, cleared on restart) or "supabase" (persistent, shared).
+        The version tag defaults to the primary model name so a model swap busts
+        the cache; set AI_GATEWAY_CACHE_VERSION to also bust after a prompt change.
 
         Returns:
-            CacheManager instance.
+            ICacheManager instance.
         """
         if not self._cache_manager:
-            logger.info("Creating CacheManager")
-            self._cache_manager = CacheManager(
-                ttl_seconds=self._config.ai_gateway.cache_ttl_seconds
-            )
+            gw = self._config.ai_gateway
+            version = gw.cache_version or self._config.llm.model_name
+
+            if gw.cache_type == "supabase":
+                if not self._config.supabase.enabled:
+                    raise ValueError(
+                        "The persistent (supabase) LLM cache requires SUPABASE_URL "
+                        "and SUPABASE_SERVICE_ROLE_KEY"
+                    )
+                from supabase import create_client
+
+                logger.info("Creating SupabaseCacheManager (persistent LLM cache)")
+                client = create_client(
+                    self._config.supabase.url, self._config.supabase.service_role_key
+                )
+                self._cache_manager = SupabaseCacheManager(
+                    client,
+                    ttl_seconds=gw.cache_ttl_seconds,
+                    version=version,
+                )
+            else:
+                logger.info("Creating in-memory CacheManager")
+                self._cache_manager = CacheManager(
+                    ttl_seconds=gw.cache_ttl_seconds,
+                    version=version,
+                )
         return self._cache_manager
 
     def get_cost_tracker(self) -> CostTracker:
@@ -573,6 +602,26 @@ class ServiceContainer:
             self._scoring_strategy = KeywordCountScoringStrategy()
         return self._scoring_strategy
 
+    def get_silver_scoring_strategy(self) -> IScoringStrategy:
+        """Get or create the Silver-time scoring strategy.
+
+        Wraps the keyword scorer with an embedding-based semantic layer that
+        adds a couple of concept-driven theme tags keywords miss (Capital
+        Markets, Crowdfunding) and vetoes lone-keyword false positives. This is
+        Silver-only: it embeds at tag time (reusing the pgvector embedder).
+        Any failure degrades to the plain keyword base.
+
+        Returns:
+            IScoringStrategy (SemanticScoringStrategy over the keyword base).
+        """
+        if not self._silver_scoring_strategy:
+            logger.info("Creating SemanticScoringStrategy for Silver")
+            self._silver_scoring_strategy = SemanticScoringStrategy(
+                embedder=self.get_embedding_model(),
+                base_strategy=self.get_scoring_strategy(),
+            )
+        return self._silver_scoring_strategy
+
     # === Service Factories ===
 
     def get_silver_service(self) -> SilverService:
@@ -608,7 +657,7 @@ class ServiceContainer:
                 quarantine_repository=self.get_quarantine_repository(),
                 classifier=self.get_relevance_classifier(),
                 scraper=self.get_scraper(),
-                scoring_strategy=self.get_scoring_strategy(),
+                scoring_strategy=self.get_silver_scoring_strategy(),
                 theme_categories=ThemeMappings.get_mapping().categories,
                 risk_categories=RiskMappings.get_mapping().categories,
                 signal_categories=SignalMappings.get_mapping().categories,

@@ -2,11 +2,12 @@
 
 import { bulletList, el } from "./dom";
 import { copyToClipboard, downloadFile, jobToMarkdown, jobToText, shareableUrl } from "./export";
-import { fmtDate, sourcesLabel } from "./format";
+import { fmtDate, isNoOpRound, refusalSummaryMessage, sourcesLabel } from "./format";
 import { RefinementStatus } from "./types";
 import type {
   ApproveHandler,
   CompareHandler,
+  DeleteHandler,
   ExecutionEvent,
   HallucinationAnalysis,
   JobResponse,
@@ -118,6 +119,17 @@ function renderSourceItem(s: SourceResponse): HTMLElement {
     li.append(a);
   } else {
     li.textContent = s.title;
+  }
+  // Query-to-article retrieval similarity; absent on jobs stored before
+  // retrieval carried it.
+  if (s.similarity != null) {
+    li.append(
+      el(
+        "span",
+        ` · ${Math.round(s.similarity * 100)}% relevant to your query`,
+        "text-xs text-base-content/50",
+      ),
+    );
   }
   return li;
 }
@@ -372,7 +384,9 @@ function renderRelated(
     item.append(left);
 
     const right = el("div", undefined, "flex items-center gap-3 flex-shrink-0 ml-4");
-    right.append(el("span", `sim ${r.similarity}`, "text-[10px] text-base-content/60 font-mono"));
+    right.append(
+      el("span", `${Math.round(r.similarity * 100)}% match`, "text-[10px] text-base-content/60 font-mono"),
+    );
     right.append(el("span", r.recommendation, recommendationBadgeClass(r.recommendation)));
     item.append(right);
 
@@ -580,6 +594,13 @@ function renderExecutionTrace(log: unknown[]): HTMLElement | null {
     if (event.reason) {
       list.append(el("li", `Reason: ${event.reason}`, "text-[10px] font-mono text-base-content/60"));
     }
+    // Rounds logged before the backend emitted an explicit "No changes made"
+    // line get the same label retroactively, detected from the stored diff.
+    if (isNoOpRound(event) && !(event.changes ?? []).some((c) => c.startsWith("No changes made"))) {
+      list.append(
+        el("li", "No changes made this round", "text-[10px] font-mono text-base-content/60"),
+      );
+    }
     for (const change of event.changes ?? []) {
       list.append(el("li", change, "text-[10px] font-mono text-base-content/60"));
     }
@@ -596,6 +617,9 @@ export function renderPastTheses(
   onNextPage?: () => void,
   canPrevPage?: boolean,
   canNextPage?: boolean,
+  isAdmin?: boolean,
+  onDelete?: DeleteHandler,
+  title = "Past theses",
 ): HTMLElement | null {
   const paginated = Boolean(onPrevPage || onNextPage);
   // Without pagination, an empty list means nothing to show - collapse entirely.
@@ -623,12 +647,34 @@ export function renderPastTheses(
     let meta = parts.filter(Boolean).join(" · ");
     if (j.approved_at) meta += " · approved";
     else if (j.refinement_status && j.refinement_status !== "N/A") meta += ` · ${j.refinement_status}`;
+    // In the admin (all-users) view, label whose thesis each row is. Only the
+    // the short prefix of the owner UUID is available.
+    if (isAdmin && j.user_id) meta += ` · owner ${j.user_id.slice(0, 8)}`;
     left.append(el("span", meta, "text-[10px] text-base-content/60 font-mono"));
     item.append(left);
 
     const right = el("div", undefined, "flex items-center gap-3 flex-shrink-0 ml-4");
     if (j.recommendation) {
       right.append(el("span", j.recommendation, recommendationBadgeClass(j.recommendation)));
+    }
+    if (isAdmin && onDelete) {
+      const deleteBtn = el("button", undefined, "btn btn-ghost btn-xs text-error/70 hover:text-error");
+      deleteBtn.setAttribute("aria-label", `Delete thesis: ${j.query}`);
+      deleteBtn.title = "Delete (admin)";
+      // Static icon markup (not user/LLM data) - safe as innerHTML.
+      deleteBtn.innerHTML =
+        '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+        '<polyline points="3 6 5 6 21 6"/>' +
+        '<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>' +
+        '<path d="M10 11v6"/><path d="M14 11v6"/>' +
+        '<path d="M9 6V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2"/></svg>';
+      deleteBtn.addEventListener("click", () => {
+        if (window.confirm(`Delete this thesis permanently?\n\n"${j.query}"`)) {
+          onDelete(j.job_id);
+        }
+      });
+      right.append(deleteBtn);
     }
     item.append(right);
 
@@ -652,7 +698,7 @@ export function renderPastTheses(
     wrap.append(pagination);
   }
 
-  return collapsible(`Past theses (${jobs.length})`, wrap);
+  return collapsible(`${title} (${jobs.length})`, wrap);
 }
 
 // --- Resume picker (controller filters the list; view builds the widget) ---
@@ -767,13 +813,23 @@ export function renderJob(
         ),
       );
     }
-    body.append(
-      el(
-        "p",
-        thesis.raw_output,
-        "text-sm text-base-content/60 leading-relaxed whitespace-pre-wrap",
-      ),
-    );
+    if (thesis.summary_status === "refused") {
+      body.append(
+        el(
+          "p",
+          refusalSummaryMessage(thesis),
+          "text-sm text-base-content/60 leading-relaxed",
+        ),
+      );
+    } else {
+      body.append(
+        el(
+          "p",
+          thesis.raw_output,
+          "text-sm text-base-content/60 leading-relaxed whitespace-pre-wrap",
+        ),
+      );
+    }
     card.append(collapsible("Raw Summary", body, true));
   }
 

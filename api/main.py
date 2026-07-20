@@ -11,6 +11,7 @@ load_dotenv()
 
 import logging  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
+from importlib.metadata import version as _package_version  # noqa: E402
 
 from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
@@ -64,11 +65,22 @@ async def lifespan(app: FastAPI):
     await shutdown_client_pool()
 
 
+# Swagger /docs, ReDoc /redoc, and the /openapi.json schema OFF by default; enabled 
+# only where ENABLE_DOCS is set truthy. Turn it on for dev; leave unset on prod - 
+# gates only the HTTP routes; app.openapi() still works; the CI type-gen 
+# (scripts/dump_openapi.py) unaffected regardless of this flag.
+_docs_enabled = os.getenv("ENABLE_DOCS", "").strip().lower() in ("1", "true", "yes")
+
 app = FastAPI(
     title="FinThesis API",
     description="Fintech market thesis generation and refinement",
-    version="0.2.0",
+    # Single source of truth for the version: pyproject.toml. Bump it there
+    # when tagging a release; Swagger/OpenAPI pick it up from package metadata.
+    version=_package_version("finthesis"),
     lifespan=lifespan,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 # for the frontend to be deployed as a separate origin; the default covers local dev.

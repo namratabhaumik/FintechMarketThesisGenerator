@@ -1,7 +1,7 @@
 // Export/share: plain-text + Markdown document builders, plus the browser-API
 // triggers (clipboard, file download, print) that consume them.
 
-import { fmtDate } from "./format";
+import { fmtDate, refusalSummaryMessage } from "./format";
 import type { JobResponse } from "./types";
 
 function header(job: JobResponse): string[] {
@@ -38,7 +38,7 @@ export function jobToText(job: JobResponse): string {
     lines.push(...job.sources.map((s) => `- ${s.title}${s.url ? ` (${s.url})` : ""}`));
   }
   if (t.raw_output) {
-    lines.push("", "Summary:", t.raw_output);
+    lines.push("", "Summary:", t.summary_status === "refused" ? refusalSummaryMessage(t) : t.raw_output);
   }
   return lines.join("\n");
 }
@@ -71,7 +71,7 @@ export function jobToMarkdown(job: JobResponse): string {
     lines.push(...job.sources.map((s) => (s.url ? `- [${s.title}](${s.url})` : `- ${s.title}`)));
   }
   if (t.raw_output) {
-    lines.push("", "## Summary", "", t.raw_output);
+    lines.push("", "## Summary", "", t.summary_status === "refused" ? refusalSummaryMessage(t) : t.raw_output);
   }
   return lines.join("\n");
 }

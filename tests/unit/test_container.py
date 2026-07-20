@@ -10,6 +10,8 @@ from dependency_injection.container import (
 from config.settings import AppConfig, LLMConfig, EmbeddingConfig, VectorStoreConfig
 from core.interfaces.llm import ILanguageModel
 from core.interfaces.embeddings import IEmbeddingModel
+from finthesis_internal.keyword_scoring_strategy import KeywordCountScoringStrategy
+from finthesis_internal.semantic_scoring_strategy import SemanticScoringStrategy
 
 
 class TestProviderRegistries:
@@ -251,3 +253,45 @@ class TestContainerThreadSafety:
 
             assert build_count == 1
             assert isinstance(container.get_embedding_model(), SlowEmbedding)
+
+
+class TestScoringStrategyWiring:
+    """Guards which scorer each consumer gets.
+
+    Silver must get the embedding-backed semantic scorer; the shared
+    get_scoring_strategy() stays the plain keyword scorer.
+    """
+
+    @pytest.fixture
+    def mock_config(self):
+        config = Mock(spec=AppConfig)
+        config.llm = Mock(spec=LLMConfig)
+        config.embedding = Mock(spec=EmbeddingConfig)
+        config.embedding.provider = "fastembed"
+        config.embedding.model_name = "test-embedding-model"
+        config.embedding.cache_dir = "~/.cache/huggingface"
+        config.vectorstore = Mock(spec=VectorStoreConfig)
+        config.vectorstore.provider = "supabase"
+        config.scraper = Mock()
+        config.rss_feeds = []
+        return config
+
+    def test_get_scoring_strategy_returns_keyword_strategy(self, mock_config):
+        container = ServiceContainer(mock_config)
+        assert isinstance(container.get_scoring_strategy(), KeywordCountScoringStrategy)
+
+    def test_shared_scorer_is_not_the_semantic_one(self, mock_config):
+        """The shared keyword scorer must never be the embedding scorer."""
+        container = ServiceContainer(mock_config)
+        assert not isinstance(container.get_scoring_strategy(), SemanticScoringStrategy)
+
+    def test_get_silver_scoring_strategy_returns_semantic_strategy(self, mock_config):
+        class FakeEmbedding:
+            def __init__(self, config):
+                pass
+
+        with patch.dict(EMBEDDING_PROVIDER_REGISTRY, {"fastembed": FakeEmbedding}):
+            container = ServiceContainer(mock_config)
+            assert isinstance(
+                container.get_silver_scoring_strategy(), SemanticScoringStrategy
+            )

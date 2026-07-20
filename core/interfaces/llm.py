@@ -24,8 +24,14 @@ class ILanguageModel(ABC):
     """Protocol for LLM providers."""
 
     @abstractmethod
-    async def summarize(self, documents: List[Document]) -> str:
-        """Generate summary from documents."""
+    async def summarize(self, documents: List[Document], topic: str = "") -> str:
+        """Generate summary from documents, focused on the user's topic.
+
+        Args:
+            documents: Source documents to summarize.
+            topic: The user's query. Empty means no topic focus (generic
+                fintech summary).
+        """
         pass
 
     @abstractmethod

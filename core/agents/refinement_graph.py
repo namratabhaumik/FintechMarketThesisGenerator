@@ -108,8 +108,9 @@ def _resolve_components(tool_name: str, result: dict, current: StructuredThesis)
     is handled downstream by _score_and_build.
 
     Returns:
-        Tuple (key_themes, risks, investment_signals, sources, raw_output),
-        or None when the tool name is not recognized.
+        Tuple (key_themes, risks, investment_signals, sources, raw_output,
+        summary_status, refusal_reason), or None when the tool name is not
+        recognized.
     """
     if tool_name == "refine_thesis":
         return (
@@ -118,6 +119,8 @@ def _resolve_components(tool_name: str, result: dict, current: StructuredThesis)
             result.get("investment_signals", current.investment_signals),
             result.get("sources", current.sources),
             result.get("raw_output", current.raw_output),
+            result.get("summary_status", current.summary_status),
+            result.get("refusal_reason", current.refusal_reason),
         )
     return None
 
@@ -131,9 +134,10 @@ def _score_and_build(components, current: StructuredThesis) -> StructuredThesis:
     from the current thesis. Only the refined content (narrative + displayed
     tags) is swapped in; key risks follow the refined risk list.
 
-    components is (key_themes, risks, investment_signals, sources, raw_output).
+    components is (key_themes, risks, investment_signals, sources, raw_output,
+    summary_status, refusal_reason).
     """
-    key_themes, risks, investment_signals, sources, raw_output = components
+    key_themes, risks, investment_signals, sources, raw_output, summary_status, refusal_reason = components
     return StructuredThesis(
         key_themes=key_themes,
         risks=risks,
@@ -145,6 +149,8 @@ def _score_and_build(components, current: StructuredThesis) -> StructuredThesis:
         confidence_as_of=current.confidence_as_of,
         recommendation=current.recommendation,
         key_risk_factors=risks[:min(3, len(risks))],
+        summary_status=summary_status,
+        refusal_reason=refusal_reason,
     )
 
 
@@ -172,6 +178,11 @@ def _diff_thesis(current: StructuredThesis, new: StructuredThesis) -> List[str]:
             parts.append("-" + ", ".join(removed))
         if parts:
             changes.append(f"{label}: " + "  ".join(parts))
+    # A round that executed but altered nothing (e.g. a re-refusal) says so
+    # outright instead of leaving the reader to infer it from absent lines.
+    # The UI keys on this exact wording (isNoOpRound in format.ts).
+    if not changes:
+        changes.append("No changes made - the current thesis reflects this feedback")
     changes.append("Score, confidence, recommendation unchanged")
     return changes
 

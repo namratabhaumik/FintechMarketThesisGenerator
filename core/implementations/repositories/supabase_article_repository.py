@@ -1,6 +1,7 @@
 """Supabase-backed raw article store"""
 
 import logging
+import uuid
 from datetime import datetime
 from typing import List
 
@@ -32,8 +33,13 @@ class SupabaseArticleRepository(IArticleRepository):
         self._client = client
 
     def save(self, articles: List[RawArticle]) -> int:
+        # Lineage: one load id per save() (= one ingestion run) stamps every row
+        # this run lands to trace a Bronze row + anything derived from it. 
+        # Re-seen URLs skipped by upsert; they keep the load_id of the run 
+        # that first landed them.
+        load_id = str(uuid.uuid4())
         # each RawArticle --> _to_row() shapes it into a DB dict --> rows.
-        rows = [self._to_row(a) for a in articles]
+        rows = [self._to_row(a, load_id) for a in articles]
         # Empty batch --> nothing to write --> return 0.
         if not rows:
             return 0
@@ -81,11 +87,13 @@ class SupabaseArticleRepository(IArticleRepository):
             summary=row.get("summary", ""),
             source=row.get("source", ""),
             feed_name=row.get("feed_name", ""),
+            load_id=row.get("load_id"),
         )
 
-    def _to_row(self, article: RawArticle) -> dict:
+    def _to_row(self, article: RawArticle, load_id: str) -> dict:
         # RawArticle model --> DB dict matching the Bronze columns; datetime is
-        # serialized to an ISO string for storage.
+        # serialized to an ISO string for storage. load_id tags the ingestion
+        # run that landed this row (see save()).
         return {
             "url": article.url,
             "feed_name": article.feed_name,
@@ -93,4 +101,5 @@ class SupabaseArticleRepository(IArticleRepository):
             "title": article.title,
             "summary": article.summary,
             "published_at": article.published_at.isoformat(),
+            "load_id": load_id,
         }

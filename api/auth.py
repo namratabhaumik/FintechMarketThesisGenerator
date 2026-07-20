@@ -123,6 +123,7 @@ class AuthUser:
     """The authenticated caller."""
     id: str      # Supabase user UUID (JWT `sub`)
     token: str   # raw access token, forwarded to PostgREST so RLS sees auth.uid()
+    role: str = "user"  # JWT app_metadata.role; RLS re-checks this independently
 
 
 def get_current_user(authorization: str | None = Header(default=None)) -> AuthUser:
@@ -147,7 +148,16 @@ def get_current_user(authorization: str | None = Header(default=None)) -> AuthUs
     sub = claims.get("sub")
     if not sub:
         raise _unauthorized("Token has no subject")
-    return AuthUser(id=sub, token=token)
+    role = (claims.get("app_metadata") or {}).get("role", "user")
+    return AuthUser(id=sub, token=token, role=role)
+
+
+def require_admin(user: AuthUser = Depends(get_current_user)) -> AuthUser:
+    """Gate for admin-only endpoints; a check on the JWT claim; RLS policies 
+    re-check the role at the DB layer independently."""
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail={"code": "forbidden", "message": "Admin role required"})
+    return user
 
 
 async def get_user_job_manager(

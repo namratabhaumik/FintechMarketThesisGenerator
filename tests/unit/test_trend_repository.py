@@ -66,13 +66,21 @@ class _FakeClient:
         return _FakeTable(self.store)
 
 
-def _m(week, dimension, category, count):
+def _m(week, dimension, category, count, load_ids=None):
     return TrendMetric(
         week_start=date.fromisoformat(week),
         dimension=dimension,
         category=category,
         article_count=count,
+        load_ids=load_ids or [],
     )
+
+
+def test_upsert_and_fetch_all_round_trips_load_ids():
+    """Lineage: the contributing Bronze loads are written and read back."""
+    repo = SupabaseTrendRepository(_FakeClient())
+    repo.upsert([_m("2026-01-05", "theme", "Payments", 3, load_ids=["load-A", "load-B"])])
+    assert repo.fetch_all()[0].load_ids == ["load-A", "load-B"]
 
 
 def test_upsert_and_fetch_all():
@@ -88,6 +96,26 @@ def test_upsert_and_fetch_all():
         (date(2026, 1, 5), "theme", "Payments"): 2,
         (date(2026, 1, 5), "risk", "Regulatory Risk"): 1,
     }
+
+
+def test_upsert_stamps_computed_at_and_refreshes_it():
+    """Every bucket in one recompute shares a computed_at (lineage: which run
+    produced the count), and a later recompute overwrites it with a fresh one."""
+    client = _FakeClient()
+    repo = SupabaseTrendRepository(client)
+
+    repo.upsert([
+        _m("2026-01-05", "theme", "Payments", 2),
+        _m("2026-01-05", "risk", "Regulatory Risk", 1),
+    ])
+    stamps = {r["computed_at"] for r in client.store.values()}
+    assert len(stamps) == 1  # one timestamp across the whole recompute
+    first = stamps.pop()
+    assert first is not None
+
+    repo.upsert([_m("2026-01-05", "theme", "Payments", 5)])
+    refreshed = client.store[("2026-01-05", "theme", "Payments")]["computed_at"]
+    assert refreshed >= first  # recompute refreshed the provenance stamp
 
 
 def test_upsert_overwrites_existing_count():

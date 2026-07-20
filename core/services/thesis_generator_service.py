@@ -159,6 +159,14 @@ class ThesisGeneratorService:
     from the retrieved docs' Silver tags
     """
 
+    # Deterministic pre-LLM refusal floor for the summarize step: stricter than
+    # the >0-per-dimension guard in api/routes.py's insufficient_evidence check
+    # (which already ran before generate_thesis is called), so this only bites
+    # when a dimension barely cleared that guard on a single incidental tag hit.
+    MIN_THEME_STRENGTH_FOR_SUMMARY = 3
+    MIN_RISK_STRENGTH_FOR_SUMMARY = 2
+    MIN_SIGNAL_STRENGTH_FOR_SUMMARY = 2
+
     def __init__(
         self,
         llm: ILanguageModel,
@@ -202,27 +210,60 @@ class ThesisGeneratorService:
         """
         logger.info(f"Generating thesis for topic: {topic}")
 
-        # Step 1: Summarize documents. This is the ONLY LLM call - it writes the
+        # Step 1: Compute Silver tag strengths up front to gate the LLM
+        # call deterministically; reused for scoring at Step 4.
+        signal_strength, theme_strength, risk_strength = _tag_strengths_from_documents(
+            documents
+        )
+
+        # Step 2: Summarize documents. This is the ONLY LLM call - it writes the
         # narrative prose (raw_output); it does not decide the structured tags.
-        # Reset provenance first: if the local extractive fallback ends up
-        # producing the text (outage, cost limit, routing, cached local
-        # response), it flips this to "local" and the thesis records it.
-        logger.info("Step 1: Summarizing retrieved documents...")
-        summary_source_var.set(SOURCE_LLM)
-        summary = await self._llm.summarize(documents)
-        summary_source = summary_source_var.get()
+        # Below the tag-strength floor, the retrieved evidence is too thin for
+        # this specific query to trust the LLM to write a grounded narrative, so
+        # skip the call entirely (see summary_status="refused" for the fallback
+        # path where the model itself declines despite clearing this floor).
+        if (
+            theme_strength < self.MIN_THEME_STRENGTH_FOR_SUMMARY
+            or risk_strength < self.MIN_RISK_STRENGTH_FOR_SUMMARY
+            or signal_strength < self.MIN_SIGNAL_STRENGTH_FOR_SUMMARY
+        ):
+            logger.info(
+                "Step 2: Tag strength below floor "
+                f"(theme={theme_strength}, risk={risk_strength}, signal={signal_strength}); "
+                "skipping LLM summarize call"
+            )
+            summary = "REFUSED: "
+            summary_status = "refused"
+            summary_source = SOURCE_LLM
+            refusal_reason: Optional[str] = "tag_strength_floor"
+        else:
+            # Reset provenance first: if the local extractive fallback ends up
+            # producing the text (outage, cost limit, routing, cached local
+            # response), it flips this to "local" and the thesis records it.
+            logger.info("Step 2: Summarizing retrieved documents...")
+            summary_source_var.set(SOURCE_LLM)
+            summary = await self._llm.summarize(documents, topic)
+            summary_source = summary_source_var.get()
 
-        if not summary:
-            logger.error("Empty summary returned by LLM")
-            raise RuntimeError("Failed to generate summary")
+            if not summary:
+                logger.error("Empty summary returned by LLM")
+                raise RuntimeError("Failed to generate summary")
 
-        # Step 2: Derive the structured tags - still deterministic, no LLM.
+            summary_status = "refused" if summary.startswith("REFUSED:") else "ok"
+            refusal_reason = "llm_judgment" if summary_status == "refused" else None
+            if summary_status == "refused":
+                logger.info(
+                    f"Step 2: LLM self-refused for topic '{topic}' despite "
+                    "clearing the tag-strength floor"
+                )
+
+        # Step 3: Derive the structured tags - still deterministic, no LLM.
         # Previously this keyword-scanned the LLM summary above; now it
         # frequency-ranks the Silver tags already carried in each retrieved
         # chunk's metadata (matched on the raw article text at Silver time). Same
         # determinism, but grounded in what the source articles reported rather
         # than in the LLM's prose.
-        logger.info("Step 2: Deriving grounded tags from retrieved documents...")
+        logger.info("Step 3: Deriving grounded tags from retrieved documents...")
         ranked_themes, ranked_risks, ranked_signals = _ranked_tags_from_documents(
             documents
         )
@@ -230,18 +271,15 @@ class ThesisGeneratorService:
         risks = ranked_risks[: self._max_tags]
         investment_signals = ranked_signals[: self._max_tags]
 
-        # Step 3: Extract sources from document metadata
-        logger.info("Step 3: Extracting sources from documents...")
+        # Step 4: Extract sources from document metadata
+        logger.info("Step 4: Extracting sources from documents...")
         sources = [doc.metadata["url"] for doc in documents if doc.metadata.get("url")]
 
-        # Step 4: Score from the grounded Silver tag strengths; ground confidence
-        # in Gold trend coverage for the thesis's categories. 
-        # The confidence window is the retrieval window in weeks (None = whole corpus). 
+        # Step 5: Score from the Silver tag strengths computed at Step 1; ground
+        # confidence in Gold trend coverage for the thesis's categories.
+        # The confidence window is the retrieval window in weeks (None = whole corpus).
         # The as-of date is the latest Gold week.
-        logger.info("Step 4: Scoring (score<-Silver strengths, confidence<-Gold coverage)...")
-        signal_strength, theme_strength, risk_strength = _tag_strengths_from_documents(
-            documents
-        )
+        logger.info("Step 5: Scoring (score<-Silver strengths, confidence<-Gold coverage)...")
         window_weeks = (
             None if self._retrieval_window_days <= 0
             else max(1, round(self._retrieval_window_days / 7))
@@ -279,6 +317,8 @@ class ThesisGeneratorService:
             recommendation=score_result["recommendation"],
             key_risk_factors=score_result["key_risks"],
             summary_source=summary_source,
+            summary_status=summary_status,
+            refusal_reason=refusal_reason,
         )
 
     async def refine_thesis(
@@ -313,14 +353,30 @@ class ThesisGeneratorService:
         """
         logger.info(f"Refining thesis for topic: {topic} based on {len(feedback_items)} feedback items")
 
-        # Step 1: Get refined summary from LLM using feedback
+        # Step 1: Get refined summary from LLM using feedback. A "tag_strength_floor"
+        # refusal is evidence-invariant - refinement reuses the same `documents`
+        # every round (never re-retrieves), so the floor would fail identically
+        # again; skip the call and keep the refusal as-is. An "llm_judgment"
+        # refusal is a soft call the LLM made on its own - new feedback may
+        # change it, so retry and let the refine prompt decide again.
         current_thesis_text = current_thesis.raw_output or ""
-        logger.info("Step 1: Refining thesis with LLM feedback...")
-        refined_summary = await self._llm.refine(documents, current_thesis_text, feedback_items)
+        summary_status = current_thesis.summary_status
+        refusal_reason = current_thesis.refusal_reason
+        if summary_status == "refused" and refusal_reason == "tag_strength_floor":
+            logger.info("Step 1: Original summary failed the tag-strength floor; skipping rewrite")
+            refined_summary = current_thesis_text
+        else:
+            logger.info("Step 1: Refining thesis with LLM feedback...")
+            refined_summary = await self._llm.refine(documents, current_thesis_text, feedback_items)
 
-        if not refined_summary:
-            logger.error("Empty refined summary returned by LLM")
-            raise RuntimeError("Failed to refine thesis")
+            if not refined_summary:
+                logger.error("Empty refined summary returned by LLM")
+                raise RuntimeError("Failed to refine thesis")
+
+            summary_status = "refused" if refined_summary.startswith("REFUSED:") else "ok"
+            refusal_reason = "llm_judgment" if summary_status == "refused" else None
+            if summary_status == "refused":
+                logger.info(f"Step 1: LLM self-refused again on refinement for topic '{topic}'")
 
         # Step 2: Derive grounded tags from the retrieved docs; apply the
         # quantitative effect of the feedback via the planner-LLM-proposed
@@ -345,4 +401,6 @@ class ThesisGeneratorService:
             investment_signals=investment_signals,
             sources=sources,
             raw_output=refined_summary,
+            summary_status=summary_status,
+            refusal_reason=refusal_reason,
         )

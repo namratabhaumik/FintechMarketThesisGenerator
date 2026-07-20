@@ -77,11 +77,12 @@ class LLMWrapper(ILanguageModel):
             **kwargs,
         )
 
-    async def summarize(self, documents: List[Document]) -> str:
+    async def summarize(self, documents: List[Document], topic: str = "") -> str:
         """Summarize documents with retry logic and fallback.
 
         Args:
             documents: List of LangChain Document objects.
+            topic: The user's query; passed through to whichever LLM serves.
 
         Returns:
             Summarized text from either primary or fallback LLM.
@@ -92,7 +93,7 @@ class LLMWrapper(ILanguageModel):
         try:
             async for attempt in self._make_retrying():
                 with attempt:
-                    result = await self._primary_llm.summarize(documents)
+                    result = await self._primary_llm.summarize(documents, topic)
             logger.info("Primary LLM summarization succeeded")
             return result
         except Exception:
@@ -101,7 +102,7 @@ class LLMWrapper(ILanguageModel):
                 f"Falling back to {self._fallback_llm.get_model_name()}"
             )
             try:
-                result = await self._fallback_llm.summarize(documents)
+                result = await self._fallback_llm.summarize(documents, topic)
                 logger.info("Fallback LLM summarization succeeded")
                 return result
             except Exception as e:

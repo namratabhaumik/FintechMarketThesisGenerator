@@ -224,10 +224,21 @@ class TestThesisGeneratorService:
         scoring_service = OpportunityScoringService()
         service = ThesisGeneratorService(mock_llm, scoring_service, _empty_trend())
 
-        docs = [Document(page_content="Digital banking is the future", metadata={"url": "http://test.com"})]
+        # Tag strength must clear the deterministic gate-2 floor (see
+        # MIN_*_STRENGTH_FOR_SUMMARY) or generate_thesis skips mock_llm.summarize
+        # entirely and this test would pass without ever exercising it.
+        docs = [Document(page_content="Digital banking is the future", metadata={
+            "url": "http://test.com",
+            "themes": ["Digital Banking"] * 3,
+            "risks": ["Regulatory Risk"] * 2,
+            "signals": ["Payment Infrastructure"] * 2,
+        })]
         thesis = asyncio.run(service.generate_thesis("Digital Banking", docs))
 
+        # Content reflects MockLanguageModel's actual return value - proves the
+        # mock was called, not just that raw_output is non-empty.
         assert thesis.raw_output is not None
+        assert thesis.raw_output.startswith("Mock summary:")
         assert thesis.sources == ["http://test.com"]
         # A plain LLM summary carries the default provenance.
         assert thesis.summary_source == "llm"
@@ -242,14 +253,22 @@ class TestThesisGeneratorService:
 
         llm = Mock()
 
-        async def local_summarize(documents):
+        async def local_summarize(documents, topic=""):
             summary_source_var.set(SOURCE_LOCAL)
             return "extractive summary"
 
         llm.summarize = local_summarize
         service = ThesisGeneratorService(llm, OpportunityScoringService(), _empty_trend())
 
-        docs = [Document(page_content="x", metadata={"url": "http://test.com"})]
+        # Tag strength must clear the deterministic gate-2 floor (see
+        # MIN_*_STRENGTH_FOR_SUMMARY) or generate_thesis skips the summarize
+        # call entirely and never reaches this mock's local-fallback branch.
+        docs = [Document(page_content="x", metadata={
+            "url": "http://test.com",
+            "themes": ["Digital Banking"] * 3,
+            "risks": ["Regulatory Risk"] * 2,
+            "signals": ["Payment Infrastructure"] * 2,
+        })]
         thesis = asyncio.run(service.generate_thesis("Digital Banking", docs))
 
         assert thesis.summary_source == "local"

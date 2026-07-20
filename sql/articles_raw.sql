@@ -16,9 +16,13 @@ create table if not exists articles_raw (
     title         text        not null,
     summary       text        not null default '',
     published_at  timestamptz not null,
-    fetched_at    timestamptz not null default now()
+    fetched_at    timestamptz not null default now(),
+    load_id       uuid
 );
 
 -- Trend aggregation reads by publish time; newest-first is the common scan.
 create index if not exists articles_raw_published_at_idx
     on articles_raw (published_at desc);
+
+-- Migration for an existing table:
+--   alter table articles_raw add column if not exists load_id uuid;

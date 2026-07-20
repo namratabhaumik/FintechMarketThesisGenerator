@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Optional
 
 
 @dataclass
@@ -18,6 +19,9 @@ class RawArticle:
     summary: str = ""   # The short RSS blurb (not the full article text).
     source: str = ""    # Domain the link points to.
     feed_name: str = ""  # Which configured feed this entry came from (provenance).
+    # Lineage: the ingestion run that landed this row (set at save time). Carried
+    # forward into Silver so derived rows trace back to their load.
+    load_id: Optional[str] = None
 
     def __post_init__(self):
         # Guard the two fields nothing downstream can work without: a title to

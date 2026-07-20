@@ -17,7 +17,11 @@ create table if not exists article_content (
     text          text        not null,
     source        text        not null,
     published_at  timestamptz not null,
-    created_at    timestamptz not null default now()
+    created_at    timestamptz not null default now(),
+    load_id       uuid
 );
 
 alter table article_content enable row level security;
+
+-- Migration for an existing table:
+--   alter table article_content add column if not exists load_id uuid;

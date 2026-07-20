@@ -19,6 +19,9 @@ class Article:
     source: str         # Where it came from (e.g. the site's domain).
     published_at: datetime  # When it was published; used to place it on the time axis.
     url: Optional[str] = None  # Canonical link; optional because some sources lack one.
+    # Lineage: the Bronze ingestion run this article originated from, carried
+    # through from the RawArticle.
+    load_id: Optional[str] = None
 
     def __post_init__(self):
         """Reject half-formed articles at construction time.

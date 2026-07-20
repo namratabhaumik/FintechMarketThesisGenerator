@@ -63,6 +63,17 @@ def test_save_and_fetch_all_round_trips():
     assert out["https://x/1"].published_at == PUB
 
 
+def test_save_and_fetch_all_round_trips_load_id():
+    """Lineage: the Bronze load_id is written and read back on the Article."""
+    repo = SupabaseArticleContentRepository(_FakeClient())
+    article = Article(
+        title="T", text="body", source="x.com", url="https://x/1",
+        published_at=PUB, load_id="load-1",
+    )
+    repo.save([article])
+    assert repo.fetch_all()[0].load_id == "load-1"
+
+
 def test_save_dedupes_by_url():
     repo = SupabaseArticleContentRepository(_FakeClient())
     repo.save([_article("https://x/1")])
