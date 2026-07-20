@@ -28,7 +28,12 @@ When the round completes, the thesis re-renders in place and two panels record w
 - **Previous versions** - a snapshot of the thesis as it was before the round, with its score, recommendation, and the feedback reasons that drove the change. One entry per executed round.
 - **Execution Trace** - which agent tool actually ran, its status, and the changes it reported. This is the audit trail for "what did the agent actually do".
 
-A round can also come back with the thesis unchanged - most commonly when the narrative was refused and the sources still cannot support one, so the agent re-confirms the existing state rather than inventing a change. The round still counts against the cap and still records a version and a trace entry: the history logs every round the agent ran, not only the ones that altered the thesis. Such a round is labeled "No changes made" in the Execution Trace and in the status note after refining.
+A round can also come back with the thesis unchanged. The round still counts against the cap and still records a version and a trace entry: the history logs every round the agent ran, not only the ones that altered the thesis. Such a round is labeled "No changes made" in the Execution Trace and in the status note after refining.
+
+Whether a no-op is likely depends on *why* the current thesis is the way it is:
+
+- **Refining a [narrative-refused](../concepts/refusals.md) thesis often succeeds.** If the Raw Summary shows "the sources touch on related fintech topics but don't specifically address this query", that refusal was the model's own judgment call on that attempt - refinement reruns the narrative with your feedback added to the prompt, over the same sources.
+- **Refining a thin-evidence refusal is a guaranteed no-op.** If the Raw Summary instead says "the sources didn't give us enough to write a reliable narrative", that refusal came from a deterministic check on the retrieved evidence, not the model's judgment. Refinement never re-retrieves - it reuses the same documents every round - so this outcome cannot change; the round will report "No changes made" every time. Broaden or rephrase the original query instead.
 
 If the agent ever attempts to call a tool that does not exist, a **Hallucinations Detected** panel appears listing the invalid calls. Its absence is the normal case.
 

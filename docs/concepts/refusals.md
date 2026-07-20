@@ -28,15 +28,19 @@ This typically happens on narrow or emerging sub-topics where the corpus has cov
 
 ## 3. Narrative refusal (thesis still delivered)
 
-Sometimes a thesis *is* generated, but the Raw Summary section contains a refusal instead of a narrative, in one of two flavors:
+Sometimes a thesis *is* generated, but the Raw Summary section contains a refusal instead of a narrative. The retrieved evidence passed the deterministic dimension check, but the summarizer judged it could not honestly answer your *specific question* in prose. The structured sections below come from ingestion-time tags rather than from the LLM, so they remain trustworthy and are shown anyway. There are two flavors, and they call for different next steps.
+
+**3a. The LLM declined on its own judgment:**
 
 > "The sources touch on related fintech topics but don't specifically address this query - but the N themes, N risks and N signals below are grounded in the same sources and worth reviewing directly."
 
+This is a soft, per-attempt call - the same evidence can read differently to the model on a second pass, especially with feedback attached. **What to do:** read the structured sections directly, sharpen/modify the query for a fresh thesis, *or* [refine](../guides/refining-a-thesis.md) the existing one - the refinement agent retries the narrative with your feedback in the prompt, and can generate a summary where the first pass declined.
+
+**3b. The evidence itself is thin:**
+
 > "The sources didn't give us enough to write a reliable narrative for this query - but the ... below are grounded in the same sources and worth reviewing directly."
 
-The retrieved evidence passed the dimension check, but the summarizer judged it could not honestly answer your *specific question* in prose. The structured sections come from ingestion-time tags rather than from the LLM, so they remain trustworthy and are shown anyway.
-
-**What to do:** read the themes, risks, and signals directly - they are the grounded core - or sharpen the query so the narrative can commit.
+This is a deterministic floor checked before the narrative attempt, evaluated on the same retrieved documents every round. Refining reuses those same documents, so it cannot change this outcome - a refinement round on this thesis makes no changes and says so explicitly. **What to do:** read the structured sections directly, or broaden/reframe the query to retrieve richer evidence.
 
 ## Fallback: local summarizer
 
@@ -52,5 +56,6 @@ This is a degraded mode, not a refusal: the narrative is stitched from extracted
 | --- | --- | --- | --- |
 | No relevant documents | No | Corpus has nothing on this | Different or broader topic |
 | Insufficient tagged evidence | No | Evidence does not span themes + risks + signals | Broaden or reframe |
-| Narrative refusal | Yes | Sources do not address the specific question | Use the structured sections; sharpen the query |
+| Narrative refusal (LLM judgment) | Yes | Model declined this specific question on its own | Use the structured sections; sharpen the query, or refine - retrying can succeed |
+| Narrative refusal (thin evidence) | Yes | Deterministic floor on the retrieved evidence | Use the structured sections; refining will not help - broaden or reframe |
 | Local summarizer | Yes | LLM unavailable | Regenerate later if narrative matters |

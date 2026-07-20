@@ -26,6 +26,8 @@ _YEAR_RANGE_RE = re.compile(
 # forms are \b-anchored so they don't split inside a token; maxsplit keeps it
 # to the first connective.
 _RANGE_SPLIT_RE = re.compile(r"\s*(?:-|–|\bto\b|\bthrough\b|\band\b)\s*")
+# Shorthand two-digit year range ("2023-24", fiscal-year style)
+_SHORT_YEAR_RANGE_RE = re.compile(r"\b((?:19|20)\d{2})\s*(?:-|–)\s*(\d{2})\b")
 
 
 def _calendar_year_range(
@@ -142,6 +144,17 @@ def parse_date_intent(
                     "falling back to default window"
                 )
                 return None
+
+    # Shorthand two-digit year range ("2023-24"),century rolls over
+    # when the pair is smaller than the leading year's own last two digits
+    # (e.g. "1999-00" -> 1999-2000).
+    short_match = _SHORT_YEAR_RANGE_RE.search(span)
+    if short_match:
+        y0 = int(short_match.group(1))
+        y1 = (y0 // 100) * 100 + int(short_match.group(2))
+        if y1 < y0:
+            y1 += 100
+        return _calendar_year_range(y0, y1, now)
 
     # Explicit range within the entity span ("2023-2024", "between 2022 and
     # 2024", "March 2022 to June 2024"). Split on the connective and resolve
