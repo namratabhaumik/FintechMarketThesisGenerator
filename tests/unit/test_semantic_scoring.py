@@ -5,8 +5,6 @@ per-article z-score lands each case on the intended add/veto decision. No model
 download, no network.
 """
 
-import pytest
-
 from finthesis_internal.keyword_scoring_strategy import KeywordCountScoringStrategy
 from finthesis_internal.semantic_scoring_strategy import SemanticScoringStrategy
 from core.interfaces.embeddings import IEmbeddingModel
