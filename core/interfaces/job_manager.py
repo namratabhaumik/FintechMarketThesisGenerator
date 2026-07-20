@@ -3,8 +3,6 @@
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
-from api.schemas import JobStatus
-
 
 class IJobManager(ABC):
     """Protocol for thesis generation job storage.
@@ -26,13 +24,6 @@ class IJobManager(ABC):
     @abstractmethod
     async def get_job(self, job_id: str) -> Optional[Any]:
         """Fetch a job by ID. Returns None if not found."""
-        pass
-
-    @abstractmethod
-    async def update_status(
-        self, job_id: str, status: JobStatus, progress: Optional[str] = None
-    ) -> None:
-        """Update job status and optional progress message."""
         pass
 
     @abstractmethod
@@ -59,12 +50,24 @@ class IJobManager(ABC):
         limit: Optional[int] = None,
         offset: int = 0,
         status: Optional[str] = None,
+        user_id: Optional[str] = None,
+        exclude_user_id: Optional[str] = None,
     ) -> list:
         """List jobs, most recent first.
 
         limit/offset paginate at the storage layer (limit=None returns all);
-        status filters by refinement_status.
+        status filters by refinement_status. user_id restricts to one owner:
+        redundant with RLS for a normal caller, but the only way to scope an
+        admin (whose RLS sees every row) back to their own jobs.
+        exclude_user_id is the inverse - drop one owner's rows (the admin's own,
+        so the cross-user view doesn't duplicate their personal library).
         """
+        pass
+
+    @abstractmethod
+    async def delete_job(self, job_id: str) -> None:
+        """Delete a job by ID. No-op if it doesn't exist (or isn't visible to
+        the caller under RLS)."""
         pass
 
     @abstractmethod

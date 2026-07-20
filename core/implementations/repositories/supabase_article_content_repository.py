@@ -41,6 +41,7 @@ class SupabaseArticleContentRepository(IArticleContentRepository):
                 "source": a.source,
                 # Supabase wants a string, so the datetime is serialized to ISO.
                 "published_at": a.published_at.isoformat(),
+                "load_id": a.load_id,
             }
             for a in articles
         ]
@@ -72,6 +73,7 @@ class SupabaseArticleContentRepository(IArticleContentRepository):
                 source=row["source"],
                 url=row["url"],
                 published_at=datetime.fromisoformat(row["published_at"]),
+                load_id=row.get("load_id"),
             )
             for row in rows
         ]

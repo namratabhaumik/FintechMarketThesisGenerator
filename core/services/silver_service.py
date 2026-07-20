@@ -156,7 +156,11 @@ class SilverService:
 
             consecutive_errors = 0  # a success breaks the failure streak
             if not relevant:  # real NO -> frozen rejected verdict
-                batch.verdicts.append(SilverVerdict(url=raw.url, fintech_relevant=False))
+                batch.verdicts.append(
+                    SilverVerdict(
+                        url=raw.url, fintech_relevant=False, load_id=raw.load_id
+                    )
+                )
                 continue
 
             # real YES -> enrich + embed
@@ -190,6 +194,7 @@ class SilverService:
                     themes=themes,
                     risks=risks,
                     signals=signals,
+                    load_id=raw.load_id,
                 )
             )
         return batch
@@ -260,6 +265,7 @@ class SilverService:
                 source=raw.source,
                 url=raw.url,
                 published_at=raw.published_at,
+                load_id=raw.load_id,
             )
         except ValueError as e:
             quarantined.append(

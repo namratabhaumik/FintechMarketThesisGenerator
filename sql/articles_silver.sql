@@ -16,10 +16,14 @@ create table if not exists articles_silver (
     themes            jsonb       not null default '[]'::jsonb,
     risks             jsonb       not null default '[]'::jsonb,
     signals           jsonb       not null default '[]'::jsonb,
-    processed_at      timestamptz not null default now()
+    processed_at      timestamptz not null default now(),
+    load_id           uuid
 );
 
 alter table articles_silver enable row level security;
+
+-- Migration for an existing table:
+--   alter table articles_silver add column if not exists load_id uuid;
 
 -- Migration for an existing table (created before themes existed):
 --   alter table articles_silver add column if not exists themes jsonb not null default '[]'::jsonb;

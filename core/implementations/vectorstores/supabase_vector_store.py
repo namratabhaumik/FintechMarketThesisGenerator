@@ -150,10 +150,14 @@ class SupabaseVectorStoreImpl(IVectorStore):
             k=min(k, len(rows)),
             lambda_mult=lambda_mult,
         )
+        # Carry the query-to-chunk similarity into metadata
         return [
             Document(
                 page_content=rows[i].get("content", ""),
-                metadata=rows[i].get("metadata") or {},
+                metadata={
+                    **(rows[i].get("metadata") or {}),
+                    "similarity": round(float(rows[i].get("similarity") or 0.0), 4),
+                },
             )
             for i in selected
         ]

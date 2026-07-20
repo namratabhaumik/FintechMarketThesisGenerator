@@ -93,6 +93,31 @@ def test_buckets_by_week_dimension_and_category_excluding_non_fintech():
     assert written == len(trend_repo.upserted)
 
 
+def test_bucket_carries_distinct_contributing_load_ids():
+    """Lineage: each Gold bucket records the DISTINCT Bronze loads that fed it -
+    two articles from the same load collapse to one id; different loads both show."""
+    def _raw_load(url, day, load_id):
+        return Article(title="t", text="body", url=url, source="x.com",
+                       published_at=datetime(2026, 1, day, tzinfo=timezone.utc),
+                       load_id=load_id)
+
+    articles = [
+        _raw_load("https://x/1", 5, "load-A"),
+        _raw_load("https://x/2", 7, "load-A"),  # same week+theme, same load
+        _raw_load("https://x/3", 6, "load-B"),  # same week+theme, different load
+    ]
+    tags = {u: _tags(themes=["Payments"]) for u in ("https://x/1", "https://x/2", "https://x/3")}
+    trend_repo = _FakeTrendRepo()
+    _service(articles, tags, trend_repo).build()
+
+    bucket = next(
+        m for m in trend_repo.upserted
+        if (m.week_start, m.dimension, m.category) == (date(2026, 1, 5), "theme", "Payments")
+    )
+    assert bucket.article_count == 3          # three articles
+    assert bucket.load_ids == ["load-A", "load-B"]  # two distinct loads, sorted
+
+
 def test_same_week_dimension_category_accumulates():
     articles = [_raw("https://x/1", 5), _raw("https://x/2", 7)]
     tags = {

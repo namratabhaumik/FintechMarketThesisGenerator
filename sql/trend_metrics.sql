@@ -16,10 +16,19 @@ create table if not exists trend_metrics (
     dimension      text    not null,
     category       text    not null,
     article_count  integer not null,
+    computed_at    timestamptz,
+
+    load_ids       uuid[] not null default '{}',
     primary key (week_start, dimension, category)
 );
 
 alter table trend_metrics enable row level security;
+
+-- Migration for an existing table (add the provenance columns):
+--   alter table trend_metrics add column if not exists computed_at timestamptz;
+--   alter table trend_metrics add column if not exists load_ids uuid[] not null default '{}';
+-- Trace a bucket back to its loads: unnest(load_ids); find buckets a bad load
+-- touched: where '<load-uuid>' = any(load_ids).
 
 -- Migration from the theme-only schema (PK was (week_start, theme)). The table
 -- is recomputed from Silver every Gold run, so the simplest path is to drop and

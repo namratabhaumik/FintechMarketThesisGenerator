@@ -1,7 +1,8 @@
 """Trend metric model"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
+from typing import List
 
 
 @dataclass
@@ -20,6 +21,7 @@ class TrendMetric:
     dimension: str      # Which tag dimension: "theme", "risk", or "signal".
     category: str       # The specific label within that dimension.
     article_count: int  # How many fintech articles that week carried this category.
+    load_ids: List[str] = field(default_factory=list) # distinct Bronze ingestion runs whose articles fed this count.
 
     def __post_init__(self):
         # A metric needs both a dimension and a category to be meaningful, and a

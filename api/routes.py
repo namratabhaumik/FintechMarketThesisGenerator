@@ -16,7 +16,7 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
-from api.auth import get_user_job_manager
+from api.auth import AuthUser, get_current_user, get_user_job_manager, require_admin
 from api.deps import get_container
 from api.security import (
     GENERATE_LIMIT,
@@ -25,7 +25,6 @@ from api.security import (
 )
 from api.schemas import (
     JobResponse,
-    JobStatus,
     RefinementRequest,
     RefinementStatus,
     RelatedThesisResponse,
@@ -72,6 +71,8 @@ def _thesis_to_response(thesis) -> ThesisResponse:
         recommendation=thesis.recommendation,
         key_risk_factors=thesis.key_risk_factors,
         summary_source=thesis.summary_source,
+        summary_status=thesis.summary_status,
+        refusal_reason=thesis.refusal_reason,
     )
 
 
@@ -95,6 +96,10 @@ def _sources_from_docs(docs) -> List[SourceResponse]:
                     title=meta.get("title") or "Untitled",
                     url=url or None,
                     published_at=meta.get("published_at"),
+                    # Dedupe keeps the first chunk per URL in MMR order, i.e.
+                    # the article's most relevant selected chunk - its
+                    # similarity stands for the source.
+                    similarity=meta.get("similarity"),
                 )
             )
         except Exception:
@@ -125,9 +130,7 @@ async def _job_to_response(
     return JobResponse(
         job_id=job.id,
         query=job.query,
-        status=job.status,
         created_at=job.created_at,
-        error=job.error,
         thesis=_thesis_to_response(job.thesis) if job.thesis else None,
         thesis_history=[_thesis_to_response(t) for t in job.thesis_history],
         refinement_count=job.refinement_count,
@@ -138,6 +141,7 @@ async def _job_to_response(
         sources=_sources_from_docs(job.retrieved_docs),
         related_theses=await _related_for(job, jm),
         hallucination=hallucination,
+        user_id=getattr(job, "user_id", None),
     )
 
 
@@ -229,9 +233,8 @@ async def create_thesis(
         raise _error(
             422,
             "insufficient_evidence",
-            "The retrieved sources don't cover themes, risks, and investment "
-            "signals for this query, so a complete thesis can't be built. Try a "
-            "broader or more established fintech topic.",
+            "The sources retrieved for this specific query don't span themes, "
+            "risks, and investment signals together. Try broadening the query.",
         )
 
     try:
@@ -242,11 +245,10 @@ async def create_thesis(
 
     try:
         # One atomic insert with the full completed state: a failure (or crash)
-        # here creates NO row, so a half-written pending job can never appear
-        # in the library.
+        # here creates NO row, so a half-written job can never appear in the
+        # library.
         job = await jm.create_job(
             query,
-            status=JobStatus.COMPLETED,
             thesis=thesis,
             retrieved_docs=docs,
             refinement_count=0,
@@ -273,25 +275,49 @@ async def list_theses(
     status: Optional[RefinementStatus] = Query(
         None, description="Filter by refinement_status (e.g. 'refining' for the resume picker)"
     ),
+    all_users: bool = Query(
+        False,
+        alias="all",
+        description="Admin only: list every user's theses instead of just the caller's",
+    ),
+    user: AuthUser = Depends(get_current_user),
     jm: IJobManager = Depends(get_user_job_manager),
 ):
     """List thesis jobs, most recent first (slim representations).
 
-    Pagination + optional status filter applied in db
+    Scoped to the caller's own jobs by default. An admin may pass all=true to
+    list every user's jobs (the RLS admin policy already grants the read; this
+    just drops the explicit per-owner filter). A non-admin asking for all=true
+    is refused rather than silently narrowed.
+
+    Pagination + optional status filter applied in db.
     """
+    if all_users and user.role != "admin":
+        raise _error(403, "forbidden", "Admin role required to list all users' theses")
+    # Own view: scope to the caller. Admin all view: every OTHER user's rows,
+    # excluding the caller's own so it doesn't duplicate their personal library
+    # above it.
+    owner_filter = None if all_users else user.id
+    exclude_filter = user.id if all_users else None
     status_value = status.value if status else None
-    jobs = await jm.list_jobs(limit=limit, offset=offset, status=status_value)
+    jobs = await jm.list_jobs(
+        limit=limit,
+        offset=offset,
+        status=status_value,
+        user_id=owner_filter,
+        exclude_user_id=exclude_filter,
+    )
     return [
         ThesisSummaryResponse(
             job_id=j.id,
             query=j.query,
-            status=j.status,
             created_at=j.created_at,
             refinement_count=j.refinement_count,
             refinement_status=j.refinement_status,
             approved_at=j.approved_at,
             opportunity_score=j.thesis.opportunity_score if j.thesis else None,
             recommendation=j.thesis.recommendation if j.thesis else None,
+            user_id=getattr(j, "user_id", None),
         )
         for j in jobs
     ]
@@ -359,11 +385,14 @@ async def create_refinement(
     hallucination = detector.analyze(result_state.get("messages", []))
 
     # Snapshot the pre-refinement thesis into history (the Previous Versions
-    # panel) only when this round actually changed it. Escalate and skip
-    # rounds leave the thesis as-is; snapshotting those would persist a
-    # duplicate "version" identical to the current thesis.
+    # panel) whenever this round actually executed a tool - kept 1:1 with the
+    # Execution Trace, even for a round that changed nothing (e.g. a
+    # re-refusal). True skips (no tool call, parse error, unknown tool) leave
+    # the thesis untouched and are excluded, since nothing ran to snapshot.
     new_thesis = result_state["current_thesis"]
-    if new_thesis != job.thesis:
+    execution_log = result_state.get("execution_log", [])
+    executed_this_round = bool(execution_log) and execution_log[-1].get("status") == "executed"
+    if executed_this_round:
         thesis_history = list(job.thesis_history) + [job.thesis]
     else:
         thesis_history = job.thesis_history
@@ -381,7 +410,7 @@ async def create_refinement(
             refinement_count=result_state["refinement_count"],
             refinement_status=result_state["status"],
             feedback_history=result_state["feedback_history"],
-            execution_log=result_state.get("execution_log", []),
+            execution_log=execution_log,
         )
         updated = await jm.get_job(job_id) if persisted else None
     except Exception:
@@ -424,6 +453,21 @@ async def approve_thesis(job_id: str, jm: IJobManager = Depends(get_user_job_man
             raise _error(500, "persistence_failed", "Approval could not be saved")
         logger.info(f"Thesis approved at {ts} (job {job_id})")
     return await _job_to_response(job, jm)
+
+
+@router.delete("/theses/{job_id}", status_code=204, tags=["theses"])
+async def delete_thesis(
+    job_id: str,
+    _admin=Depends(require_admin),
+    jm: IJobManager = Depends(get_user_job_manager),
+):
+    """Delete any user's thesis job (admin only)."""
+    await _get_job_or_404(jm, job_id)
+    try:
+        await jm.delete_job(job_id)
+    except Exception:
+        logger.exception(f"Failed to delete job {job_id}")
+        raise _error(500, "deletion_failed", "Thesis could not be deleted")
 
 
 @router.get("/feedback-options", response_model=List[str], tags=["meta"])

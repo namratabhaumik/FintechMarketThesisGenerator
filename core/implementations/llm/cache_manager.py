@@ -4,22 +4,37 @@ import hashlib
 import logging
 from typing import Optional, Dict
 
+from core.interfaces.cache import ICacheManager
 from core.models.cache_entry import CacheEntry
 
 logger = logging.getLogger(__name__)
 
 
-class CacheManager:
+def hash_cache_key(version: str, documents_content: str, topic: str, model: str) -> str:
+    """Build the cache key shared by every backend.
+
+    `version` folds a cache-busting tag (the effective model name, or an
+    explicit AI_GATEWAY_CACHE_VERSION) into the hash, so a model or prompt change
+    yields a different key instead of serving stale output. Shared here so the
+    in-memory and Supabase managers key identically.
+    """
+    key_material = f"{version}|{documents_content}|{topic}|{model}"
+    return hashlib.sha256(key_material.encode()).hexdigest()
+
+
+class CacheManager(ICacheManager):
     """Manages in-memory caching of LLM responses."""
 
-    def __init__(self, ttl_seconds: int = 604800):
+    def __init__(self, ttl_seconds: int = 604800, version: str = ""):
         """Initialize cache manager.
 
         Args:
             ttl_seconds: Time-to-live for cache entries in seconds (default: 7 days).
+            version: Cache-busting tag folded into every key (see hash_cache_key).
         """
         self._cache: Dict[str, CacheEntry] = {}
         self._ttl_seconds = ttl_seconds
+        self._version = version
         self._hits = 0
         self._misses = 0
 
@@ -34,8 +49,7 @@ class CacheManager:
         Returns:
             SHA256 hash as cache key.
         """
-        key_material = f"{documents_content}|{topic}|{model}"
-        return hashlib.sha256(key_material.encode()).hexdigest()
+        return hash_cache_key(self._version, documents_content, topic, model)
 
     def get(self, key: str) -> Optional[CacheEntry]:
         """Retrieve cache entry if valid (not expired).

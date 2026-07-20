@@ -8,7 +8,7 @@ The functions come in matched pairs that move data in opposite directions:
     serialise_* : domain object --> JSON-safe dict (writing to Supabase)
     rehydrate_* : stored JSON dict --> domain object (reading back from Supabase)
 The only fields that need special handling are ones JSON cannot represent
-directly (datetimes, the JobStatus enum); the rest pass straight through.
+directly (datetimes, the RefinementStatus enum); the rest pass straight through.
 """
 
 import json
@@ -19,7 +19,7 @@ from typing import Any, Dict, Optional
 
 from langchain_core.documents import Document
 
-from api.schemas import JobStatus, RefinementStatus
+from api.schemas import RefinementStatus
 from core.models.thesis import StructuredThesis
 
 logger = logging.getLogger(__name__)
@@ -127,9 +127,8 @@ def serialise_job_fields(**fields) -> Dict[str, Any]:
     """Serialise arbitrary job fields for Supabase storage.
 
     The single entry point the job manager calls before a write. It dispatches
-    each known field to its matching serialiser (thesis / docs) and
-    unwraps the JobStatus enum to its string value; any other field is stored
-    verbatim, so callers can mix domain objects and plain values freely.
+    each known field to its matching serialiser (thesis / docs); any other field 
+    is stored verbatim, so callers can mix domain objects and plain values freely.
     """
     payload: Dict[str, Any] = {}
     for key, value in fields.items():
@@ -137,8 +136,6 @@ def serialise_job_fields(**fields) -> Dict[str, Any]:
             payload[key] = serialise_thesis(value)
         elif key == "thesis_history":
             payload[key] = [serialise_thesis(t) for t in value]
-        elif key == "status" and isinstance(value, JobStatus):
-            payload[key] = value.value
         elif key == "refinement_status" and isinstance(value, RefinementStatus):
             payload[key] = value.value
         elif key == "retrieved_docs":

@@ -63,8 +63,11 @@ class GoldService:
         # ever makes the full fetch hurt, push this join into a DB view, not a
         # growing .in_() list.
         # buckets: (week, dimension, category) -> count, accumulated across all
-        # three tag dimensions in one pass.
+        # three tag dimensions in one pass. bucket_loads carries the lineage: the
+        # distinct Bronze load_ids whose articles fed each bucket, so a Gold row
+        # traces straight back to its loads.
         buckets: Dict[Tuple[date, str, str], int] = defaultdict(int)
+        bucket_loads: Dict[Tuple[date, str, str], set] = defaultdict(set)
         untagged = []
         fintech = 0
         for article in self._content_repository.fetch_all():
@@ -80,7 +83,10 @@ class GoldService:
             # Tally every category the article carries, in every dimension.
             for dimension in ("theme", "risk", "signal"):
                 for category in tags[f"{dimension}s"]:
-                    buckets[(week, dimension, category)] += 1
+                    key = (week, dimension, category)
+                    buckets[key] += 1
+                    if article.load_id:
+                        bucket_loads[key].add(article.load_id)
         logger.info(f"Gold: aggregating {fintech} fintech articles")
 
         metrics = [
@@ -89,6 +95,7 @@ class GoldService:
                 dimension=dimension,
                 category=category,
                 article_count=count,
+                load_ids=sorted(bucket_loads[(week, dimension, category)]),
             )
             for (week, dimension, category), count in sorted(buckets.items())
         ]

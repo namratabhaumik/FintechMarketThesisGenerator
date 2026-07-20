@@ -9,6 +9,7 @@ import {
   approveThesis,
   createRefinement,
   createThesis,
+  deleteThesis,
   getFeedbackOptions,
   getThesis,
   listTheses,
@@ -21,6 +22,7 @@ import type { JobResponse, ThesisSummaryResponse } from "./types";
 /** Signed-in user info + sign-out handler, passed in by the auth gate (main.ts). */
 export interface AuthInfo {
   email?: string | null;
+  isAdmin?: boolean;
   onSignOut: () => void;
 }
 
@@ -28,7 +30,9 @@ export class FinThesisApp {
   private currentJob: JobResponse | null = null;
   private feedbackOptions: string[] = [];
   private pastThesesOffset = 0;
+  private allThesesOffset = 0;
   private readonly pageSize = 10;
+  private readonly isAdmin: boolean;
 
   private readonly pickerContainer: HTMLElement;
   private readonly input: HTMLInputElement;
@@ -36,8 +40,11 @@ export class FinThesisApp {
   private readonly status: HTMLElement;
   private readonly results: HTMLElement;
   private readonly pastTheses: HTMLElement;
+  // Admin-only "All users' theses" management list, mounted only for admins.
+  private readonly allTheses: HTMLElement | null;
 
   private constructor(root: HTMLElement, auth?: AuthInfo) {
+    this.isAdmin = auth?.isAdmin ?? false;
     const header = el(
       "header",
       undefined,
@@ -125,8 +132,19 @@ export class FinThesisApp {
     main.append(inputRow, this.pickerContainer, this.status);
 
     this.pastTheses = el("section", undefined, "print:hidden max-w-5xl mx-auto px-6 pb-16 -mt-8");
+    // Admins get a second, clearly separated section for cross-user management;
+    // regular users never see it (and the backend 403s the underlying request).
+    this.allTheses = this.isAdmin
+      ? el("section", undefined, "print:hidden max-w-5xl mx-auto px-6 pb-16 -mt-8")
+      : null;
 
-    root.replaceChildren(header, main, this.results, this.pastTheses);
+    root.replaceChildren(
+      header,
+      main,
+      this.results,
+      this.pastTheses,
+      ...(this.allTheses ? [this.allTheses] : []),
+    );
 
     this.generateButton.addEventListener("click", () => void this.generate());
     this.input.addEventListener("input", () => this.syncGenerateButton());
@@ -164,6 +182,7 @@ export class FinThesisApp {
     // additionally restore a specific run when the URL carries ?job_id.
     void this.showResumePicker();
     void this.showPastTheses();
+    if (this.isAdmin) void this.showAllTheses();
     const jobId = new URLSearchParams(location.search).get("job_id");
     if (jobId) void this.restore(jobId);
   }
@@ -365,27 +384,34 @@ export class FinThesisApp {
     this.pickerContainer.replaceChildren(renderResumePicker(jobs, this.onResume));
   }
 
-  // Past runs the user can switch to - i.e. everything EXCEPT the thesis
-  // currently on screen (which lives in the results panel, not this list). So
-  // switching away from a thesis makes it appear here, and a just-generated or
-  // just-refined thesis you're still viewing never self-lists.
+  // The caller's OWN past runs the user can switch to - i.e. everything EXCEPT
+  // the thesis currently on screen (which lives in the results panel, not this
+  // list). So switching away from a thesis makes it appear here, and a
+  // just-generated or just-refined thesis you're still viewing never self-lists.
+  // Scoped to the caller even for admins (their cross-user view is separate).
   private async showPastTheses(): Promise<void> {
-    let jobs: ThesisSummaryResponse[];
+    let fetched: ThesisSummaryResponse[];
     try {
-      jobs = await listTheses(this.pageSize, this.pastThesesOffset);
+      // Over-fetch by one to detect a next page without a total count: if the
+      // extra row comes back there's more, otherwise this is the last page. A
+      // bare `length >= pageSize` check leaves Next enabled on a full final
+      // page (total an exact multiple of pageSize), landing on an empty page.
+      fetched = await listTheses(this.pageSize + 1, this.pastThesesOffset);
     } catch (err) {
       console.error("Failed to load past theses", err);
       this.pastTheses.replaceChildren();
       return;
     }
+    const hasMore = fetched.length > this.pageSize;
+    const page = fetched.slice(0, this.pageSize);
     const currentId = this.currentJob?.job_id;
-    const others = jobs.filter((j) => j.job_id !== currentId);
+    const others = page.filter((j) => j.job_id !== currentId);
     const list = renderPastTheses(
       others,
       () => this.pagePastThesesPage(-1),
       () => this.pagePastThesesPage(1),
       this.pastThesesOffset > 0,
-      jobs.length >= this.pageSize,
+      hasMore,
     );
     this.pastTheses.replaceChildren(...(list ? [list] : []));
   }
@@ -394,4 +420,51 @@ export class FinThesisApp {
     this.pastThesesOffset = Math.max(0, this.pastThesesOffset + direction * this.pageSize);
     void this.showPastTheses();
   }
+
+  // Admin-only cross-user management list (all=true): every user's theses with
+  // owner labels and a delete control. Kept separate from the personal library
+  // above.
+  private async showAllTheses(): Promise<void> {
+    if (!this.allTheses) return;
+    let fetched: ThesisSummaryResponse[];
+    try {
+      // Over-fetch by one to detect a next page (see showPastTheses).
+      fetched = await listTheses(this.pageSize + 1, this.allThesesOffset, undefined, true);
+    } catch (err) {
+      console.error("Failed to load all theses (admin)", err);
+      this.allTheses.replaceChildren();
+      return;
+    }
+    const hasMore = fetched.length > this.pageSize;
+    const page = fetched.slice(0, this.pageSize);
+    const list = renderPastTheses(
+      page,
+      () => this.pageAllThesesPage(-1),
+      () => this.pageAllThesesPage(1),
+      this.allThesesOffset > 0,
+      hasMore,
+      true,
+      this.onDeleteThesis,
+      "Admin - all users' theses",
+    );
+    this.allTheses.replaceChildren(...(list ? [list] : []));
+  }
+
+  private pageAllThesesPage(direction: number): void {
+    this.allThesesOffset = Math.max(0, this.allThesesOffset + direction * this.pageSize);
+    void this.showAllTheses();
+  }
+
+  private onDeleteThesis = async (jobId: string): Promise<void> => {
+    try {
+      await deleteThesis(jobId);
+    } catch (err) {
+      this.reportError(err, "Could not delete thesis.", "Delete failed");
+      return;
+    }
+    // Deletion can affect either list, so refresh both (the admin one only
+    // exists for admins). The personal list re-fetches its own current page.
+    void this.showAllTheses();
+    void this.showPastTheses();
+  };
 }

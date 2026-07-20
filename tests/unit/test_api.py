@@ -5,7 +5,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, Mock
 
-from api.schemas import JobStatus, ThesisRequest, RefinementRequest
+from api.schemas import ThesisRequest, RefinementRequest
 
 
 class TestSupabaseJobManager:
@@ -37,35 +37,30 @@ class TestSupabaseJobManager:
         assert job.id is not None
         assert len(job.id) == 12
         assert job.query == "digital lending"
-        assert job.status == JobStatus.PENDING
         mock_client.table.return_value.insert.assert_called_once()
 
     def test_create_job_with_fields_is_single_insert(self, jm, mock_client):
         """Extra fields are serialised into the SAME insert (atomic write) -
-        no follow-up update that could strand a pending row."""
+        no follow-up update that could strand a half-written row."""
         from core.models.thesis import StructuredThesis
 
         thesis = StructuredThesis(key_themes=["Fintech"], opportunity_score=3.5)
-        job = asyncio.run(jm.create_job(
-            "digital lending", status=JobStatus.COMPLETED, thesis=thesis))
+        asyncio.run(jm.create_job("digital lending", thesis=thesis))
 
         row = mock_client.table.return_value.insert.call_args.args[0]
-        assert row["status"] == "completed"
         assert row["thesis"]["key_themes"] == ["Fintech"]  # serialised, not dataclass
         mock_client.table.return_value.update.assert_not_called()
-        assert job.status == JobStatus.COMPLETED
 
     def test_get_job_found(self, jm, mock_client):
         """Test retrieving an existing job."""
         mock_client.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute = AsyncMock(
             return_value=Mock(
-                data={"id": "abc123", "query": "neobanking", "status": "completed", "progress": "Done", "thesis": None, "error": None}
+                data={"id": "abc123", "query": "neobanking", "thesis": None}
             )
         )
         job = asyncio.run(jm.get_job("abc123"))
         assert job is not None
         assert job.id == "abc123"
-        assert job.status == JobStatus.COMPLETED
 
     def test_get_job_not_found(self, jm, mock_client):
         """Test that missing job returns None."""
@@ -73,16 +68,6 @@ class TestSupabaseJobManager:
             return_value=Mock(data=None)
         )
         assert asyncio.run(jm.get_job("nonexistent")) is None
-
-    def test_update_status(self, jm, mock_client):
-        """Test updating job status calls update on the table."""
-        mock_client.table.return_value.update.return_value.eq.return_value.execute = AsyncMock(
-            return_value=Mock(data=None)
-        )
-        asyncio.run(jm.update_status("abc123", JobStatus.GENERATING, "Generating thesis..."))
-        mock_client.table.return_value.update.assert_called_once_with(
-            {"status": "generating", "progress": "Generating thesis..."}
-        )
 
     def test_update_job_serialises_thesis(self, jm, mock_client):
         """Test that update_job serialises StructuredThesis to dict."""
@@ -197,33 +182,22 @@ class TestSchemas:
         req = RefinementRequest(feedback=["Too broad", "Missing trends"])
         assert len(req.feedback) == 2
 
-    def test_job_status_enum_values(self):
-        """Test that all expected job statuses exist."""
-        assert JobStatus.PENDING == "pending"
-        assert JobStatus.COMPLETED == "completed"
-        assert JobStatus.FAILED == "failed"
-        assert JobStatus.FETCHING_ARTICLES == "fetching_articles"
-        assert JobStatus.GENERATING == "generating"
-        assert JobStatus.REFINING == "refining"
-
     def test_refinement_status_coerces_and_rejects(self):
         """refinement_status is a str-enum: valid strings from storage coerce to
         the enum and serialise back to the wire string; unknown values reject."""
         from api.schemas import JobResponse, RefinementStatus
-        job = JobResponse(job_id="j", query="q", status=JobStatus.COMPLETED,
-                          refinement_status="refining")
+        job = JobResponse(job_id="j", query="q", refinement_status="refining")
         assert job.refinement_status == RefinementStatus.REFINING
         assert job.model_dump(mode="json")["refinement_status"] == "refining"
         with pytest.raises(Exception):
-            JobResponse(job_id="j", query="q", status=JobStatus.COMPLETED,
-                        refinement_status="bogus")
+            JobResponse(job_id="j", query="q", refinement_status="bogus")
 
 
 class TestSerializers:
     """Tests for serialise_job_fields enum unwrapping."""
 
     def test_refinement_status_enum_unwrapped_for_storage(self):
-        """A RefinementStatus enum is stored as its string value, like status."""
+        """A RefinementStatus enum is stored as its string value."""
         from api.schemas import RefinementStatus
         from api.serializers import serialise_job_fields
         payload = serialise_job_fields(refinement_status=RefinementStatus.REFINED)
@@ -233,17 +207,18 @@ class TestSerializers:
 def _row(job_id="test123", query="digital lending", **overrides):
     """A completed job row dict in the stored (Supabase) shape."""
     row = {
-        "id": job_id, "query": query, "status": "completed",
+        "id": job_id, "query": query,
         "thesis": {"key_themes": ["Fintech"], "risks": ["Regulatory"],
                    "investment_signals": [], "sources": [], "raw_output": "text",
                    "opportunity_score": 3.5, "confidence_level": 0.8,
                    "recommendation": "Pursue", "key_risk_factors": []},
-        "error": None, "refinement_count": 0,
+        "refinement_count": 0,
         "refinement_status": "N/A", "feedback_history": [], "execution_log": [],
         "retrieved_docs": [
             {"page_content": "chunk", "metadata": {
                 "title": "Article A", "url": "https://a.example",
-                "published_at": "2026-06-01T00:00:00+00:00"}},
+                "published_at": "2026-06-01T00:00:00+00:00",
+                "similarity": 0.8123}},
         ],
         "created_at": "2026-07-01T00:00:00+00:00", "approved_at": None,
         "query_embedding": None, "thesis_history": [],
@@ -260,7 +235,7 @@ class TestAPIEndpoints:
         """Create a test client by overriding FastAPI dependencies."""
         from fastapi.testclient import TestClient
         from api.routes import router
-        from api.auth import get_user_job_manager
+        from api.auth import AuthUser, get_current_user, get_user_job_manager
         from api.deps import get_container
         from fastapi import FastAPI
 
@@ -280,6 +255,11 @@ class TestAPIEndpoints:
         # Override the per-request user-scoped manager (bypasses JWT auth in tests).
         test_app.dependency_overrides[get_user_job_manager] = lambda: mock_jm
         test_app.dependency_overrides[get_container] = lambda: mock_container
+        # Some routes also depend on get_current_user directly (e.g. list scoping);
+        # stand in a fixed non-admin caller so those handlers run without a JWT.
+        test_app.dependency_overrides[get_current_user] = lambda: AuthUser(
+            id="test-user", token="t", role="user"
+        )
 
         self._mock_jm = mock_jm
         self._mock_container = mock_container
@@ -322,12 +302,10 @@ class TestAPIEndpoints:
         assert response.headers["location"] == "/api/theses/test123"
         data = response.json()
         assert data["job_id"] == "test123"
-        assert data["status"] == "completed"
         assert data["thesis"]["key_themes"] == ["Fintech"]
         # ONE atomic write carries the full completed state and the embedding;
-        # there is no separate update that could strand a pending row.
+        # there is no separate update that could strand a half-written row.
         create_kwargs = self._mock_jm.create_job.call_args.kwargs
-        assert create_kwargs["status"] == JobStatus.COMPLETED
         assert create_kwargs["query_embedding"] == [0.1, 0.2]
         self._mock_jm.update_job.assert_not_called()
 
@@ -349,7 +327,8 @@ class TestAPIEndpoints:
         data = response.json()
         assert data["sources"] == [{
             "title": "Article A", "url": "https://a.example",
-            "published_at": "2026-06-01T00:00:00+00:00"}]
+            "published_at": "2026-06-01T00:00:00+00:00",
+            "similarity": 0.8123}]
         assert data["thesis_history"] == []
         assert data["approved_at"] is None
 
@@ -400,12 +379,16 @@ class TestAPIEndpoints:
             thesis = state["current_thesis"]
             if change_thesis:
                 thesis = replace(thesis, raw_output="rewritten narrative")
+            # Mirrors assemble_node: "executed" for a tool that ran (whether or
+            # not it changed anything), "skipped" for escalate/no-tool rounds.
+            status = "executed" if change_thesis else "skipped"
             return {
                 "current_thesis": thesis,
                 "refinement_count": state["refinement_count"] + 1,
                 "status": result_status,
                 "feedback_history": state["feedback_history"],
-                "execution_log": [],
+                "execution_log": [{"tool_name": "refine_thesis", "status": status,
+                                    "refinement_number": state["refinement_count"] + 1}],
                 "messages": [],
             }
 
@@ -494,6 +477,44 @@ class TestAPIEndpoints:
         response = client.get("/api/theses?status=refining")
         assert response.status_code == 200
         assert self._mock_jm.list_jobs.call_args.kwargs["status"] == "refining"
+
+    def test_list_theses_scopes_to_caller_by_default(self, client):
+        """Without ?all, the list is scoped to the caller's own user_id."""
+        self._mock_jm.list_jobs.return_value = []
+        response = client.get("/api/theses")
+        assert response.status_code == 200
+        assert self._mock_jm.list_jobs.call_args.kwargs["user_id"] == "test-user"
+
+    def test_list_theses_all_forbidden_for_non_admin(self, client):
+        """A non-admin asking for all=true is refused, not silently narrowed."""
+        response = client.get("/api/theses?all=true")
+        assert response.status_code == 403
+        assert response.json()["detail"]["code"] == "forbidden"
+
+    def test_list_theses_all_excludes_admins_own_for_admin(self):
+        """An admin with ?all=true lists every OTHER user's theses: no owner
+        filter, but the admin's own rows are excluded so the cross-user view
+        doesn't duplicate their personal library."""
+        from fastapi.testclient import TestClient
+        from fastapi import FastAPI
+        from api.routes import router
+        from api.auth import AuthUser, get_current_user, get_user_job_manager
+        from api.deps import get_container
+
+        mock_jm = MagicMock()
+        mock_jm.list_jobs = AsyncMock(return_value=[])
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_user_job_manager] = lambda: mock_jm
+        app.dependency_overrides[get_container] = lambda: MagicMock()
+        app.dependency_overrides[get_current_user] = lambda: AuthUser(
+            id="admin-user", token="t", role="admin"
+        )
+        response = TestClient(app).get("/api/theses?all=true")
+        assert response.status_code == 200
+        kwargs = mock_jm.list_jobs.call_args.kwargs
+        assert kwargs["user_id"] is None
+        assert kwargs["exclude_user_id"] == "admin-user"
 
     def test_list_theses_rejects_unknown_status(self, client):
         """An unknown status value is rejected by enum validation (422)."""

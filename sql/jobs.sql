@@ -6,11 +6,7 @@ create extension if not exists vector;
 create table if not exists jobs (
     id           text primary key,
     query        text not null,
-    status       text not null default 'pending',
-    progress     text,
     thesis       jsonb,
-    articles     jsonb not null default '[]'::jsonb,
-    error        text,
     refinement_count    integer not null default 0,
     refinement_status   text not null default 'refining',
     feedback_history    jsonb not null default '[]'::jsonb,
@@ -107,6 +103,12 @@ $$;
 --   Step 2 (after testing confirm recall works):
 --     alter table jobs drop column query_embedding_old;
 --
+-- Drop dead columns:
+--   alter table jobs drop column if exists status;
+--   alter table jobs drop column if exists progress;
+--   alter table jobs drop column if exists error;
+--   alter table jobs drop column if exists articles;
+--
 -- Older migration notes:
 --   alter table jobs add column if not exists approved_at timestamptz;
 --   alter table jobs add column if not exists thesis_history jsonb not null default '[]'::jsonb;
@@ -120,3 +122,27 @@ $$;
 --   -- then create the four jobs_*_own policies above.
 --   -- Existing rows have user_id = NULL and are invisible under RLS; either
 --   -- backfill them (update jobs set user_id = '<uuid>' ...) or delete test rows.
+
+-- RBAC: admin role, read from the JWT's app_metadata claim
+-- (Supabase syncs auth.users.raw_app_meta_data into every token it issues,
+-- no custom access-token hook needed). Additive only: these are new
+-- permissive policies alongside jobs_*_own, and Postgres ORs permissive
+-- policies for the same command together, so existing per-owner access is
+-- unchanged.
+--
+-- To grant a user the admin role (run once per admin, via the Supabase SQL
+-- editor with the service role, or the Admin API):
+--   update auth.users
+--   set raw_app_meta_data = raw_app_meta_data || '{"role": "admin"}'::jsonb
+--   where id = '<user-uuid>';
+--
+-- The user must sign in again (or refresh their session) to pick up a new
+-- access token carrying the updated claim - existing tokens are unaffected.
+
+create policy "jobs_admin_select" on jobs
+  for select using ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin');
+create policy "jobs_admin_update" on jobs
+  for update using ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin')
+  with check ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin');
+create policy "jobs_admin_delete" on jobs
+  for delete using ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin');
