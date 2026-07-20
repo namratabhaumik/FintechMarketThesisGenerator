@@ -127,10 +127,13 @@ class TestDiffThesis:
         assert not any(c.startswith("Signals:") for c in changes)  # unchanged dim omitted
         assert "Score, confidence, recommendation unchanged" in changes
 
-    def test_identical_content_reports_only_frozen_numbers(self):
+    def test_identical_content_reports_explicit_no_op(self):
         current = StructuredThesis(key_themes=["A"], raw_output="same")
         new = StructuredThesis(key_themes=["A"], raw_output="same")
-        assert _diff_thesis(current, new) == ["Score, confidence, recommendation unchanged"]
+        assert _diff_thesis(current, new) == [
+            "No changes made - the current thesis reflects this feedback",
+            "Score, confidence, recommendation unchanged",
+        ]
 
 
 class TestAssembleNode:

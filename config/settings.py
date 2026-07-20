@@ -180,6 +180,26 @@ class AppConfig:
             url="https://techcrunch.com/tag/fintech/feed/",
             enabled=True
         ),
+        RSSFeedConfig(
+            name="BetaKit",
+            url="https://betakit.com/feed/",
+            enabled=True
+        ),
+        RSSFeedConfig(
+            name="CNBC Finance",
+            url="https://www.cnbc.com/id/10000664/device/rss/rss.html",
+            enabled=True
+        ),
+        RSSFeedConfig(
+            name="American Banker",
+            url="https://www.americanbanker.com/feed?rss=true",
+            enabled=True
+        ),
+        RSSFeedConfig(
+            name="The Fintech Times",
+            url="https://thefintechtimes.com/feed/",
+            enabled=True
+        ),
     ])
 
     @classmethod

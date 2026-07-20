@@ -178,6 +178,11 @@ def _diff_thesis(current: StructuredThesis, new: StructuredThesis) -> List[str]:
             parts.append("-" + ", ".join(removed))
         if parts:
             changes.append(f"{label}: " + "  ".join(parts))
+    # A round that executed but altered nothing (e.g. a re-refusal) says so
+    # outright instead of leaving the reader to infer it from absent lines.
+    # The UI keys on this exact wording (isNoOpRound in format.ts).
+    if not changes:
+        changes.append("No changes made - the current thesis reflects this feedback")
     changes.append("Score, confidence, recommendation unchanged")
     return changes
 

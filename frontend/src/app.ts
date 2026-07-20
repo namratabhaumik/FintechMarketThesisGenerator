@@ -15,9 +15,10 @@ import {
   listTheses,
 } from "./api";
 import { el } from "./dom";
+import { isNoOpRound } from "./format";
 import { renderCompareModal, renderJob, renderPastTheses, renderResumePicker } from "./render";
 import { RefinementStatus } from "./types";
-import type { JobResponse, ThesisSummaryResponse } from "./types";
+import type { ExecutionEvent, JobResponse, ThesisSummaryResponse } from "./types";
 
 /** Signed-in user info + sign-out handler, passed in by the auth gate (main.ts). */
 export interface AuthInfo {
@@ -115,7 +116,7 @@ export class FinThesisApp {
       "w-full bg-base-200 border border-base-300 rounded-field px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/60",
     );
     this.input.type = "text";
-    this.input.placeholder = "e.g., Future of Digital Lending in Asia";
+    this.input.placeholder = "e.g., What's the outlook for cross-border payments infrastructure companies?";
     this.input.setAttribute("aria-label", "Market topic or question");
 
     this.generateButton = el(
@@ -278,7 +279,16 @@ export class FinThesisApp {
       try {
         const job = await createRefinement(jobId, feedback);
         this.currentJob = job;
-        this.setStatus("");
+        // An executed round that changed nothing gets said outright; a silent
+        // re-render of an identical thesis reads as "nothing happened".
+        const events = job.execution_log as ExecutionEvent[];
+        const last = events.length > 0 ? events[events.length - 1] : undefined;
+        this.setStatus(
+          isNoOpRound(last)
+            ? "This round made no changes - the thesis reflects the selected feedback. " +
+                "Try different feedback, or approve if it looks right."
+            : "",
+        );
         this.render(job);
       } catch (err) {
         this.reportError(

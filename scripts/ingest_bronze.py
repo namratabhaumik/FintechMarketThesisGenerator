@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 
 def main() -> None:
     load_dotenv()
-    limit = int(sys.argv[1]) if len(sys.argv) > 1 else 50
+    limit = int(sys.argv[1]) if len(sys.argv) > 1 else 200
 
     config = AppConfig.from_env()
     container = ServiceContainer(config)

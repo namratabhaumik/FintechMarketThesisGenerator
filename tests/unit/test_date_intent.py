@@ -98,6 +98,36 @@ class TestYearRanges:
         assert parse_date_intent("2022 winners to 2024 losers", now=NOW) is None
 
 
+class TestShorthandYearRanges:
+    """Fiscal-year-style two-digit shorthand ("2023-24") expands using the
+    leading year's century, matching the equivalent full "2023-2024" form -
+    rather than handing the bare "24" to the generic parser, which reads it
+    as day-24-of-the-current-month."""
+
+    def test_shorthand_matches_full_year_range(self):
+        date_from, date_to = parse_date_intent(
+            "fintech trends between 2023-24", now=NOW
+        )
+        assert date_from == datetime(2023, 1, 1, tzinfo=timezone.utc)
+        assert date_to == datetime(2024, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+
+    def test_century_rolls_over_past_year_end(self):
+        date_from, date_to = parse_date_intent(
+            "outlook for the 1999-00 season", now=NOW
+        )
+        assert date_from == datetime(1999, 1, 1, tzinfo=timezone.utc)
+        assert date_to == datetime(2000, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+
+    def test_full_four_digit_range_is_unaffected(self):
+        # Guards against the shorthand pattern misfiring on "2023-2024": \d{2}
+        # can't reach a word boundary two digits into a four-digit year.
+        date_from, date_to = parse_date_intent(
+            "fintech trends between 2023-2024", now=NOW
+        )
+        assert date_from == datetime(2023, 1, 1, tzinfo=timezone.utc)
+        assert date_to == datetime(2024, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
+
+
 class TestMonthGranularityRanges:
     """A range whose bounds name months resolves at month grain, not full year."""
 
