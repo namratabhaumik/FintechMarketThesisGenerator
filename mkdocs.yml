@@ -1,0 +1,66 @@
+# FinThesis documentation site (MkDocs Material).
+#
+# Local preview:   uv run mkdocs serve
+# Build:           uv run mkdocs build          (outputs to site/, gitignored)
+#   (NO_MKDOCS_2_WARNING=1 silences Material's MkDocs-2.0 advisory banner)
+#
+# Deployment (no CI required): a Render static site tracking master with
+# build command:
+#   pip install mkdocs-material==9.7.7 && NO_MKDOCS_2_WARNING=1 mkdocs build
+# and publish directory: site
+
+site_name: FinThesis
+site_description: Documentation for FinThesis - AI-assisted fintech market thesis generation
+repo_url: https://github.com/namratabhaumik/FintechMarketThesisGenerator
+repo_name: FintechMarketThesisGenerator
+copyright: "FinThesis - for informational and research purposes only; not financial or investment advice."
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.footer
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+
+nav:
+  - Home: index.md
+  - Quickstart: quickstart.md
+  - Guides:
+      - Authentication: guides/auth.md
+      - Refining a thesis: guides/refining-a-thesis.md
+      - Library, resume and recall: guides/library-and-recall.md
+      - Exporting and sharing: guides/exporting.md
+      - Administration: guides/admin.md
+  - Concepts:
+      - The thesis pipeline: concepts/pipeline.md
+      - Refusals and fallbacks: concepts/refusals.md
+  - Reference:
+      - API: reference/api.md
+  - Limits: limits.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - pymdownx.details
+  - pymdownx.superfences
+
+plugins:
+  - search
