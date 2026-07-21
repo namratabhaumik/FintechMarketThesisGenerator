@@ -2,11 +2,10 @@
 
 A generated thesis is a starting point. The refinement agent revises it in response to structured feedback - up to three rounds per thesis - and every round is inspectable after the fact.
 
-<!-- Clip: assets/clips/refine.mp4
-<video controls muted playsinline width="100%">
-  <source src="../assets/clips/refine.mp4" type="video/mp4">
-</video>
--->
+<iframe width="100%" height="400" src="https://www.youtube-nocookie.com/embed/kFAswVOY0Qk"
+  title="FinThesis: refining a thesis" frameborder="0"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+  allowfullscreen></iframe>
 
 ## Giving feedback
 

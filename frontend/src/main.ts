@@ -31,6 +31,13 @@ function renderLogin(container: HTMLElement): void {
   const button = el("button", "Continue with Google", "btn btn-primary w-full");
   button.addEventListener("click", () => void signInWithGoogle());
   card.append(button);
+
+  const docsLink = el("a", "Read the docs", "link link-hover text-xs text-base-content/60");
+  docsLink.href = "https://finthesis-docs.onrender.com";
+  docsLink.target = "_blank";
+  docsLink.rel = "noopener noreferrer";
+  card.append(docsLink);
+
   wrap.append(card);
   container.replaceChildren(wrap);
 }

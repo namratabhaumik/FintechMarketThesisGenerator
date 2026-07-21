@@ -2,11 +2,10 @@
 
 Accounts with the `admin` role get a cross-user management view in addition to their own personal library. Regular accounts never see it, and the API refuses the underlying requests for them (`403`), so the boundary holds even outside the UI.
 
-<!-- Clip: assets/clips/admin.mp4
-<video controls muted playsinline width="100%">
-  <source src="../assets/clips/admin.mp4" type="video/mp4">
-</video>
--->
+<iframe width="100%" height="400" src="https://www.youtube-nocookie.com/embed/9sd5q-oVqjk"
+  title="FinThesis: administration" frameborder="0"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+  allowfullscreen></iframe>
 
 ## The all-users view
 

@@ -2,11 +2,10 @@
 
 Every thesis carries an export bar next to its job id. Four actions, no configuration:
 
-<!-- Clip: assets/clips/export.mp4
-<video controls muted playsinline width="100%">
-  <source src="../assets/clips/export.mp4" type="video/mp4">
-</video>
--->
+<iframe width="100%" height="400" src="https://www.youtube-nocookie.com/embed/xEf93_2CqAs"
+  title="FinThesis: exporting and sharing" frameborder="0"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+  allowfullscreen></iframe>
 
 | Action | What you get |
 | --- | --- |

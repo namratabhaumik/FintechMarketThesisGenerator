@@ -2,11 +2,10 @@
 
 FinThesis refuses to answer more readily than most AI tools, and that is its most deliberate design choice: **a partial or ungrounded thesis is worse than no thesis**, because it looks exactly like a trustworthy one. There are three distinct refusal behaviors plus one fallback. Knowing which one you hit tells you what to do next.
 
-<!-- Clip: assets/clips/refusals.mp4
-<video controls muted playsinline width="100%">
-  <source src="../assets/clips/refusals.mp4" type="video/mp4">
-</video>
--->
+<iframe width="100%" height="400" src="https://www.youtube-nocookie.com/embed/tAQhZe6VqRE"
+  title="FinThesis: refusals and fallbacks" frameborder="0"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+  allowfullscreen></iframe>
 
 ## 1. No relevant documents
 
