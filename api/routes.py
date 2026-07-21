@@ -379,7 +379,11 @@ async def create_refinement(
         raise _error(501, "refinement_not_supported", str(e))
     except Exception:
         logger.exception("Error during thesis refinement")
-        raise _error(502, "refinement_failed", "The refinement agent failed to run")
+        raise _error(
+            502,
+            "refinement_failed",
+            "The language model was unavailable. Please try again shortly.",
+        )
 
     detector = HallucinationDetector()
     hallucination = detector.analyze(result_state.get("messages", []))

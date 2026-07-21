@@ -3,6 +3,16 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 
+# Model marker for a summary produced by the local extractive fallback during an
+# LLM outage or daily-cost-limit hit with a short TTL.
+FALLBACK_MODEL = "local-extractor-fallback"
+FALLBACK_TTL_SECONDS = 600
+
+
+def effective_ttl(model: str, default_ttl_seconds: int) -> int:
+    """TTL to age an entry by: short for degraded fallback summaries, else default."""
+    return FALLBACK_TTL_SECONDS if model == FALLBACK_MODEL else default_ttl_seconds
+
 
 @dataclass
 class CacheEntry:

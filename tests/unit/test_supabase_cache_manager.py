@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from core.implementations.llm.supabase_cache_manager import SupabaseCacheManager
+from core.models.cache_entry import FALLBACK_MODEL, FALLBACK_TTL_SECONDS
 
 
 class FakeTable:
@@ -140,3 +141,41 @@ class TestSupabaseCacheManager:
         assert metrics["hits"] == 1
         assert metrics["misses"] == 1
         assert metrics["cache_size"] == 1
+
+    def _age(self, client, key, seconds):
+        """Backdate the stored row's created_at by `seconds`."""
+        client.store[key]["created_at"] = (
+            datetime.now(timezone.utc) - timedelta(seconds=seconds)
+        ).isoformat()
+
+    def test_fallback_entry_expires_on_short_ttl(self):
+        # A degraded local-fallback summary is aged out on FALLBACK_TTL_SECONDS
+        # even though the manager's normal TTL is a week away.
+        client = FakeClient()
+        m = SupabaseCacheManager(client, ttl_seconds=604800, version="v")
+        key = m.generate_key("docs", "fintech", "combined")
+        m.set(key, "fallback summary", FALLBACK_MODEL, 0, 0)
+        self._age(client, key, FALLBACK_TTL_SECONDS + 60)
+        assert m.get(key) is None
+        assert key not in client.store  # lazily evicted, so the LLM is retried
+
+    def test_fallback_entry_hits_within_short_ttl(self):
+        # A rapid identical repeat during an outage is still served from cache.
+        client = FakeClient()
+        m = SupabaseCacheManager(client, ttl_seconds=604800, version="v")
+        key = m.generate_key("docs", "fintech", "combined")
+        m.set(key, "fallback summary", FALLBACK_MODEL, 0, 0)
+        self._age(client, key, FALLBACK_TTL_SECONDS - 60)
+        entry = m.get(key)
+        assert entry is not None
+        assert entry.response == "fallback summary"
+
+    def test_normal_entry_survives_short_ttl(self):
+        # A normal LLM summary at the same age is unaffected by the short TTL -
+        # the shortened window applies only to the fallback marker.
+        client = FakeClient()
+        m = SupabaseCacheManager(client, ttl_seconds=604800, version="v")
+        key = m.generate_key("docs", "fintech", "combined")
+        m.set(key, "real summary", "gemini-2.5-flash", 10, 5)
+        self._age(client, key, FALLBACK_TTL_SECONDS + 60)
+        assert m.get(key) is not None

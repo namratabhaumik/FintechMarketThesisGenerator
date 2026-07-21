@@ -16,6 +16,7 @@ from core.interfaces.llm import (
 )
 from core.implementations.llm.cost_tracker import CostTracker
 from core.implementations.llm.routing_strategy import ROUTE_PRIMARY, get_strategy
+from core.models.cache_entry import FALLBACK_MODEL
 from config.settings import AIGatewayConfig
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,28 @@ class AIGateway(ILanguageModel):
             Concatenated text.
         """
         return "".join(doc.page_content for doc in documents)
+
+    async def _cache_fallback_summary(
+        self, docs_text: str, topic: str, result: str
+    ) -> None:
+        """Persist a degraded local-fallback summary under a short-lived entry.
+
+        Written with FALLBACK_MODEL so the cache manager ages it out on a short
+        TTL: rapid identical repeats during an outage / cost-limit window are
+        served from cache instead of re-running the extractor, but the real LLM
+        is retried again soon after it recovers.
+        """
+        if not self._config.cache_enabled:
+            return
+        cache_key = self._cache_manager.generate_key(docs_text, topic, "combined")
+        await asyncio.to_thread(
+            self._cache_manager.set,
+            key=cache_key,
+            response=result,
+            model=FALLBACK_MODEL,
+            input_tokens=0,
+            output_tokens=0,
+        )
 
     def _select_provider(self, documents: List[Document], topic: str) -> tuple[str, ILanguageModel]:
         """Use the routing strategy to pick a route and resolve the LLM.
@@ -160,6 +183,7 @@ class AIGateway(ILanguageModel):
             try:
                 logger.info("Using fallback LLM due to cost limit")
                 result = await self._fallback_llm.summarize(documents, topic)
+                await self._cache_fallback_summary(docs_text, topic, result)
                 latency_ms = (time.time() - start_time) * 1000
                 if self._config.track_metrics:
                     self._cost_tracker.record_call(
@@ -219,6 +243,7 @@ class AIGateway(ILanguageModel):
             try:
                 logger.info("Attempting fallback LLM after primary failure")
                 result = await self._fallback_llm.summarize(documents, topic)
+                await self._cache_fallback_summary(docs_text, topic, result)
 
                 if self._config.track_metrics:
                     latency_ms = (time.time() - start_time) * 1000
