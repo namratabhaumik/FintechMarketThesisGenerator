@@ -55,6 +55,9 @@ def create_thesis_tools(
             signals; 0 otherwise)
         """
         documents = state["documents"]
+        # The diverse subset the LLM rewrites from; older jobs (pre-split) have
+        # no summary_documents, so fall back to the full retrieved set.
+        summary_documents = state.get("summary_documents") or documents
         current_thesis = state["current_thesis"]
         topic = state["topic"]
         feedback_items = (
@@ -73,6 +76,7 @@ def create_thesis_tools(
             documents=documents,
             current_thesis=current_thesis,
             feedback_items=feedback_items,
+            summary_documents=summary_documents,
             theme_delta=theme_delta,
             risk_delta=risk_delta,
             signal_delta=signal_delta,

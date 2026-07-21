@@ -97,8 +97,11 @@ class TestArticleToDocument:
 class _RecordingVectorStore:
     """Fake IVectorStore that records the args retrieve() was called with."""
 
-    def __init__(self):
+    def __init__(self, docs=None):
         self.retrieve_args = None
+        self._docs = docs if docs is not None else [
+            Document(page_content="r", metadata={"url": "u"})
+        ]
 
     def build(self, documents):
         return object()
@@ -106,9 +109,8 @@ class _RecordingVectorStore:
     def retrieve(
         self,
         query,
-        k,
         fetch_k,
-        lambda_mult,
+        max_articles,
         window_days=None,
         query_embedding=None,
         min_similarity=0.0,
@@ -117,41 +119,42 @@ class _RecordingVectorStore:
     ):
         self.retrieve_args = {
             "query": query,
-            "k": k,
             "fetch_k": fetch_k,
-            "lambda_mult": lambda_mult,
+            "max_articles": max_articles,
             "window_days": window_days,
             "query_embedding": query_embedding,
             "min_similarity": min_similarity,
             "date_from": date_from,
             "date_to": date_to,
         }
-        return [Document(page_content="r", metadata={"url": "u"})]
+        return self._docs
 
 
 class TestDocumentRetrievalService:
-    """Tests for DocumentRetrievalService MMR wiring.
+    """Tests for DocumentRetrievalService wiring.
 
-    The service is stateless (no open/build step): retrieve() delegates
-    straight to the vector store implementation."""
+    The service is stateless (no open/build step): retrieve() delegates the wide
+    pool query straight to the vector store, and select_diverse() runs MMR over
+    the result to pick the LLM's subset."""
 
-    def _service(self, config):
+    def _service(self, config, docs=None):
         from core.services.retrieval_service import DocumentRetrievalService
 
-        vs = _RecordingVectorStore()
+        vs = _RecordingVectorStore(docs=docs)
         return DocumentRetrievalService(vs, config), vs
 
-    def test_retrieve_uses_mmr_config(self):
+    def test_retrieve_uses_pool_config(self):
         from config.settings import RetrievalConfig
 
         service, vs = self._service(
-            RetrievalConfig(k=5, fetch_k=20, lambda_mult=0.5, window_days=365)
+            RetrievalConfig(k=5, fetch_k=400, max_articles=50, window_days=365)
         )
         docs = service.retrieve("query")
 
-        assert vs.retrieve_args["k"] == 5
-        assert vs.retrieve_args["fetch_k"] == 20
-        assert vs.retrieve_args["lambda_mult"] == 0.5
+        # The wide-pool sizing (chunk pool + article cap) must reach the store;
+        # k/lambda_mult are the LLM-subset dials and belong to select_diverse.
+        assert vs.retrieve_args["fetch_k"] == 400
+        assert vs.retrieve_args["max_articles"] == 50
         # The configured relevance floor must reach the vector store.
         assert vs.retrieve_args["min_similarity"] == 0.72
         assert len(docs) == 1
@@ -165,16 +168,36 @@ class TestDocumentRetrievalService:
 
         assert vs.retrieve_args["window_days"] == 180
 
-    def test_retrieve_override_k_widens_fetch_k(self):
+    def test_select_diverse_mmr_narrows_to_k(self):
         from config.settings import RetrievalConfig
 
-        # k override above the configured fetch_k must widen fetch_k (MMR needs
-        # fetch_k >= k).
-        service, vs = self._service(RetrievalConfig(k=5, fetch_k=20, lambda_mult=0.5))
-        service.retrieve("query", k=30)
+        # Wide pool of 4 articles, each with an embedding; MMR must pick k=2.
+        pool = [
+            Document(page_content=f"a{i}", metadata={"url": f"u{i}", "embedding": vec})
+            for i, vec in enumerate(([1.0, 0.0], [0.99, 0.01], [0.0, 1.0], [0.5, 0.5]))
+        ]
+        service, _ = self._service(RetrievalConfig(k=2, lambda_mult=0.5), docs=pool)
 
-        assert vs.retrieve_args["k"] == 30
-        assert vs.retrieve_args["fetch_k"] == 30
+        selected = service.select_diverse(pool, query_embedding=[1.0, 0.0])
+
+        assert len(selected) == 2
+        # The transient embedding must not survive into the LLM/persisted docs.
+        assert all("embedding" not in d.metadata for d in selected)
+
+    def test_select_diverse_falls_back_without_query_embedding(self):
+        from config.settings import RetrievalConfig
+
+        pool = [
+            Document(page_content=f"a{i}", metadata={"url": f"u{i}", "embedding": [1.0, 0.0]})
+            for i in range(4)
+        ]
+        service, _ = self._service(RetrievalConfig(k=2), docs=pool)
+
+        # No query vector -> top-k by relevance order, embedding still stripped.
+        selected = service.select_diverse(pool, query_embedding=None)
+
+        assert [d.metadata["url"] for d in selected] == ["u0", "u1"]
+        assert all("embedding" not in d.metadata for d in selected)
 
     def test_retrieve_query_date_intent_overrides_window_days(self):
         from config.settings import RetrievalConfig

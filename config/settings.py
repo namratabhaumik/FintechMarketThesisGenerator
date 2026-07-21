@@ -100,11 +100,20 @@ class VectorStoreConfig:
 
 @dataclass
 class RetrievalConfig:
-    """MMR (Maximal Marginal Relevance) retrieval config.
+    """Retrieval config: a wide analytics pool that MMR narrows for the LLM.
 
-    It first pulls `fetch_k` candidates by similarity, then selects `k` of them 
-    by the MMR objective so the returned chunks are not near-duplicates of each 
-    other. `lambda_mult` is the relevance/diversity dial
+    Retrieval is decoupled into two audiences:
+
+    - Analytics / evidence: `retrieve()` pulls up to `fetch_k` chunk candidates
+      by similarity, drops any below `min_similarity`, then DEDUPES BY URL (one
+      best chunk per article) and caps to `max_articles`. Those distinct
+      articles carry the full weight of the market - tag strengths, scoring,
+      confidence and the sources list are all computed over them, so the numbers
+      reflect real coverage.
+    - LLM narrative: `select_diverse()` runs MMR over the deduped article set to
+      pick `k` diverse articles, and only those go to the summarizer. Sending `k`
+      docs to the LLM keeps token cost and latency flat; `lambda_mult` is the MMR
+      relevance/diversity dial.
 
     `window_days` is a trailing recency window: retrieval only considers articles
     published within the last `window_days` from the query time (a sliding window
@@ -112,12 +121,13 @@ class RetrievalConfig:
     default is a broad year. Set it to 0 to disable the filter and search the
     whole corpus.
 
-    `min_similarity` cosine floor applied to `fetch_k` candidates before
-    MMR. Chunks scoring below it are dropped (value specific to EMBEDDING_MODEL & corpus):
+    `min_similarity` cosine floor applied to the `fetch_k` candidates before
+    dedup (value specific to EMBEDDING_MODEL & corpus):
     ~0.67 off-topic .. ~0.84 on-topic.
     """
     k: int = 5
-    fetch_k: int = 20
+    fetch_k: int = 400
+    max_articles: int = 50
     lambda_mult: float = 0.5
     window_days: int = 365
     min_similarity: float = 0.72
@@ -283,10 +293,12 @@ class AppConfig:
 
         vs_provider = os.getenv("VECTORSTORE_PROVIDER", "supabase")
 
-        # Retrieval config defaults for MMR
+        # Retrieval config: wide analytics pool (fetch_k chunks -> dedup to
+        # max_articles), MMR narrows to k for the LLM.
         retrieval = RetrievalConfig(
             k=int(os.getenv("RETRIEVAL_K", "5")),
-            fetch_k=int(os.getenv("RETRIEVAL_FETCH_K", "20")),
+            fetch_k=int(os.getenv("RETRIEVAL_FETCH_K", "400")),
+            max_articles=int(os.getenv("RETRIEVAL_MAX_ARTICLES", "50")),
             lambda_mult=float(os.getenv("RETRIEVAL_LAMBDA_MULT", "0.5")),
             window_days=int(os.getenv("RETRIEVAL_WINDOW_DAYS", "365")),
             min_similarity=float(os.getenv("RETRIEVAL_MIN_SIMILARITY", "0.72")),

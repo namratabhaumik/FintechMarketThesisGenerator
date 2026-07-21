@@ -11,7 +11,13 @@ create table if not exists jobs (
     refinement_status   text not null default 'refining',
     feedback_history    jsonb not null default '[]'::jsonb,
     execution_log       jsonb not null default '[]'::jsonb,
+    -- The wide analytics pool: the distinct articles retrieval surfaced, that
+    -- tag strengths, scoring, confidence and the sources list are computed over.
     retrieved_docs      jsonb not null default '[]'::jsonb,
+    -- The diverse subset (MMR-selected) the LLM actually read to write the
+    -- narrative, persisted so a later refinement rewrites from the same docs.
+    -- Embeddings are stripped from both lists (re-derivable from page_content).
+    summary_docs        jsonb not null default '[]'::jsonb,
     -- Prior thesis versions (one per completed refinement round), so the UI's
     -- "Previous versions" history survives a refresh/resume, paired with
     -- feedback_history. Serialized StructuredThesis dicts, oldest first.
@@ -112,6 +118,8 @@ $$;
 -- Older migration notes:
 --   alter table jobs add column if not exists approved_at timestamptz;
 --   alter table jobs add column if not exists thesis_history jsonb not null default '[]'::jsonb;
+-- Wide/LLM retrieval split (add the LLM's diverse subset alongside the wide pool):
+--   alter table jobs add column if not exists summary_docs jsonb not null default '[]'::jsonb;
 -- Migration for a table created with the earlier allow-all anon policy:
 --   drop policy if exists "Allow all access via anon key" on jobs;
 --

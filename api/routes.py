@@ -190,12 +190,19 @@ async def create_thesis(
     except Exception:
         logger.exception("Failed to embed query; retrieval will re-embed")
 
+    def _retrieve_and_select():
+        # `docs` is the wide analytics pool (distinct articles); `summary_docs`
+        # is the MMR-narrowed diverse subset the LLM actually reads. Both are
+        # persisted so a later refinement reuses the exact same summary docs.
+        # Run together in the worker thread (retrieval is I/O, MMR is CPU) so the
+        # event loop never blocks and one guard covers both. select_diverse([])
+        # returns [], so the empty-corpus case falls through to the 422 below.
+        svc = container.get_retrieval_service()
+        wide = svc.retrieve(query, query_embedding=query_embedding)
+        return wide, svc.select_diverse(wide, query_embedding)
+
     try:
-        docs = await asyncio.to_thread(
-            lambda: container.get_retrieval_service().retrieve(
-                query, k=5, query_embedding=query_embedding
-            )
-        )
+        docs, summary_docs = await asyncio.to_thread(_retrieve_and_select)
     except Exception:
         logger.exception("Retrieval failed")
         raise _error(500, "retrieval_failed", "Could not retrieve documents from the corpus")
@@ -242,7 +249,9 @@ async def create_thesis(
     # retries) nest under it. Langfuse computes per-model dollar cost natively.
     with trace_request("create_thesis", input=query) as trace:
         try:
-            thesis = await container.get_thesis_service().generate_thesis(query, docs)
+            thesis = await container.get_thesis_service().generate_thesis(
+                query, docs, summary_documents=summary_docs
+            )
         except Exception:
             logger.exception("Thesis generation failed")
             raise _error(502, "generation_failed", "The language model failed to generate a thesis")
@@ -255,6 +264,7 @@ async def create_thesis(
                 query,
                 thesis=thesis,
                 retrieved_docs=docs,
+                summary_docs=summary_docs,
                 refinement_count=0,
                 refinement_status=RefinementStatus.NOT_APPLICABLE,  # until the user refines
                 feedback_history=[],
@@ -369,6 +379,7 @@ async def create_refinement(
     langgraph_state = {
         "topic": job.query,
         "documents": job.retrieved_docs,
+        "summary_documents": job.summary_docs,
         "current_thesis": job.thesis,
         "feedback_history": job.feedback_history + [payload.feedback],
         "refinement_count": job.refinement_count,

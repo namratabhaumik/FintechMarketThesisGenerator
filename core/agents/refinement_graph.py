@@ -26,7 +26,10 @@ class ThesisRefinementState(TypedDict):
 
     Attributes:
         topic: Original market topic.
-        documents: Source documents for context.
+        documents: The wide analytics pool (distinct articles) - drives the
+            displayed grounded tags on refinement.
+        summary_documents: The diverse subset the LLM rewrites from (same docs
+            the original summary read).
         current_thesis: Current StructuredThesis object.
         feedback_history: List of feedback rounds.
         refinement_count: Number of refinements completed [0, MAX_REFINEMENTS).
@@ -37,6 +40,7 @@ class ThesisRefinementState(TypedDict):
 
     topic: str
     documents: List[Document]
+    summary_documents: List[Document]
     current_thesis: StructuredThesis
     feedback_history: List[List[str]]
     refinement_count: int

@@ -197,39 +197,54 @@ class ThesisGeneratorService:
     async def generate_thesis(
         self,
         topic: str,
-        documents: List[Document]
+        documents: List[Document],
+        summary_documents: Optional[List[Document]] = None,
     ) -> StructuredThesis:
         """Generate structured thesis from documents.
 
         Args:
             topic: Market topic for analysis.
-            documents: Retrieved context documents.
+            documents: The wide analytics pool - the distinct articles retrieval
+                surfaced. Tags, strengths, scoring, confidence and the sources
+                list are all computed over this full set, so the numbers carry
+                the real weight of the market.
+            summary_documents: The diverse subset (MMR-selected) the LLM actually
+                reads to write the narrative. Keeping this small holds token cost
+                and latency flat while analytics stay wide. Defaults to
+                `documents` when omitted (LLM reads the full pool).
 
         Returns:
             StructuredThesis object with analysis results.
         """
         logger.info(f"Generating thesis for topic: {topic}")
+        summary_documents = summary_documents if summary_documents is not None else documents
 
-        # Step 1: Compute Silver tag strengths up front to gate the LLM
-        # call deterministically; reused for scoring at Step 4.
+        # Step 1: Tag strengths for scoring come from the WIDE pool (Step 5), so
+        # score/confidence reflect true coverage. The LLM refusal FLOOR (Step 2)
+        # is a separate check on the few docs the model will actually read, so
+        # its thresholds stay calibrated to a small set.
         signal_strength, theme_strength, risk_strength = _tag_strengths_from_documents(
             documents
+        )
+        summary_signal, summary_theme, summary_risk = _tag_strengths_from_documents(
+            summary_documents
         )
 
         # Step 2: Summarize documents. This is the ONLY LLM call - it writes the
         # narrative prose (raw_output); it does not decide the structured tags.
-        # Below the tag-strength floor, the retrieved evidence is too thin for
-        # this specific query to trust the LLM to write a grounded narrative, so
-        # skip the call entirely (see summary_status="refused" for the fallback
-        # path where the model itself declines despite clearing this floor).
+        # Below the tag-strength floor (measured on the LLM's own input docs),
+        # the evidence the model would read is too thin for this specific query
+        # to trust it to write a grounded narrative, so skip the call entirely
+        # (see summary_status="refused" for the fallback path where the model
+        # itself declines despite clearing this floor).
         if (
-            theme_strength < self.MIN_THEME_STRENGTH_FOR_SUMMARY
-            or risk_strength < self.MIN_RISK_STRENGTH_FOR_SUMMARY
-            or signal_strength < self.MIN_SIGNAL_STRENGTH_FOR_SUMMARY
+            summary_theme < self.MIN_THEME_STRENGTH_FOR_SUMMARY
+            or summary_risk < self.MIN_RISK_STRENGTH_FOR_SUMMARY
+            or summary_signal < self.MIN_SIGNAL_STRENGTH_FOR_SUMMARY
         ):
             logger.info(
-                "Step 2: Tag strength below floor "
-                f"(theme={theme_strength}, risk={risk_strength}, signal={signal_strength}); "
+                "Step 2: Tag strength below floor on summary docs "
+                f"(theme={summary_theme}, risk={summary_risk}, signal={summary_signal}); "
                 "skipping LLM summarize call"
             )
             summary = "REFUSED: "
@@ -242,7 +257,7 @@ class ThesisGeneratorService:
             # response), it flips this to "local" and the thesis records it.
             logger.info("Step 2: Summarizing retrieved documents...")
             summary_source_var.set(SOURCE_LLM)
-            summary = await self._llm.summarize(documents, topic)
+            summary = await self._llm.summarize(summary_documents, topic)
             summary_source = summary_source_var.get()
 
             if not summary:
@@ -258,11 +273,9 @@ class ThesisGeneratorService:
                 )
 
         # Step 3: Derive the structured tags - still deterministic, no LLM.
-        # Previously this keyword-scanned the LLM summary above; now it
-        # frequency-ranks the Silver tags already carried in each retrieved
-        # chunk's metadata (matched on the raw article text at Silver time). Same
-        # determinism, but grounded in what the source articles reported rather
-        # than in the LLM's prose.
+        # Frequency-ranks the Silver tags carried in each article's metadata
+        # (matched on the raw article text at Silver time) across the WIDE pool,
+        # so the ranking reflects how broadly the market reported each tag.
         logger.info("Step 3: Deriving grounded tags from retrieved documents...")
         ranked_themes, ranked_risks, ranked_signals = _ranked_tags_from_documents(
             documents
@@ -271,7 +284,8 @@ class ThesisGeneratorService:
         risks = ranked_risks[: self._max_tags]
         investment_signals = ranked_signals[: self._max_tags]
 
-        # Step 4: Extract sources from document metadata
+        # Step 4: Extract sources from the wide pool (one URL per distinct
+        # article - the analytics set already deduped by URL upstream).
         logger.info("Step 4: Extracting sources from documents...")
         sources = [doc.metadata["url"] for doc in documents if doc.metadata.get("url")]
 
@@ -327,6 +341,7 @@ class ThesisGeneratorService:
         documents: List[Document],
         current_thesis: StructuredThesis,
         feedback_items: List[str],
+        summary_documents: Optional[List[Document]] = None,
         theme_delta: int = 0,
         risk_delta: int = 0,
         signal_delta: int = 0,
@@ -340,9 +355,13 @@ class ThesisGeneratorService:
 
         Args:
             topic: Original market topic for analysis.
-            documents: Retrieved context documents.
+            documents: The wide analytics pool - the distinct articles retrieval
+                surfaced. Drives the displayed grounded tags (scores are frozen
+                downstream, so they are not recomputed here).
             current_thesis: The thesis to refine.
             feedback_items: Predefined feedback strings selected by user.
+            summary_documents: The diverse subset the LLM rewrites from - the
+                same docs the original summary read. Defaults to `documents`.
             theme_delta: Planner-LLM-proposed cap adjustment for themes
                 (-1/0/+1), clamped by _apply_cap_deltas.
             risk_delta: Same, for risks.
@@ -352,6 +371,7 @@ class ThesisGeneratorService:
             New StructuredThesis with refinements applied.
         """
         logger.info(f"Refining thesis for topic: {topic} based on {len(feedback_items)} feedback items")
+        summary_documents = summary_documents if summary_documents is not None else documents
 
         # Step 1: Get refined summary from LLM using feedback. A "tag_strength_floor"
         # refusal is evidence-invariant - refinement reuses the same `documents`
@@ -367,7 +387,7 @@ class ThesisGeneratorService:
             refined_summary = current_thesis_text
         else:
             logger.info("Step 1: Refining thesis with LLM feedback...")
-            refined_summary = await self._llm.refine(documents, current_thesis_text, feedback_items)
+            refined_summary = await self._llm.refine(summary_documents, current_thesis_text, feedback_items)
 
             if not refined_summary:
                 logger.error("Empty refined summary returned by LLM")
