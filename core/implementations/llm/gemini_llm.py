@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage
 
 from config.settings import LLMConfig
 from core.interfaces.llm import ILanguageModel
+from core.utils.observability import get_callback_handler
 from core.utils.text_utils import wrap_untrusted
 
 logger = logging.getLogger(__name__)
@@ -26,12 +27,17 @@ class GeminiLanguageModel(ILanguageModel):
         self._config = config
         logger.info(f"Initializing Gemini LLM: {config.model_name}")
 
+        # Attach the shared Langfuse handler (None when tracing is disabled) at
+        # construction so both summarize and refine calls nest under whatever
+        # per-request trace is active.
+        handler = get_callback_handler()
         self._llm = ChatGoogleGenerativeAI(
             model=config.model_name,
             temperature=config.temperature,
             google_api_key=config.api_key,
             timeout=config.timeout,
             max_output_tokens=config.max_output_tokens,
+            callbacks=[handler] if handler else None,
         )
 
     async def summarize(self, documents: List[Document], topic: str = "") -> str:

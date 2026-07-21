@@ -147,8 +147,9 @@ class AIGatewayConfig:
     # after a prompt change to invalidate a persistent cache that a deploy alone
     # would not clear.
     cache_version: str = ""
-    cost_limit_daily: float = 5.0
-    cost_limit_monthly: float = 100.0
+    # Max real primary-provider calls per day before routing forces the free
+    # local summarizer. Dollar cost is tracked in Langfuse, not here.
+    call_budget_daily: int = 50
     track_metrics: bool = True
 
 
@@ -304,8 +305,7 @@ class AppConfig:
         ai_gateway_cache_type = os.getenv("AI_GATEWAY_CACHE_TYPE", "memory")
         ai_gateway_cache_ttl = int(os.getenv("AI_GATEWAY_CACHE_TTL_SECONDS", "604800"))
         ai_gateway_cache_version = os.getenv("AI_GATEWAY_CACHE_VERSION", "")
-        ai_gateway_cost_limit_daily = float(os.getenv("AI_GATEWAY_COST_LIMIT_DAILY", "5.0"))
-        ai_gateway_cost_limit_monthly = float(os.getenv("AI_GATEWAY_COST_LIMIT_MONTHLY", "100.0"))
+        ai_gateway_call_budget_daily = int(os.getenv("AI_GATEWAY_CALL_BUDGET_DAILY", "50"))
         ai_gateway_track_metrics = os.getenv("AI_GATEWAY_TRACK_METRICS", "true").lower() == "true"
 
         return cls(
@@ -343,8 +343,7 @@ class AppConfig:
                 cache_type=ai_gateway_cache_type,
                 cache_ttl_seconds=ai_gateway_cache_ttl,
                 cache_version=ai_gateway_cache_version,
-                cost_limit_daily=ai_gateway_cost_limit_daily,
-                cost_limit_monthly=ai_gateway_cost_limit_monthly,
+                call_budget_daily=ai_gateway_call_budget_daily,
                 track_metrics=ai_gateway_track_metrics,
             ),
         )

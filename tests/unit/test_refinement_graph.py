@@ -11,7 +11,6 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessage, ToolMessage
 
 from core.agents.refinement_graph import (
-    _create_langfuse_handler,
     _diff_thesis,
     _make_assemble_node,
     _resolve_components,
@@ -282,4 +281,10 @@ class TestLangfuseHandler:
     def test_no_credentials_returns_none(self, monkeypatch):
         monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
         monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
-        assert _create_langfuse_handler() is None
+        # Reset the cached singleton so _init re-reads the env.
+        import core.utils.observability as obs
+
+        monkeypatch.setattr(obs, "_initialized", False)
+        monkeypatch.setattr(obs, "_client", None)
+        monkeypatch.setattr(obs, "_handler", None)
+        assert obs.get_callback_handler() is None

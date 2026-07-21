@@ -37,6 +37,7 @@ from config.settings import FEEDBACK_OPTIONS
 from core.agents.hallucination_detector import HallucinationDetector
 from core.interfaces.job_manager import IJobManager
 from core.services.thesis_generator_service import _tag_strengths_from_documents
+from core.utils.observability import trace_request
 from dependency_injection.container import ServiceContainer
 
 logger = logging.getLogger(__name__)
@@ -237,35 +238,39 @@ async def create_thesis(
             "risks, and investment signals together. Try broadening the query.",
         )
 
-    try:
-        thesis = await container.get_thesis_service().generate_thesis(query, docs)
-    except Exception:
-        logger.exception("Thesis generation failed")
-        raise _error(502, "generation_failed", "The language model failed to generate a thesis")
+    # One Langfuse trace per request: the summarize LLM call (and any gateway
+    # retries) nest under it. Langfuse computes per-model dollar cost natively.
+    with trace_request("create_thesis", input=query) as trace:
+        try:
+            thesis = await container.get_thesis_service().generate_thesis(query, docs)
+        except Exception:
+            logger.exception("Thesis generation failed")
+            raise _error(502, "generation_failed", "The language model failed to generate a thesis")
 
-    try:
-        # One atomic insert with the full completed state: a failure (or crash)
-        # here creates NO row, so a half-written job can never appear in the
-        # library.
-        job = await jm.create_job(
-            query,
-            thesis=thesis,
-            retrieved_docs=docs,
-            refinement_count=0,
-            refinement_status=RefinementStatus.NOT_APPLICABLE,  # until the user refines
-            feedback_history=[],
-            execution_log=[],
-            thesis_history=[],
-            query_embedding=query_embedding,
-        )
-        # Re-fetch so the response carries DB-populated fields (created_at).
-        created = await jm.get_job(job.id)
-    except Exception:
-        logger.exception("Failed to persist thesis job")
-        raise _error(500, "persistence_failed", "Thesis was generated but could not be saved")
+        try:
+            # One atomic insert with the full completed state: a failure (or crash)
+            # here creates NO row, so a half-written job can never appear in the
+            # library.
+            job = await jm.create_job(
+                query,
+                thesis=thesis,
+                retrieved_docs=docs,
+                refinement_count=0,
+                refinement_status=RefinementStatus.NOT_APPLICABLE,  # until the user refines
+                feedback_history=[],
+                execution_log=[],
+                thesis_history=[],
+                query_embedding=query_embedding,
+            )
+            # Re-fetch so the response carries DB-populated fields (created_at).
+            created = await jm.get_job(job.id)
+        except Exception:
+            logger.exception("Failed to persist thesis job")
+            raise _error(500, "persistence_failed", "Thesis was generated but could not be saved")
 
-    response.headers["Location"] = f"/api/theses/{job.id}"
-    return await _job_to_response(created, jm)
+        response.headers["Location"] = f"/api/theses/{job.id}"
+        trace.annotate(job_id=str(job.id), num_sources=len(docs))
+        return await _job_to_response(created, jm)
 
 
 @router.get("/theses", response_model=List[ThesisSummaryResponse], tags=["theses"])
@@ -372,18 +377,23 @@ async def create_refinement(
         "messages": [],
     }
 
+    # One Langfuse trace per refinement round: the planner LLM (via invoke_config)
+    # and the tool-driven rewrite (via the handler attached to GeminiLanguageModel)
+    # both nest under this span. Langfuse computes per-model dollar cost natively.
     invoke_config = {"callbacks": [langfuse_handler]} if langfuse_handler else {}
-    try:
-        result_state = await graph.ainvoke(langgraph_state, config=invoke_config)
-    except NotImplementedError as e:
-        raise _error(501, "refinement_not_supported", str(e))
-    except Exception:
-        logger.exception("Error during thesis refinement")
-        raise _error(
-            502,
-            "refinement_failed",
-            "The language model was unavailable. Please try again shortly.",
-        )
+    with trace_request("create_refinement", input=job.query) as trace:
+        try:
+            result_state = await graph.ainvoke(langgraph_state, config=invoke_config)
+        except NotImplementedError as e:
+            raise _error(501, "refinement_not_supported", str(e))
+        except Exception:
+            logger.exception("Error during thesis refinement")
+            raise _error(
+                502,
+                "refinement_failed",
+                "The language model was unavailable. Please try again shortly.",
+            )
+        trace.annotate(job_id=job_id)
 
     detector = HallucinationDetector()
     hallucination = detector.analyze(result_state.get("messages", []))

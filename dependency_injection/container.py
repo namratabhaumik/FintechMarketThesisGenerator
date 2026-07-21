@@ -17,7 +17,7 @@ from finthesis_internal.semantic_scoring_strategy import SemanticScoringStrategy
 from core.implementations.llm.ai_gateway import AIGateway
 from core.implementations.llm.cache_manager import CacheManager
 from core.implementations.llm.supabase_cache_manager import SupabaseCacheManager
-from core.implementations.llm.cost_tracker import CostTracker
+from core.implementations.llm.usage_tracker import UsageTracker
 from core.implementations.llm.gemini_llm import GeminiLanguageModel
 from core.implementations.llm.local_summarizer import LocalSummarizerModel
 from core.implementations.llm.llm_wrapper import LLMWrapper
@@ -167,7 +167,7 @@ class ServiceContainer:
 
         # AI Gateway components (singletons)
         self._cache_manager: Optional[ICacheManager] = None
-        self._cost_tracker: Optional[CostTracker] = None
+        self._usage_tracker: Optional[UsageTracker] = None
 
         # Services
         self._silver_service: Optional[SilverService] = None
@@ -498,19 +498,20 @@ class ServiceContainer:
                 )
         return self._cache_manager
 
-    def get_cost_tracker(self) -> CostTracker:
-        """Get or create cost tracker for AI Gateway.
+    def get_usage_tracker(self) -> UsageTracker:
+        """Get or create the usage tracker for the AI Gateway.
 
-        Builds the token/cost accountant the AI Gateway uses to tally LLM spend.
-        Leaf component. Only wired in when the gateway is enabled.
+        Builds the call/token accountant that powers the gateway's daily
+        call-budget guardrail (dollars live in Langfuse, not here). Leaf
+        component. Only wired in when the gateway is enabled.
 
         Returns:
-            CostTracker instance.
+            UsageTracker instance.
         """
-        if not self._cost_tracker:
-            logger.info("Creating CostTracker")
-            self._cost_tracker = CostTracker()
-        return self._cost_tracker
+        if not self._usage_tracker:
+            logger.info("Creating UsageTracker")
+            self._usage_tracker = UsageTracker()
+        return self._usage_tracker
 
     def get_llm(self) -> ILanguageModel:
         """Get or create LLM implementation.
@@ -570,9 +571,9 @@ class ServiceContainer:
 
         # Wrap with AI Gateway if enabled
         if self._config.ai_gateway.enabled:
-            logger.info("Wrapping LLM with AI Gateway for cost optimization")
+            logger.info("Wrapping LLM with AI Gateway for routing")
             cache_manager = self.get_cache_manager()
-            cost_tracker = self.get_cost_tracker()
+            usage_tracker = self.get_usage_tracker()
 
             # Create fallback LLM for gateway if not already created
             fallback_llm = fallback_llm if provider == "gemini" else LocalSummarizerModel(self._config.llm)
@@ -582,7 +583,7 @@ class ServiceContainer:
                 fallback_llm=fallback_llm,
                 config=self._config.ai_gateway,
                 cache_manager=cache_manager,
-                cost_tracker=cost_tracker,
+                usage_tracker=usage_tracker,
             )
 
         return llm
