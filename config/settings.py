@@ -31,6 +31,22 @@ FEEDBACK_OPTIONS: List[str] = [
     "Need stronger evidence for key themes",
 ]
 
+# Evidence lens per feedback reason: when a refinement round asks for different
+# or more evidence, the rewrite LLM should read a feedback-relevant slice of the
+# wide article pool instead of the same fixed subset every round. Each lens is a
+# deterministic re-ranking over stored metadata (tags / published_at / query
+# similarity).
+#   theme   -> articles carrying the thesis's key themes, by similarity
+#   signal  -> investment-signal-tagged articles, by similarity
+#   recency -> most recently published articles
+#   focus   -> tightest, highest-similarity cluster (narrow a too-broad analysis)
+FEEDBACK_LENS: Dict[str, str] = {
+    "Need stronger evidence for key themes": "theme",
+    "Investment signals are too vague": "signal",
+    "Missing recent market trends": "recency",
+    "Analysis is too broad, be more specific": "focus",
+}
+
 
 @dataclass
 class RSSFeedConfig:
@@ -100,11 +116,26 @@ class VectorStoreConfig:
 
 @dataclass
 class RetrievalConfig:
-    """MMR (Maximal Marginal Relevance) retrieval config.
+    """Retrieval config: a wide analytics pool that MMR narrows for the LLM.
 
-    It first pulls `fetch_k` candidates by similarity, then selects `k` of them 
-    by the MMR objective so the returned chunks are not near-duplicates of each 
-    other. `lambda_mult` is the relevance/diversity dial
+    Retrieval is decoupled into two audiences:
+
+    - Analytics / evidence: `retrieve()` pulls up to `fetch_k` chunk candidates
+      by similarity, drops any below `min_similarity`, then DEDUPES BY URL (one
+      best chunk per article) and caps to `max_articles`. Those distinct
+      articles carry the full weight of the market - tag strengths, scoring,
+      confidence and the sources list are all computed over them, so the numbers
+      reflect real coverage.
+    - LLM narrative: `select_diverse()` runs MMR over the deduped article set to
+      pick `k` diverse articles, and only those go to the summarizer. Sending `k`
+      docs to the LLM keeps token cost and latency flat; `lambda_mult` is the MMR
+      relevance/diversity dial. It defaults high (0.8, mostly relevance) because
+      dedup already removed same-article duplicates, so the remaining risk is
+      picking a diverse-but-off-topic article over a more on-topic one - which
+      scatters the narrative on pointed queries. A high lambda keeps the subset
+      tight to the query and only trims near-identical articles. When the pool is
+      already <= k, select_diverse skips MMR and passes all of them through in
+      relevance order.
 
     `window_days` is a trailing recency window: retrieval only considers articles
     published within the last `window_days` from the query time (a sliding window
@@ -112,13 +143,14 @@ class RetrievalConfig:
     default is a broad year. Set it to 0 to disable the filter and search the
     whole corpus.
 
-    `min_similarity` cosine floor applied to `fetch_k` candidates before
-    MMR. Chunks scoring below it are dropped (value specific to EMBEDDING_MODEL & corpus):
+    `min_similarity` cosine floor applied to the `fetch_k` candidates before
+    dedup (value specific to EMBEDDING_MODEL & corpus):
     ~0.67 off-topic .. ~0.84 on-topic.
     """
     k: int = 5
-    fetch_k: int = 20
-    lambda_mult: float = 0.5
+    fetch_k: int = 400
+    max_articles: int = 50
+    lambda_mult: float = 0.8
     window_days: int = 365
     min_similarity: float = 0.72
 
@@ -147,8 +179,9 @@ class AIGatewayConfig:
     # after a prompt change to invalidate a persistent cache that a deploy alone
     # would not clear.
     cache_version: str = ""
-    cost_limit_daily: float = 5.0
-    cost_limit_monthly: float = 100.0
+    # Max real primary-provider calls per day before routing forces the free
+    # local summarizer. Dollar cost is tracked in Langfuse, not here.
+    call_budget_daily: int = 50
     track_metrics: bool = True
 
 
@@ -282,11 +315,13 @@ class AppConfig:
 
         vs_provider = os.getenv("VECTORSTORE_PROVIDER", "supabase")
 
-        # Retrieval config defaults for MMR
+        # Retrieval config: wide analytics pool (fetch_k chunks -> dedup to
+        # max_articles), MMR narrows to k for the LLM.
         retrieval = RetrievalConfig(
             k=int(os.getenv("RETRIEVAL_K", "5")),
-            fetch_k=int(os.getenv("RETRIEVAL_FETCH_K", "20")),
-            lambda_mult=float(os.getenv("RETRIEVAL_LAMBDA_MULT", "0.5")),
+            fetch_k=int(os.getenv("RETRIEVAL_FETCH_K", "400")),
+            max_articles=int(os.getenv("RETRIEVAL_MAX_ARTICLES", "50")),
+            lambda_mult=float(os.getenv("RETRIEVAL_LAMBDA_MULT", "0.8")),
             window_days=int(os.getenv("RETRIEVAL_WINDOW_DAYS", "365")),
             min_similarity=float(os.getenv("RETRIEVAL_MIN_SIMILARITY", "0.72")),
         )
@@ -304,8 +339,7 @@ class AppConfig:
         ai_gateway_cache_type = os.getenv("AI_GATEWAY_CACHE_TYPE", "memory")
         ai_gateway_cache_ttl = int(os.getenv("AI_GATEWAY_CACHE_TTL_SECONDS", "604800"))
         ai_gateway_cache_version = os.getenv("AI_GATEWAY_CACHE_VERSION", "")
-        ai_gateway_cost_limit_daily = float(os.getenv("AI_GATEWAY_COST_LIMIT_DAILY", "5.0"))
-        ai_gateway_cost_limit_monthly = float(os.getenv("AI_GATEWAY_COST_LIMIT_MONTHLY", "100.0"))
+        ai_gateway_call_budget_daily = int(os.getenv("AI_GATEWAY_CALL_BUDGET_DAILY", "50"))
         ai_gateway_track_metrics = os.getenv("AI_GATEWAY_TRACK_METRICS", "true").lower() == "true"
 
         return cls(
@@ -343,8 +377,7 @@ class AppConfig:
                 cache_type=ai_gateway_cache_type,
                 cache_ttl_seconds=ai_gateway_cache_ttl,
                 cache_version=ai_gateway_cache_version,
-                cost_limit_daily=ai_gateway_cost_limit_daily,
-                cost_limit_monthly=ai_gateway_cost_limit_monthly,
+                call_budget_daily=ai_gateway_call_budget_daily,
                 track_metrics=ai_gateway_track_metrics,
             ),
         )

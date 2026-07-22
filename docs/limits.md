@@ -7,7 +7,7 @@ The boundaries you may run into, and why they exist.
 | Limit | Value | Why |
 | --- | --- | --- |
 | Refinement rounds per thesis | 3 | After three grounded revisions, the leverage is in rephrasing the query, not re-polishing the same evidence. Enforced server-side. |
-| Sources per thesis | 5 articles | MMR-selected for relevance with a redundancy penalty; a tight evidence set keeps every source auditable. |
+| Sources per thesis | Up to 50 articles | Every distinct article that clears the relevance floor is shown, so the score, tags, and confidence reflect real coverage rather than a small sample. The narrative itself is written from a smaller MMR-selected subset (relevance with a redundancy penalty) to keep it focused and cheap. Configurable via `RETRIEVAL_MAX_ARTICLES`; sparse topics surface far fewer. |
 | Compare view | Current + 2 past theses | Three columns is where the side-by-side table stops being skimmable. |
 | Related-theses recall floor | 86% query similarity | Recall means "same topic researched before", not "also fintech". |
 | Corpus scope | Curated fintech news feeds | Tagging, scoring, and trends all assume the fintech taxonomy; general-purpose queries refuse rather than stretch. |

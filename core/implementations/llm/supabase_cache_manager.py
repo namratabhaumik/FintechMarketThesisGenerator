@@ -9,7 +9,7 @@ from supabase import Client
 
 from core.implementations.llm.cache_manager import hash_cache_key
 from core.interfaces.cache import ICacheManager
-from core.models.cache_entry import CacheEntry
+from core.models.cache_entry import CacheEntry, effective_ttl
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ class SupabaseCacheManager(ICacheManager):
         # Compare tz-aware UTC on both sides (CacheEntry.is_expired uses a naive
         # now(), which would mismatch the stored tz-aware timestamp).
         age = (datetime.now(timezone.utc) - created_at).total_seconds()
-        if age > self._ttl_seconds:
+        if age > effective_ttl(row["model"], self._ttl_seconds):
             self._evict(key)
             self._misses += 1
             return None

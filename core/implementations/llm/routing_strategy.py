@@ -27,16 +27,16 @@ class RoutingStrategy(ABC):
         self,
         documents: List[Document],
         topic: str,
-        daily_spend: float,
-        daily_limit: float,
+        daily_calls: int,
+        call_budget: int,
     ) -> str:
         """Select which route to use.
 
         Args:
             documents: List of documents to summarize.
             topic: The query topic.
-            daily_spend: Current daily spend in USD.
-            daily_limit: Daily spend limit in USD.
+            daily_calls: Real primary-provider calls made today.
+            call_budget: Max primary calls per day before forcing fallback.
 
         Returns:
             ROUTE_PRIMARY or ROUTE_FALLBACK.
@@ -68,18 +68,18 @@ class CostOptimizedStrategy(RoutingStrategy):
         self,
         documents: List[Document],
         topic: str,
-        daily_spend: float,
-        daily_limit: float,
+        daily_calls: int,
+        call_budget: int,
     ) -> str:
-        """Select route based on document size and cost limits.
+        """Select route based on document size and the daily call budget.
 
         Strategy:
         1. If documents are large (>threshold tokens) -> fallback (free)
-        2. If daily spend > 80% of limit -> fallback (cost containment)
+        2. If daily calls > 80% of budget -> fallback (spend containment)
         3. Otherwise -> primary (better quality for small docs)
         """
         estimated_tokens = _estimate_tokens(documents)
-        cost_ratio = daily_spend / daily_limit if daily_limit > 0 else 0
+        call_ratio = daily_calls / call_budget if call_budget > 0 else 0
 
         if estimated_tokens > self._size_threshold:
             logger.info(
@@ -88,10 +88,10 @@ class CostOptimizedStrategy(RoutingStrategy):
             )
             return ROUTE_FALLBACK
 
-        if cost_ratio > 0.8:
+        if call_ratio > 0.8:
             logger.info(
-                f"Cost ratio {cost_ratio:.2%} > 80%: routing to the local "
-                f"summarizer for cost containment"
+                f"Call budget {daily_calls}/{call_budget} ({call_ratio:.0%}) > 80%: "
+                f"routing to the local summarizer for spend containment"
             )
             return ROUTE_FALLBACK
 
@@ -106,8 +106,8 @@ class QualityFirstStrategy(RoutingStrategy):
         self,
         documents: List[Document],
         topic: str,
-        daily_spend: float,
-        daily_limit: float,
+        daily_calls: int,
+        call_budget: int,
     ) -> str:
         """Always prefer the primary LLM for best quality."""
         logger.info("Quality-first routing: using the primary LLM")
@@ -118,7 +118,7 @@ class HybridStrategy(RoutingStrategy):
     """Balance quality and cost with intelligent decision-making.
 
     Uses the primary LLM for small documents, the local summarizer for large
-    ones. Respects cost limits as a hard constraint.
+    ones. Respects the daily call budget as a hard constraint.
     """
 
     def __init__(self, size_threshold_tokens: int = 5000):
@@ -133,21 +133,21 @@ class HybridStrategy(RoutingStrategy):
         self,
         documents: List[Document],
         topic: str,
-        daily_spend: float,
-        daily_limit: float,
+        daily_calls: int,
+        call_budget: int,
     ) -> str:
-        """Select route balancing quality and cost.
+        """Select route balancing quality and the daily call budget.
 
         Strategy:
-        1. If daily spend would exceed limit -> fallback (hard constraint)
+        1. If the daily call budget is reached -> fallback (hard constraint)
         2. If documents are large (>threshold) -> fallback (no benefit to API)
         3. If documents are small -> primary (better quality)
         """
         estimated_tokens = _estimate_tokens(documents)
 
-        # Hard cost limit
-        if daily_spend >= daily_limit:
-            logger.info("Daily cost limit reached: routing to the local summarizer")
+        # Hard call budget
+        if daily_calls >= call_budget:
+            logger.info("Daily call budget reached: routing to the local summarizer")
             return ROUTE_FALLBACK
 
         # Large documents -> local summarizer (free, adequate quality)

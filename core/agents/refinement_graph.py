@@ -2,8 +2,7 @@
 
 import json
 import logging
-import os
-from typing import Annotated, Any, Dict, List, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, TypedDict
 
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
@@ -15,6 +14,7 @@ from langgraph.prebuilt import ToolNode
 from core.agents.thesis_tools import create_thesis_tools
 from core.models.thesis import StructuredThesis
 from core.services.thesis_generator_service import ThesisGeneratorService
+from core.utils.observability import get_callback_handler
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,10 @@ class ThesisRefinementState(TypedDict):
 
     Attributes:
         topic: Original market topic.
-        documents: Source documents for context.
+        documents: The wide analytics pool (distinct articles) - drives the
+            displayed grounded tags on refinement.
+        summary_documents: The diverse subset the LLM rewrites from (same docs
+            the original summary read).
         current_thesis: Current StructuredThesis object.
         feedback_history: List of feedback rounds.
         refinement_count: Number of refinements completed [0, MAX_REFINEMENTS).
@@ -37,28 +40,13 @@ class ThesisRefinementState(TypedDict):
 
     topic: str
     documents: List[Document]
+    summary_documents: List[Document]
     current_thesis: StructuredThesis
     feedback_history: List[List[str]]
     refinement_count: int
     status: str
     execution_log: List[Dict[str, Any]]
     messages: Annotated[List[BaseMessage], add_messages]
-
-
-def _create_langfuse_handler() -> Optional[object]:
-    """Create a Langfuse callback handler if credentials are configured."""
-    if not (os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")):
-        logger.info("Langfuse credentials not set - tracing disabled")
-        return None
-
-    from langfuse import Langfuse
-    from langfuse.langchain import CallbackHandler
-
-    # v4: the CallbackHandler only binds to a global Langfuse client singleton, so it
-    # must be initialized first. Langfuse() reads keys + LANGFUSE_BASE_URL from env.
-    Langfuse()
-    logger.info("Langfuse tracing enabled")
-    return CallbackHandler()
 
 
 def _make_planner_node(llm_with_tools):
@@ -349,7 +337,7 @@ def build_refinement_graph(
     graph.add_edge("escalate", END)
 
     compiled = graph.compile()
-    langfuse_handler = _create_langfuse_handler()
+    langfuse_handler = get_callback_handler()
     logger.info(
         f"Refinement graph compiled with real tool calling, "
         f"MAX_REFINEMENTS={MAX_REFINEMENTS}, model={model_name}"

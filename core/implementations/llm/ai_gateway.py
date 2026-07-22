@@ -1,9 +1,14 @@
-"""AI Gateway for cost-optimized LLM routing with caching and cost tracking."""
+"""AI Gateway for LLM routing with caching and a daily call-budget guardrail.
+
+Dollar cost is tracked by Langfuse (accurate, self-maintaining per-model
+pricing), not here. The gateway confines itself to routing (size- and
+budget-based), caching, and lightweight usage counting.
+"""
 
 import asyncio
 import logging
 import time
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from langchain_core.documents import Document
 
@@ -14,21 +19,22 @@ from core.interfaces.llm import (
     ILanguageModel,
     summary_source_var,
 )
-from core.implementations.llm.cost_tracker import CostTracker
+from core.implementations.llm.usage_tracker import UsageTracker
 from core.implementations.llm.routing_strategy import ROUTE_PRIMARY, get_strategy
+from core.models.cache_entry import FALLBACK_MODEL
 from config.settings import AIGatewayConfig
 
 logger = logging.getLogger(__name__)
 
 
 class AIGateway(ILanguageModel):
-    """AI Gateway wrapper for cost-optimized LLM usage.
+    """AI Gateway wrapper for LLM routing.
 
     Provides:
     - Response caching to reduce API calls
-    - Cost tracking and monitoring
-    - Intelligent provider routing (cost vs quality tradeoff)
-    - Seamless fallback to multiple providers
+    - Usage counting (calls/tokens; dollars live in Langfuse)
+    - Intelligent provider routing (size- and budget-based)
+    - Seamless fallback to the local summarizer
     """
 
     def __init__(
@@ -37,7 +43,7 @@ class AIGateway(ILanguageModel):
         fallback_llm: ILanguageModel,
         config: AIGatewayConfig,
         cache_manager: ICacheManager,
-        cost_tracker: CostTracker,
+        usage_tracker: UsageTracker,
     ):
         """Initialize AI Gateway.
 
@@ -46,19 +52,19 @@ class AIGateway(ILanguageModel):
             fallback_llm: Fallback LLM implementation.
             config: AI Gateway configuration.
             cache_manager: Cache manager instance.
-            cost_tracker: Cost tracker instance.
+            usage_tracker: Usage tracker (call counts / tokens).
         """
         self._primary_llm = primary_llm
         self._fallback_llm = fallback_llm
         self._config = config
         self._cache_manager = cache_manager
-        self._cost_tracker = cost_tracker
+        self._usage_tracker = usage_tracker
         self._routing_strategy = get_strategy(config.strategy)
 
         logger.info(
             f"AI Gateway initialized: strategy={config.strategy}, "
             f"cache_enabled={config.cache_enabled}, "
-            f"cost_limit_daily=${config.cost_limit_daily}"
+            f"call_budget_daily={config.call_budget_daily}"
         )
 
     def _get_documents_text(self, documents: List[Document]) -> str:
@@ -72,12 +78,34 @@ class AIGateway(ILanguageModel):
         """
         return "".join(doc.page_content for doc in documents)
 
+    async def _cache_fallback_summary(
+        self, docs_text: str, topic: str, result: str
+    ) -> None:
+        """Persist a degraded local-fallback summary under a short-lived entry.
+
+        Written with FALLBACK_MODEL so the cache manager ages it out on a short
+        TTL: rapid identical repeats during an outage / budget window are
+        served from cache instead of re-running the extractor, but the real LLM
+        is retried again soon after it recovers.
+        """
+        if not self._config.cache_enabled:
+            return
+        cache_key = self._cache_manager.generate_key(docs_text, topic, "combined")
+        await asyncio.to_thread(
+            self._cache_manager.set,
+            key=cache_key,
+            response=result,
+            model=FALLBACK_MODEL,
+            input_tokens=0,
+            output_tokens=0,
+        )
+
     def _select_provider(self, documents: List[Document], topic: str) -> tuple[str, ILanguageModel]:
         """Use the routing strategy to pick a route and resolve the LLM.
 
         The strategy decides a role (primary vs fallback), not a vendor; the
         label returned here is that role ("primary" / "local"), and callers
-        log the resolved llm's own model name - so logs and cost records stay
+        log the resolved llm's own model name - so logs and usage records stay
         truthful whichever provider LLM_PROVIDER wires in as primary.
 
         Args:
@@ -87,13 +115,13 @@ class AIGateway(ILanguageModel):
         Returns:
             Tuple of (provider_label, llm_instance).
         """
-        daily_spend = self._cost_tracker.get_daily_spend()
+        daily_calls = self._usage_tracker.get_daily_calls()
 
         route = self._routing_strategy.select_route(
             documents=documents,
             topic=topic,
-            daily_spend=daily_spend,
-            daily_limit=self._config.cost_limit_daily,
+            daily_calls=daily_calls,
+            call_budget=self._config.call_budget_daily,
         )
 
         if route == ROUTE_PRIMARY:
@@ -105,11 +133,11 @@ class AIGateway(ILanguageModel):
 
         Flow:
         1. Check cache for identical documents + topic → return if hit
-        2. Use routing strategy to select provider
-        3. Check cost limits
+        2. Enforce the daily call budget (fall back to local when reached)
+        3. Use routing strategy to select provider
         4. Call selected provider
         5. Cache result
-        6. Track cost
+        6. Track usage
         7. Return summary
 
         Args:
@@ -120,7 +148,6 @@ class AIGateway(ILanguageModel):
             Summarized text.
 
         Raises:
-            ValueError: If cost limit exceeded.
             Exception: If both primary and fallback LLMs fail.
         """
         start_time = time.time()
@@ -142,7 +169,7 @@ class AIGateway(ILanguageModel):
                 # Record cache hit
                 if self._config.track_metrics:
                     latency_ms = (time.time() - start_time) * 1000
-                    self._cost_tracker.record_call(
+                    self._usage_tracker.record_call(
                         provider="cache",
                         model="cache",
                         input_tokens=0,
@@ -152,17 +179,21 @@ class AIGateway(ILanguageModel):
                     )
                 return cached_entry.response
 
-        # Step 2: Check cost limit
-        daily_spend = self._cost_tracker.get_daily_spend()
-        if daily_spend >= self._config.cost_limit_daily:
-            logger.warning(f"Daily cost limit reached: ${daily_spend:.2f} >= ${self._config.cost_limit_daily}")
-            # Use fallback to avoid charges
+        # Step 2: Enforce the daily call budget
+        daily_calls = self._usage_tracker.get_daily_calls()
+        if daily_calls >= self._config.call_budget_daily:
+            logger.warning(
+                f"Daily call budget reached: {daily_calls} >= "
+                f"{self._config.call_budget_daily}"
+            )
+            # Use fallback to stay within budget
             try:
-                logger.info("Using fallback LLM due to cost limit")
+                logger.info("Using fallback LLM due to call budget")
                 result = await self._fallback_llm.summarize(documents, topic)
+                await self._cache_fallback_summary(docs_text, topic, result)
                 latency_ms = (time.time() - start_time) * 1000
                 if self._config.track_metrics:
-                    self._cost_tracker.record_call(
+                    self._usage_tracker.record_call(
                         provider="local",
                         model="local-extractor",
                         input_tokens=0,
@@ -197,19 +228,22 @@ class AIGateway(ILanguageModel):
                     output_tokens=int(output_tokens),
                 )
 
-            # Step 6: Track cost
+            # Step 6: Track usage
             if self._config.track_metrics:
                 latency_ms = (time.time() - start_time) * 1000
                 input_tokens = len(docs_text.split()) * 1.3
                 output_tokens = len(result.split()) * 1.3
-                cost = self._cost_tracker.record_call(
+                calls = self._usage_tracker.record_call(
                     provider=provider,
                     model=llm.get_model_name(),
                     input_tokens=int(input_tokens),
                     output_tokens=int(output_tokens),
                     latency_ms=latency_ms,
                 )
-                logger.info(f"{llm.get_model_name()} summarization succeeded - cost: ${cost:.6f}")
+                logger.info(
+                    f"{llm.get_model_name()} summarization succeeded "
+                    f"(daily primary calls={calls})"
+                )
 
             return result
 
@@ -219,10 +253,11 @@ class AIGateway(ILanguageModel):
             try:
                 logger.info("Attempting fallback LLM after primary failure")
                 result = await self._fallback_llm.summarize(documents, topic)
+                await self._cache_fallback_summary(docs_text, topic, result)
 
                 if self._config.track_metrics:
                     latency_ms = (time.time() - start_time) * 1000
-                    self._cost_tracker.record_call(
+                    self._usage_tracker.record_call(
                         provider="local",
                         model="local-extractor",
                         input_tokens=0,
@@ -240,15 +275,18 @@ class AIGateway(ILanguageModel):
         documents: List[Document],
         current_thesis_text: str,
         feedback_items: List[str],
+        prior_feedback: Optional[List[List[str]]] = None,
     ) -> str:
         """Refine thesis with caching, cost optimization, and routing.
 
-        Delegates to primary LLM, with caching based on thesis + feedback hash.
+        Delegates to primary LLM, with caching based on thesis + feedback +
+        evidence hash.
 
         Args:
             documents: Source documents for context.
             current_thesis_text: Original thesis to refine.
-            feedback_items: Feedback constraints from user.
+            feedback_items: This round's feedback constraints from user.
+            prior_feedback: Earlier rounds' feedback (oldest first).
 
         Returns:
             Refined thesis text.
@@ -256,9 +294,15 @@ class AIGateway(ILanguageModel):
         start_time = time.time()
         topic = "fintech"  # Default topic
 
-        # Generate cache key from thesis + feedback
+        # Cache key = thesis + this round's feedback + prior feedback + the
+        # evidence set. The evidence and prior feedback both shape the output now
+        # (the feedback lens can swap in different docs, and prior rounds are in
+        # the prompt), so both must be in the key or a stale rewrite could be
+        # served when either changed.
         feedback_key = "".join(sorted(feedback_items))
-        cache_input = current_thesis_text + feedback_key
+        prior_key = "".join(sorted(item for rnd in (prior_feedback or []) for item in rnd))
+        docs_key = "".join(sorted(d.metadata.get("url", "") for d in documents))
+        cache_input = current_thesis_text + feedback_key + prior_key + docs_key
 
         # Step 1: Check cache
         if self._config.cache_enabled:
@@ -269,7 +313,7 @@ class AIGateway(ILanguageModel):
                 logger.info(f"Cache hit for refinement: {cache_key}")
                 if self._config.track_metrics:
                     latency_ms = (time.time() - start_time) * 1000
-                    self._cost_tracker.record_call(
+                    self._usage_tracker.record_call(
                         provider="cache",
                         model="cache",
                         input_tokens=0,
@@ -279,21 +323,22 @@ class AIGateway(ILanguageModel):
                     )
                 return cached_entry.response
 
-        # Step 2: Check cost limit
-        daily_spend = self._cost_tracker.get_daily_spend()
-        if daily_spend >= self._config.cost_limit_daily:
+        # Step 2: Enforce the daily call budget
+        daily_calls = self._usage_tracker.get_daily_calls()
+        if daily_calls >= self._config.call_budget_daily:
             logger.warning(
-                f"Daily cost limit reached: ${daily_spend:.2f} >= ${self._config.cost_limit_daily}"
+                f"Daily call budget reached: {daily_calls} >= "
+                f"{self._config.call_budget_daily}"
             )
-            # Use fallback to avoid charges
+            # Use fallback to stay within budget
             try:
-                logger.info("Using fallback LLM due to cost limit")
+                logger.info("Using fallback LLM due to call budget")
                 result = await self._fallback_llm.refine(
-                    documents, current_thesis_text, feedback_items
+                    documents, current_thesis_text, feedback_items, prior_feedback
                 )
                 latency_ms = (time.time() - start_time) * 1000
                 if self._config.track_metrics:
-                    self._cost_tracker.record_call(
+                    self._usage_tracker.record_call(
                         provider="local",
                         model="local-extractor",
                         input_tokens=0,
@@ -311,7 +356,7 @@ class AIGateway(ILanguageModel):
         # Step 4: Call selected provider
         try:
             logger.info(f"Calling {llm.get_model_name()} for refinement ({provider} route)")
-            result = await llm.refine(documents, current_thesis_text, feedback_items)
+            result = await llm.refine(documents, current_thesis_text, feedback_items, prior_feedback)
 
             # Step 5: Cache result
             if self._config.cache_enabled:
@@ -327,19 +372,22 @@ class AIGateway(ILanguageModel):
                     output_tokens=int(output_tokens),
                 )
 
-            # Step 6: Track cost
+            # Step 6: Track usage
             if self._config.track_metrics:
                 latency_ms = (time.time() - start_time) * 1000
                 input_tokens = len(cache_input.split()) * 1.3
                 output_tokens = len(result.split()) * 1.3
-                cost = self._cost_tracker.record_call(
+                calls = self._usage_tracker.record_call(
                     provider=provider,
                     model=llm.get_model_name(),
                     input_tokens=int(input_tokens),
                     output_tokens=int(output_tokens),
                     latency_ms=latency_ms,
                 )
-                logger.info(f"{llm.get_model_name()} refinement succeeded - cost: ${cost:.6f}")
+                logger.info(
+                    f"{llm.get_model_name()} refinement succeeded "
+                    f"(daily primary calls={calls})"
+                )
 
             return result
 
@@ -354,7 +402,7 @@ class AIGateway(ILanguageModel):
 
                 if self._config.track_metrics:
                     latency_ms = (time.time() - start_time) * 1000
-                    self._cost_tracker.record_call(
+                    self._usage_tracker.record_call(
                         provider="local",
                         model="local-extractor",
                         input_tokens=0,
@@ -372,17 +420,17 @@ class AIGateway(ILanguageModel):
         return f"AIGateway[{self._primary_llm.get_model_name()}+{self._fallback_llm.get_model_name()}]"
 
     def get_metrics(self) -> Dict:
-        """Get gateway metrics including cache and cost stats.
+        """Get gateway metrics including cache and usage stats.
 
         Returns:
             Dictionary with metrics.
         """
         cache_metrics = self._cache_manager.get_metrics() if self._config.cache_enabled else {}
-        cost_metrics = self._cost_tracker.get_metrics() if self._config.track_metrics else {}
+        usage_metrics = self._usage_tracker.get_metrics() if self._config.track_metrics else {}
 
         return {
             "gateway_enabled": True,
             "strategy": self._config.strategy,
             "cache": cache_metrics,
-            "costs": cost_metrics,
+            "usage": usage_metrics,
         }

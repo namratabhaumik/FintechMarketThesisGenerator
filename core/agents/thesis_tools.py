@@ -55,13 +55,17 @@ def create_thesis_tools(
             signals; 0 otherwise)
         """
         documents = state["documents"]
+        # The diverse subset the LLM rewrites from; older jobs (pre-split) have
+        # no summary_documents, so fall back to the full retrieved set.
+        summary_documents = state.get("summary_documents") or documents
         current_thesis = state["current_thesis"]
         topic = state["topic"]
-        feedback_items = (
-            state["feedback_history"][-1]
-            if state["feedback_history"]
-            else [feedback_focus]
-        )
+        # Split the feedback trajectory: this round's feedback drives the evidence
+        # lens and the rewrite; earlier rounds are passed as constraints to
+        # preserve (prior_feedback), so a new round does not regress them.
+        history = state["feedback_history"]
+        feedback_items = history[-1] if history else [feedback_focus]
+        prior_feedback = history[:-1] if history else []
 
         logger.info(
             f"Tool refine_thesis: focus='{feedback_focus}' "
@@ -73,6 +77,8 @@ def create_thesis_tools(
             documents=documents,
             current_thesis=current_thesis,
             feedback_items=feedback_items,
+            summary_documents=summary_documents,
+            prior_feedback=prior_feedback,
             theme_delta=theme_delta,
             risk_delta=risk_delta,
             signal_delta=signal_delta,

@@ -19,11 +19,10 @@ Generation typically takes a few seconds once the service is warm (the very firs
 
 ## 3. Read the thesis
 
-<!-- Clip: assets/clips/quickstart-thesis.mp4
-<video controls muted playsinline width="100%">
-  <source src="assets/clips/quickstart-thesis.mp4" type="video/mp4">
-</video>
--->
+<iframe width="100%" height="400" src="https://www.youtube-nocookie.com/embed/Yu1gXi3OxcU"
+  title="FinThesis: quickstart" frameborder="0"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+  allowfullscreen></iframe>
 
 The result page, top to bottom:
 
