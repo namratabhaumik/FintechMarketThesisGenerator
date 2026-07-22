@@ -113,7 +113,13 @@ class RetrievalConfig:
     - LLM narrative: `select_diverse()` runs MMR over the deduped article set to
       pick `k` diverse articles, and only those go to the summarizer. Sending `k`
       docs to the LLM keeps token cost and latency flat; `lambda_mult` is the MMR
-      relevance/diversity dial.
+      relevance/diversity dial. It defaults high (0.8, mostly relevance) because
+      dedup already removed same-article duplicates, so the remaining risk is
+      picking a diverse-but-off-topic article over a more on-topic one - which
+      scatters the narrative on pointed queries. A high lambda keeps the subset
+      tight to the query and only trims near-identical articles. When the pool is
+      already <= k, select_diverse skips MMR and passes all of them through in
+      relevance order.
 
     `window_days` is a trailing recency window: retrieval only considers articles
     published within the last `window_days` from the query time (a sliding window
@@ -128,7 +134,7 @@ class RetrievalConfig:
     k: int = 5
     fetch_k: int = 400
     max_articles: int = 50
-    lambda_mult: float = 0.5
+    lambda_mult: float = 0.8
     window_days: int = 365
     min_similarity: float = 0.72
 
@@ -299,7 +305,7 @@ class AppConfig:
             k=int(os.getenv("RETRIEVAL_K", "5")),
             fetch_k=int(os.getenv("RETRIEVAL_FETCH_K", "400")),
             max_articles=int(os.getenv("RETRIEVAL_MAX_ARTICLES", "50")),
-            lambda_mult=float(os.getenv("RETRIEVAL_LAMBDA_MULT", "0.5")),
+            lambda_mult=float(os.getenv("RETRIEVAL_LAMBDA_MULT", "0.8")),
             window_days=int(os.getenv("RETRIEVAL_WINDOW_DAYS", "365")),
             min_similarity=float(os.getenv("RETRIEVAL_MIN_SIMILARITY", "0.72")),
         )

@@ -39,7 +39,7 @@ This is a soft, per-attempt call - the same evidence can read differently to the
 
 > "The sources didn't give us enough to write a reliable narrative for this query - but the ... below are grounded in the same sources and worth reviewing directly."
 
-This is a deterministic floor checked before the narrative attempt, evaluated on the same retrieved documents every round. Refining reuses those same documents, so it cannot change this outcome - a refinement round on this thesis makes no changes and says so explicitly. **What to do:** read the structured sections directly, or broaden/reframe the query to retrieve richer evidence.
+This is a deterministic floor checked before the narrative attempt, evaluated on the diverse subset the model would actually read (the same subset every round). Refining reuses those same documents, so it cannot change this outcome - a refinement round on this thesis makes no changes and says so explicitly. **What to do:** read the structured sections directly, or broaden/reframe the query to retrieve richer evidence.
 
 ## Fallback: local summarizer
 

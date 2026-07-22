@@ -184,6 +184,22 @@ class TestDocumentRetrievalService:
         # The transient embedding must not survive into the LLM/persisted docs.
         assert all("embedding" not in d.metadata for d in selected)
 
+    def test_select_diverse_skips_mmr_when_pool_at_or_below_k(self):
+        from config.settings import RetrievalConfig
+
+        # 3 docs, k=5 -> no selection needed; pass all through in order without
+        # needing a query embedding at all, embedding stripped.
+        pool = [
+            Document(page_content=f"a{i}", metadata={"url": f"u{i}", "embedding": [1.0, 0.0]})
+            for i in range(3)
+        ]
+        service, _ = self._service(RetrievalConfig(k=5), docs=pool)
+
+        selected = service.select_diverse(pool, query_embedding=None)
+
+        assert [d.metadata["url"] for d in selected] == ["u0", "u1", "u2"]
+        assert all("embedding" not in d.metadata for d in selected)
+
     def test_select_diverse_falls_back_without_query_embedding(self):
         from config.settings import RetrievalConfig
 

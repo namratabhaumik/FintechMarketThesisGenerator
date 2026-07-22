@@ -112,6 +112,12 @@ class DocumentRetrievalService:
         if not docs:
             return []
 
+        # Pool already at or under the target: MMR would just return every doc
+        # (reordered), so skip it and keep them in relevance order. This is the
+        # common case for pointed queries where few articles clear the floor.
+        if len(docs) <= effective_k:
+            return [_without_embedding(d) for d in docs]
+
         candidate_embeddings = [doc.metadata.get("embedding") for doc in docs]
         # MMR needs both the query vector and every candidate's chunk vector. If
         # the query embedding failed upstream, or a doc has no carried embedding
