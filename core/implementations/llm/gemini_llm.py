@@ -1,7 +1,7 @@
 """Gemini LLM implementation."""
 
 import logging
-from typing import List
+from typing import List, Optional
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.documents import Document
@@ -83,13 +83,16 @@ If the source documents do not contain enough information to address the topic, 
         documents: List[Document],
         current_thesis_text: str,
         feedback_items: List[str],
+        prior_feedback: Optional[List[List[str]]] = None,
     ) -> str:
         """Refine thesis based on user feedback using direct chat call.
 
         Args:
             documents: Source documents for context.
             current_thesis_text: Original thesis to refine.
-            feedback_items: Feedback constraints from user.
+            feedback_items: This round's feedback constraints from user.
+            prior_feedback: Earlier rounds' feedback (oldest first), shown as
+                already-satisfied constraints to preserve.
 
         Returns:
             Refined thesis text.
@@ -97,12 +100,24 @@ If the source documents do not contain enough information to address the topic, 
         # Build feedback constraints as bullet points
         feedback_str = "\n".join(f"- {item}" for item in feedback_items)
 
+        # Earlier rounds, if any: shown as constraints to keep satisfying so a new
+        # round does not regress them, and framed as "preserve" so repeated
+        # feedback does not compound into over-correction.
+        prior_items = [item for rnd in (prior_feedback or []) for item in rnd]
+        prior_block = ""
+        if prior_items:
+            prior_str = "\n".join(f"- {item}" for item in prior_items)
+            prior_block = (
+                "\nFEEDBACK ALREADY ADDRESSED IN EARLIER ROUNDS (keep the thesis "
+                f"consistent with these; do not undo them):\n{prior_str}\n"
+            )
+
         # Concatenate document content for context
         doc_content = "\n\n".join(doc.page_content for doc in documents)
 
         # the LLM writes the narrative; no tool text is injected here
         prompt = f"""You are a fintech market analyst. Revise the investment thesis below to
-address the reader's feedback, staying grounded in the source documents.
+address the reader's latest feedback, staying grounded in the source documents.
 
 Write a clear, concise narrative analysis in prose. Do NOT use headings, bullet
 lists, JSON, just paragraphs.
@@ -112,8 +127,8 @@ feedback, respond with exactly "REFUSED: ".
 
 CURRENT THESIS:
 {current_thesis_text}
-
-READER FEEDBACK (address each point):
+{prior_block}
+LATEST READER FEEDBACK (address each point):
 {feedback_str}
 
 SOURCE DOCUMENTS (for context):

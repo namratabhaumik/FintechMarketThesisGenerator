@@ -1,7 +1,7 @@
 """LLM wrapper with retry logic and fallback."""
 
 import logging
-from typing import List
+from typing import List, Optional
 
 from langchain_core.documents import Document
 from tenacity import (
@@ -118,6 +118,7 @@ class LLMWrapper(ILanguageModel):
         documents: List[Document],
         current_thesis_text: str,
         feedback_items: List[str],
+        prior_feedback: Optional[List[List[str]]] = None,
     ) -> str:
         """Refine thesis with retry logic on the primary LLM only.
 
@@ -145,7 +146,7 @@ class LLMWrapper(ILanguageModel):
             ):
                 with attempt:
                     result = await self._primary_llm.refine(
-                        documents, current_thesis_text, feedback_items
+                        documents, current_thesis_text, feedback_items, prior_feedback
                     )
             logger.info("Primary LLM refinement succeeded")
             return result

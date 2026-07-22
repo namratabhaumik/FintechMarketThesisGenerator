@@ -18,7 +18,7 @@ Below every unapproved thesis sits the **Refine Thesis** panel with a fixed set 
 - Analysis is too broad, be more specific
 - Need stronger evidence for key themes
 
-Select one or more reasons and click **Refine Thesis**. The reasons are deliberately structured rather than free text: each maps to revision behavior the agent actually knows how to execute against the retrieved evidence, which keeps refinement grounded in the same sources as the original thesis.
+Select one or more reasons and click **Refine Thesis**. The reasons are deliberately structured rather than free text: each maps to revision behavior the agent actually knows how to execute against the retrieved evidence, which keeps refinement grounded in the same retrieved article pool as the original thesis. Some reasons (the evidence-seeking ones) re-focus which articles from that pool the rewrite reads, but never fetch anything new.
 
 ## What a round produces
 
@@ -31,8 +31,8 @@ A round can also come back with the thesis unchanged. The round still counts aga
 
 Whether a no-op is likely depends on *why* the current thesis is the way it is:
 
-- **Refining a [narrative-refused](../concepts/refusals.md) thesis often succeeds.** If the Raw Summary shows "the sources touch on related fintech topics but don't specifically address this query", that refusal was the model's own judgment call on that attempt - refinement reruns the narrative with your feedback added to the prompt, over the same sources.
-- **Refining a thin-evidence refusal is a guaranteed no-op.** If the Raw Summary instead says "the sources didn't give us enough to write a reliable narrative", that refusal came from a deterministic check on the retrieved evidence, not the model's judgment. Refinement never re-retrieves - it reuses the same documents every round - so this outcome cannot change; the round will report "No changes made" every time. Broaden or rephrase the original query instead.
+- **Refining a [narrative-refused](../concepts/refusals.md) thesis often succeeds.** If the Raw Summary shows "the sources touch on related fintech topics but don't specifically address this query", that refusal was the model's own judgment call on that attempt - refinement reruns the narrative with your feedback added to the prompt, and for evidence-seeking feedback it also pulls more relevant articles from the retrieved pool, so a later pass can succeed where the first declined.
+- **Refining a thin-evidence refusal is a guaranteed no-op.** If the Raw Summary instead says "the sources didn't give us enough to write a reliable narrative", that refusal came from a deterministic evidence floor, not the model's judgment. A refinement round on it skips the rewrite entirely - the floor reflects the retrieved pool, which is never re-fetched - so this outcome cannot change; the round will report "No changes made" every time. Broaden or rephrase the original query instead.
 
 If the agent ever attempts to call a tool that does not exist, a **Hallucinations Detected** panel appears listing the invalid calls. Its absence is the normal case.
 

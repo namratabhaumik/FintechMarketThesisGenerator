@@ -8,11 +8,13 @@ from langchain_core.documents import Document
 
 from core.models.trend_metric import TrendMetric
 from core.services.ingestion_service import article_to_document
+from core.models.thesis import StructuredThesis
 from core.services.thesis_generator_service import (
     ThesisGeneratorService,
     _apply_cap_deltas,
     _gold_confidence_inputs,
     _ranked_tags_from_documents,
+    _select_feedback_evidence,
 )
 
 
@@ -236,6 +238,69 @@ class TestDocumentRetrievalService:
         assert vs.retrieve_args["window_days"] == 365
         assert vs.retrieve_args["date_from"] is None
         assert vs.retrieve_args["date_to"] is None
+
+
+def _pool_doc(url, *, themes=None, signals=None, published="2026-01-01", sim=0.75):
+    return Document(page_content=url, metadata={
+        "url": url,
+        "themes": themes or [],
+        "signals": signals or [],
+        "published_at": f"{published}T00:00:00",
+        "similarity": sim,
+    })
+
+
+class TestSelectFeedbackEvidence:
+    """_select_feedback_evidence: the refinement evidence lens. Deterministic
+    re-ranking of the wide pool by stored metadata, blended with the original
+    summary docs for continuity. Only touches which docs the LLM reads."""
+
+    # A wide pool of distinct articles with varied tags / dates / similarity.
+    POOL = [
+        _pool_doc("a", themes=["Digital Payments"], signals=["Payment Infrastructure"], published="2026-01-01", sim=0.80),
+        _pool_doc("b", themes=["Digital Lending"], published="2026-06-01", sim=0.78),
+        _pool_doc("c", themes=["Digital Payments"], signals=["AI-Driven Financial Tools"], published="2026-07-01", sim=0.75),
+        _pool_doc("d", themes=["WealthTech"], signals=["WealthTech Disruption"], published="2026-03-01", sim=0.90),
+        _pool_doc("e", published="2026-02-01", sim=0.73),
+    ]
+    # The current summary subset (distinct from the pool urls) -> top 2 kept.
+    ORIGINAL = [_pool_doc("o1"), _pool_doc("o2"), _pool_doc("o3")]
+
+    def _urls(self, docs):
+        return [d.metadata["url"] for d in docs]
+
+    def _run(self, feedback, key_themes=("Digital Payments",)):
+        thesis = StructuredThesis(key_themes=list(key_themes))
+        return _select_feedback_evidence(self.POOL, self.ORIGINAL, feedback, thesis, target_n=3)
+
+    def test_structural_feedback_no_lens_keeps_original(self):
+        out = self._run(["Too many risks, not enough opportunities"])
+        assert self._urls(out) == ["o1", "o2", "o3"]
+
+    def test_theme_lens_blends_theme_tagged_by_similarity(self):
+        # key theme "Digital Payments" -> a(0.80), c(0.75); keep top-2 original + a.
+        out = self._run(["Need stronger evidence for key themes"])
+        assert self._urls(out) == ["o1", "o2", "a"]
+
+    def test_signal_lens_picks_signal_tagged_by_similarity(self):
+        # signal-tagged: d(0.90), a(0.80), c(0.75) -> fill with d.
+        out = self._run(["Investment signals are too vague"])
+        assert self._urls(out) == ["o1", "o2", "d"]
+
+    def test_recency_lens_picks_most_recent(self):
+        # newest published: c (2026-07) -> fill with c.
+        out = self._run(["Missing recent market trends"])
+        assert self._urls(out) == ["o1", "o2", "c"]
+
+    def test_focus_lens_picks_highest_similarity(self):
+        # tightest cluster: d(0.90) -> fill with d.
+        out = self._run(["Analysis is too broad, be more specific"])
+        assert self._urls(out) == ["o1", "o2", "d"]
+
+    def test_lens_with_no_candidates_falls_back_to_original(self):
+        # theme lens but no pool article carries the key theme -> unchanged.
+        out = self._run(["Need stronger evidence for key themes"], key_themes=("Insurtech",))
+        assert self._urls(out) == ["o1", "o2", "o3"]
 
 
 class TestThesisGeneratorService:

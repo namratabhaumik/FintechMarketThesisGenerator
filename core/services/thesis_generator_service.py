@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Tuple
 
 from langchain_core.documents import Document
 
+from config.settings import FEEDBACK_LENS
 from core.interfaces.llm import SOURCE_LLM, ILanguageModel, summary_source_var
 from core.interfaces.trend_repository import ITrendRepository
 from core.models.thesis import StructuredThesis
@@ -149,6 +150,102 @@ def _apply_cap_deltas(
     signal_cap = _clamp_cap(signal_delta)
 
     return themes[:theme_cap], risks[:risk_cap], signals[:signal_cap]
+
+
+# How many of the original summary docs to keep when a lens swaps in fresh
+# evidence, so the rewrite has continuity with the previous round instead of
+# lurching to an entirely new set.
+CONTINUITY_KEEP = 2
+
+
+def _doc_url(doc: Document) -> str:
+    return (doc.metadata or {}).get("url", "") or ""
+
+
+def _doc_similarity(doc: Document) -> float:
+    try:
+        return float((doc.metadata or {}).get("similarity") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _lens_for_feedback(feedback_items: List[str]) -> Optional[str]:
+    """The evidence lens the latest round asks for, or None.
+
+    Maps this round's fixed feedback reasons to a lens via FEEDBACK_LENS. If a
+    round selects several reasons, the first evidence-seeking one (in the user's
+    selection order) wins; a round of only structural reasons returns None.
+    """
+    for item in feedback_items:
+        lens = FEEDBACK_LENS.get(item)
+        if lens:
+            return lens
+    return None
+
+
+def _lens_candidates(
+    lens: str, pool: List[Document], current_thesis: StructuredThesis
+) -> List[Document]:
+    """Rank the wide pool for the requested lens - deterministic, stored metadata
+    only (Silver tags / published_at / query similarity), no embeddings."""
+    if lens == "recency":
+        # Most recently published first; published_at is an ISO string, so a
+        # plain string sort is chronological.
+        return sorted(pool, key=lambda d: (d.metadata or {}).get("published_at") or "", reverse=True)
+    if lens == "focus":
+        # Tightest, most query-relevant cluster - narrow a too-broad analysis.
+        return sorted(pool, key=_doc_similarity, reverse=True)
+    if lens == "theme":
+        wanted = set(current_thesis.key_themes or [])
+        tagged = [d for d in pool if wanted & set((d.metadata or {}).get("themes") or [])]
+        return sorted(tagged, key=_doc_similarity, reverse=True)
+    if lens == "signal":
+        tagged = [d for d in pool if (d.metadata or {}).get("signals")]
+        return sorted(tagged, key=_doc_similarity, reverse=True)
+    return []
+
+
+def _select_feedback_evidence(
+    pool: List[Document],
+    original_summary_docs: List[Document],
+    feedback_items: List[str],
+    current_thesis: StructuredThesis,
+    target_n: int,
+) -> List[Document]:
+    """Pick the evidence the rewrite LLM reads, biased by the latest feedback.
+
+    For an evidence-seeking round, blends continuity with fresh material: keeps
+    the top CONTINUITY_KEEP of the original summary docs so the narrative does not
+    lurch, then fills the rest with the highest-ranked lens candidates not already
+    chosen (deduped by URL), up to `target_n`; if the lens ran short, tops up from
+    the remaining original docs. For a structural round (no lens), or when the
+    lens yields nothing, returns the original subset unchanged.
+
+    Only affects which docs the LLM reads - tags and the frozen score come from
+    the wide pool and are untouched.
+    """
+    lens = _lens_for_feedback(feedback_items)
+    if lens is None:
+        return original_summary_docs
+    candidates = _lens_candidates(lens, pool, current_thesis)
+    if not candidates:
+        return original_summary_docs
+
+    keep = original_summary_docs[:CONTINUITY_KEEP]
+    seen = {_doc_url(d) for d in keep if _doc_url(d)}
+    blended = list(keep)
+    # Fresh lens-picked evidence, then a top-up from the remaining originals so we
+    # always reach target_n when enough distinct docs exist.
+    for source in (candidates, original_summary_docs):
+        for d in source:
+            if len(blended) >= target_n:
+                break
+            url = _doc_url(d)
+            if url and url in seen:
+                continue
+            seen.add(url)
+            blended.append(d)
+    return blended[:target_n] if target_n else blended
 
 
 class ThesisGeneratorService:
@@ -342,6 +439,7 @@ class ThesisGeneratorService:
         current_thesis: StructuredThesis,
         feedback_items: List[str],
         summary_documents: Optional[List[Document]] = None,
+        prior_feedback: Optional[List[List[str]]] = None,
         theme_delta: int = 0,
         risk_delta: int = 0,
         signal_delta: int = 0,
@@ -359,9 +457,14 @@ class ThesisGeneratorService:
                 surfaced. Drives the displayed grounded tags (scores are frozen
                 downstream, so they are not recomputed here).
             current_thesis: The thesis to refine.
-            feedback_items: Predefined feedback strings selected by user.
-            summary_documents: The diverse subset the LLM rewrites from - the
-                same docs the original summary read. Defaults to `documents`.
+            feedback_items: This round's predefined feedback strings. Drives both
+                the evidence lens (which pool articles the rewrite reads) and the
+                prose the LLM is asked to address.
+            summary_documents: The subset the original summary read; the starting
+                point the lens blends fresh evidence into. Defaults to `documents`.
+            prior_feedback: Earlier rounds' feedback (oldest first), passed to the
+                LLM as already-satisfied constraints to preserve while addressing
+                this round.
             theme_delta: Planner-LLM-proposed cap adjustment for themes
                 (-1/0/+1), clamped by _apply_cap_deltas.
             risk_delta: Same, for risks.
@@ -374,11 +477,11 @@ class ThesisGeneratorService:
         summary_documents = summary_documents if summary_documents is not None else documents
 
         # Step 1: Get refined summary from LLM using feedback. A "tag_strength_floor"
-        # refusal is evidence-invariant - refinement reuses the same `documents`
-        # every round (never re-retrieves), so the floor would fail identically
-        # again; skip the call and keep the refusal as-is. An "llm_judgment"
-        # refusal is a soft call the LLM made on its own - new feedback may
-        # change it, so retry and let the refine prompt decide again.
+        # refusal is evidence-invariant - it is a floor on the pool, which
+        # refinement never re-retrieves, so it would fail identically again; skip
+        # the call and keep the refusal as-is. An "llm_judgment" refusal is a soft
+        # call the LLM made on its own; new feedback (and the lens's fresh
+        # evidence, below) may change it, so retry and let the prompt decide again.
         current_thesis_text = current_thesis.raw_output or ""
         summary_status = current_thesis.summary_status
         refusal_reason = current_thesis.refusal_reason
@@ -387,7 +490,29 @@ class ThesisGeneratorService:
             refined_summary = current_thesis_text
         else:
             logger.info("Step 1: Refining thesis with LLM feedback...")
-            refined_summary = await self._llm.refine(summary_documents, current_thesis_text, feedback_items)
+            # Bias the rewrite's evidence toward what this round's feedback asks
+            # for, drawn from the wide pool (see _select_feedback_evidence). Only
+            # changes which docs the LLM reads; tags/score are unaffected.
+            llm_docs = _select_feedback_evidence(
+                documents, summary_documents, feedback_items,
+                current_thesis, len(summary_documents),
+            )
+            # Observability only: record which lens fired and
+            # how many fresh articles it pulled into the rewrite.
+            lens = _lens_for_feedback(feedback_items)
+            if lens:
+                original_urls = {_doc_url(d) for d in summary_documents if _doc_url(d)}
+                fresh = sum(
+                    1 for d in llm_docs if _doc_url(d) and _doc_url(d) not in original_urls
+                )
+                logger.info(
+                    f"Step 1: evidence lens '{lens}' pulled {fresh} fresh "
+                    f"distinct article(s) into the rewrite (of {len(llm_docs)} total)"
+                )
+            refined_summary = await self._llm.refine(
+                llm_docs, current_thesis_text, feedback_items,
+                prior_feedback=prior_feedback,
+            )
 
             if not refined_summary:
                 logger.error("Empty refined summary returned by LLM")

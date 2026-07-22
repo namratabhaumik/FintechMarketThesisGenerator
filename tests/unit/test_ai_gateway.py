@@ -136,6 +136,42 @@ class TestCacheManager:
         assert local_llm.summarize.call_count == 1
         assert source == "local"
 
+    def test_refine_cache_key_includes_prior_feedback(self):
+        """The refine cache keys on prior feedback (and the evidence set), not
+        just thesis+latest-feedback - so a round with different prior context is
+        not served a stale rewrite."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from config.settings import AIGatewayConfig
+        from core.implementations.llm.ai_gateway import AIGateway
+        from core.implementations.llm.usage_tracker import UsageTracker
+        from langchain_core.documents import Document
+
+        primary = MagicMock()
+        primary.get_model_name.return_value = "gemini"
+        primary.refine = AsyncMock(return_value="refined")
+
+        gateway = AIGateway(
+            primary_llm=primary,
+            fallback_llm=MagicMock(),
+            config=AIGatewayConfig(enabled=True, strategy="quality_first"),
+            cache_manager=CacheManager(),
+            usage_tracker=UsageTracker(),
+        )
+        docs = [Document(page_content="x", metadata={"url": "u"})]
+
+        async def scenario():
+            await gateway.refine(docs, "thesis", ["fb"], prior_feedback=[["r1"]])
+            # same thesis+feedback+docs but different prior -> must miss, not
+            # return the first (stale) rewrite.
+            await gateway.refine(docs, "thesis", ["fb"], prior_feedback=[["r2"]])
+            # identical to the second -> genuine cache hit, no new call.
+            await gateway.refine(docs, "thesis", ["fb"], prior_feedback=[["r2"]])
+
+        asyncio.run(scenario())
+        assert primary.refine.call_count == 2
+
 
 class TestUsageTracker:
     """Tests for UsageTracker (call counts / tokens, no dollars)."""

@@ -31,6 +31,22 @@ FEEDBACK_OPTIONS: List[str] = [
     "Need stronger evidence for key themes",
 ]
 
+# Evidence lens per feedback reason: when a refinement round asks for different
+# or more evidence, the rewrite LLM should read a feedback-relevant slice of the
+# wide article pool instead of the same fixed subset every round. Each lens is a
+# deterministic re-ranking over stored metadata (tags / published_at / query
+# similarity).
+#   theme   -> articles carrying the thesis's key themes, by similarity
+#   signal  -> investment-signal-tagged articles, by similarity
+#   recency -> most recently published articles
+#   focus   -> tightest, highest-similarity cluster (narrow a too-broad analysis)
+FEEDBACK_LENS: Dict[str, str] = {
+    "Need stronger evidence for key themes": "theme",
+    "Investment signals are too vague": "signal",
+    "Missing recent market trends": "recency",
+    "Analysis is too broad, be more specific": "focus",
+}
+
 
 @dataclass
 class RSSFeedConfig:

@@ -8,7 +8,7 @@ budget-based), caching, and lightweight usage counting.
 import asyncio
 import logging
 import time
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from langchain_core.documents import Document
 
@@ -275,15 +275,18 @@ class AIGateway(ILanguageModel):
         documents: List[Document],
         current_thesis_text: str,
         feedback_items: List[str],
+        prior_feedback: Optional[List[List[str]]] = None,
     ) -> str:
         """Refine thesis with caching, cost optimization, and routing.
 
-        Delegates to primary LLM, with caching based on thesis + feedback hash.
+        Delegates to primary LLM, with caching based on thesis + feedback +
+        evidence hash.
 
         Args:
             documents: Source documents for context.
             current_thesis_text: Original thesis to refine.
-            feedback_items: Feedback constraints from user.
+            feedback_items: This round's feedback constraints from user.
+            prior_feedback: Earlier rounds' feedback (oldest first).
 
         Returns:
             Refined thesis text.
@@ -291,9 +294,15 @@ class AIGateway(ILanguageModel):
         start_time = time.time()
         topic = "fintech"  # Default topic
 
-        # Generate cache key from thesis + feedback
+        # Cache key = thesis + this round's feedback + prior feedback + the
+        # evidence set. The evidence and prior feedback both shape the output now
+        # (the feedback lens can swap in different docs, and prior rounds are in
+        # the prompt), so both must be in the key or a stale rewrite could be
+        # served when either changed.
         feedback_key = "".join(sorted(feedback_items))
-        cache_input = current_thesis_text + feedback_key
+        prior_key = "".join(sorted(item for rnd in (prior_feedback or []) for item in rnd))
+        docs_key = "".join(sorted(d.metadata.get("url", "") for d in documents))
+        cache_input = current_thesis_text + feedback_key + prior_key + docs_key
 
         # Step 1: Check cache
         if self._config.cache_enabled:
@@ -325,7 +334,7 @@ class AIGateway(ILanguageModel):
             try:
                 logger.info("Using fallback LLM due to call budget")
                 result = await self._fallback_llm.refine(
-                    documents, current_thesis_text, feedback_items
+                    documents, current_thesis_text, feedback_items, prior_feedback
                 )
                 latency_ms = (time.time() - start_time) * 1000
                 if self._config.track_metrics:
@@ -347,7 +356,7 @@ class AIGateway(ILanguageModel):
         # Step 4: Call selected provider
         try:
             logger.info(f"Calling {llm.get_model_name()} for refinement ({provider} route)")
-            result = await llm.refine(documents, current_thesis_text, feedback_items)
+            result = await llm.refine(documents, current_thesis_text, feedback_items, prior_feedback)
 
             # Step 5: Cache result
             if self._config.cache_enabled:

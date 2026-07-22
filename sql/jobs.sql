@@ -14,9 +14,11 @@ create table if not exists jobs (
     -- The wide analytics pool: the distinct articles retrieval surfaced, that
     -- tag strengths, scoring, confidence and the sources list are computed over.
     retrieved_docs      jsonb not null default '[]'::jsonb,
-    -- The diverse subset (MMR-selected) the LLM actually read to write the
-    -- narrative, persisted so a later refinement rewrites from the same docs.
-    -- Embeddings are stripped from both lists (re-derivable from page_content).
+    -- The diverse subset (MMR-selected) the first summary read. On refinement it
+    -- is the continuity base: structural feedback reuses it as-is, while
+    -- evidence-seeking feedback keeps its top few and blends in fresh articles
+    -- from retrieved_docs (the feedback lens). Embeddings are stripped from both
+    -- lists (re-derivable from page_content).
     summary_docs        jsonb not null default '[]'::jsonb,
     -- Prior thesis versions (one per completed refinement round), so the UI's
     -- "Previous versions" history survives a refresh/resume, paired with

@@ -230,6 +230,47 @@ class TestRefineThesisContentOnly:
         assert result.opportunity_score == 0.0
         assert result.recommendation == ""
 
+    def test_refine_feeds_lens_evidence_and_prior_feedback_to_llm(self):
+        # The latest round's feedback drives the evidence lens (which pool docs
+        # the rewrite reads); earlier rounds flow through as prior_feedback.
+        captured = {}
+
+        async def capture(documents, current_thesis_text, feedback_items, prior_feedback=None):
+            captured["docs"] = documents
+            captured["prior"] = prior_feedback
+            return SIGNAL_RICH
+
+        llm = Mock()
+        llm.refine = capture
+        service = ThesisGeneratorService(
+            llm=llm, scoring_service=OpportunityScoringService(), trend_repository=Mock()
+        )
+        pool = [
+            Document(page_content="p", metadata={"url": "u_theme", "themes": ["Payments"], "similarity": 0.9}),
+            Document(page_content="q", metadata={"url": "u_other", "themes": ["WealthTech"], "similarity": 0.8}),
+        ]
+        # >CONTINUITY_KEEP(2) originals so the lens has a slot to fill.
+        original = [
+            Document(page_content="s1", metadata={"url": "u_sum1"}),
+            Document(page_content="s2", metadata={"url": "u_sum2"}),
+            Document(page_content="s3", metadata={"url": "u_sum3"}),
+        ]
+        current = StructuredThesis(raw_output="old", key_themes=["Payments"], summary_status="ok")
+
+        asyncio.run(service.refine_thesis(
+            topic="x",
+            documents=pool,
+            current_thesis=current,
+            feedback_items=["Need stronger evidence for key themes"],
+            summary_documents=original,
+            prior_feedback=[["Missing recent market trends"]],
+        ))
+
+        # Prior feedback reached the LLM untouched.
+        assert captured["prior"] == [["Missing recent market trends"]]
+        # The theme lens pulled the Payments-tagged pool article into the read set.
+        assert "u_theme" in [d.metadata["url"] for d in captured["docs"]]
+
 
 class TestToolErrorsPropagate:
     """A tool failure (e.g. a Gemini outage inside refine_thesis) propagates out

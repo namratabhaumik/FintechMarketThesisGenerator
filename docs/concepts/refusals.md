@@ -33,13 +33,13 @@ Sometimes a thesis *is* generated, but the Raw Summary section contains a refusa
 
 > "The sources touch on related fintech topics but don't specifically address this query - but the N themes, N risks and N signals below are grounded in the same sources and worth reviewing directly."
 
-This is a soft, per-attempt call - the same evidence can read differently to the model on a second pass, especially with feedback attached. **What to do:** read the structured sections directly, sharpen/modify the query for a fresh thesis, *or* [refine](../guides/refining-a-thesis.md) the existing one - the refinement agent retries the narrative with your feedback in the prompt, and can generate a summary where the first pass declined.
+This is a soft, per-attempt call - the same evidence can read differently to the model on a second pass, especially with feedback attached. **What to do:** read the structured sections directly, sharpen/modify the query for a fresh thesis, *or* [refine](../guides/refining-a-thesis.md) the existing one - the refinement agent retries the narrative with your feedback in the prompt, and for evidence-seeking feedback also draws additional relevant articles from the retrieved pool, so it can generate a summary where the first pass declined.
 
 **3b. The evidence itself is thin:**
 
 > "The sources didn't give us enough to write a reliable narrative for this query - but the ... below are grounded in the same sources and worth reviewing directly."
 
-This is a deterministic floor checked before the narrative attempt, evaluated on the diverse subset the model would actually read (the same subset every round). Refining reuses those same documents, so it cannot change this outcome - a refinement round on this thesis makes no changes and says so explicitly. **What to do:** read the structured sections directly, or broaden/reframe the query to retrieve richer evidence.
+This is a deterministic floor checked before the narrative attempt, evaluated on the subset the model would read. A refinement round on this refusal skips the rewrite entirely - the floor reflects the retrieved pool, which is never re-fetched - so it cannot change the outcome; the round makes no changes and says so explicitly. **What to do:** read the structured sections directly, or broaden/reframe the query to retrieve richer evidence.
 
 ## Fallback: local summarizer
 
