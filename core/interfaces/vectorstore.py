@@ -20,20 +20,27 @@ class IVectorStore(ABC):
     def retrieve(
         self,
         query: str,
-        k: int,
         fetch_k: int,
-        lambda_mult: float,
+        max_articles: int,
         window_days: Optional[int] = None,
         query_embedding: Optional[List[float]] = None,
         min_similarity: float = 0.0,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
     ) -> List[Document]:
-        """Return up to `k` MMR-selected chunks for `query`.
+        """Return up to `max_articles` distinct-article docs for `query`.
 
-        Pull `fetch_k` candidates by similarity, then select `k` by the MMR
-        objective (`lambda_mult` trades relevance vs diversity). When
-        `window_days` is set, only articles published within that trailing
+        The wide analytics pool: pull `fetch_k` chunk candidates by similarity,
+        drop any below `min_similarity`, then DEDUPE BY URL (keeping the
+        highest-similarity chunk per article) and cap to `max_articles`. MMR is
+        NOT applied here so analytics/scoring see the full market weight while 
+        only a few docs reach the LLM.
+
+        Each returned doc carries its chunk `embedding` in metadata (under
+        "embedding") so a later MMR pass can run without a second DB read; the
+        persistence layer strips it before storing.
+
+        When `window_days` is set, only articles published within that trailing
         window (anchored at query time) are considered; None or 0 searches the
         whole corpus. The retrieval service passes these from RetrievalConfig.
 
@@ -42,7 +49,7 @@ class IVectorStore(ABC):
         March 2024"). The retrieval service sets only one of window_days or
         date_from/date_to per call, never both.
 
-        `min_similarity` cosine floor applied to the candidates BEFORE MMR
+        `min_similarity` cosine floor applied to the candidates BEFORE dedup
         (default 0.0).
 
         `query_embedding`, when provided, is the already-computed vector for

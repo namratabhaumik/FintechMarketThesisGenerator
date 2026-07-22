@@ -8,11 +8,13 @@ from langchain_core.documents import Document
 
 from core.models.trend_metric import TrendMetric
 from core.services.ingestion_service import article_to_document
+from core.models.thesis import StructuredThesis
 from core.services.thesis_generator_service import (
     ThesisGeneratorService,
     _apply_cap_deltas,
     _gold_confidence_inputs,
     _ranked_tags_from_documents,
+    _select_feedback_evidence,
 )
 
 
@@ -97,8 +99,11 @@ class TestArticleToDocument:
 class _RecordingVectorStore:
     """Fake IVectorStore that records the args retrieve() was called with."""
 
-    def __init__(self):
+    def __init__(self, docs=None):
         self.retrieve_args = None
+        self._docs = docs if docs is not None else [
+            Document(page_content="r", metadata={"url": "u"})
+        ]
 
     def build(self, documents):
         return object()
@@ -106,9 +111,8 @@ class _RecordingVectorStore:
     def retrieve(
         self,
         query,
-        k,
         fetch_k,
-        lambda_mult,
+        max_articles,
         window_days=None,
         query_embedding=None,
         min_similarity=0.0,
@@ -117,41 +121,42 @@ class _RecordingVectorStore:
     ):
         self.retrieve_args = {
             "query": query,
-            "k": k,
             "fetch_k": fetch_k,
-            "lambda_mult": lambda_mult,
+            "max_articles": max_articles,
             "window_days": window_days,
             "query_embedding": query_embedding,
             "min_similarity": min_similarity,
             "date_from": date_from,
             "date_to": date_to,
         }
-        return [Document(page_content="r", metadata={"url": "u"})]
+        return self._docs
 
 
 class TestDocumentRetrievalService:
-    """Tests for DocumentRetrievalService MMR wiring.
+    """Tests for DocumentRetrievalService wiring.
 
-    The service is stateless (no open/build step): retrieve() delegates
-    straight to the vector store implementation."""
+    The service is stateless (no open/build step): retrieve() delegates the wide
+    pool query straight to the vector store, and select_diverse() runs MMR over
+    the result to pick the LLM's subset."""
 
-    def _service(self, config):
+    def _service(self, config, docs=None):
         from core.services.retrieval_service import DocumentRetrievalService
 
-        vs = _RecordingVectorStore()
+        vs = _RecordingVectorStore(docs=docs)
         return DocumentRetrievalService(vs, config), vs
 
-    def test_retrieve_uses_mmr_config(self):
+    def test_retrieve_uses_pool_config(self):
         from config.settings import RetrievalConfig
 
         service, vs = self._service(
-            RetrievalConfig(k=5, fetch_k=20, lambda_mult=0.5, window_days=365)
+            RetrievalConfig(k=5, fetch_k=400, max_articles=50, window_days=365)
         )
         docs = service.retrieve("query")
 
-        assert vs.retrieve_args["k"] == 5
-        assert vs.retrieve_args["fetch_k"] == 20
-        assert vs.retrieve_args["lambda_mult"] == 0.5
+        # The wide-pool sizing (chunk pool + article cap) must reach the store;
+        # k/lambda_mult are the LLM-subset dials and belong to select_diverse.
+        assert vs.retrieve_args["fetch_k"] == 400
+        assert vs.retrieve_args["max_articles"] == 50
         # The configured relevance floor must reach the vector store.
         assert vs.retrieve_args["min_similarity"] == 0.72
         assert len(docs) == 1
@@ -165,16 +170,52 @@ class TestDocumentRetrievalService:
 
         assert vs.retrieve_args["window_days"] == 180
 
-    def test_retrieve_override_k_widens_fetch_k(self):
+    def test_select_diverse_mmr_narrows_to_k(self):
         from config.settings import RetrievalConfig
 
-        # k override above the configured fetch_k must widen fetch_k (MMR needs
-        # fetch_k >= k).
-        service, vs = self._service(RetrievalConfig(k=5, fetch_k=20, lambda_mult=0.5))
-        service.retrieve("query", k=30)
+        # Wide pool of 4 articles, each with an embedding; MMR must pick k=2.
+        pool = [
+            Document(page_content=f"a{i}", metadata={"url": f"u{i}", "embedding": vec})
+            for i, vec in enumerate(([1.0, 0.0], [0.99, 0.01], [0.0, 1.0], [0.5, 0.5]))
+        ]
+        service, _ = self._service(RetrievalConfig(k=2, lambda_mult=0.5), docs=pool)
 
-        assert vs.retrieve_args["k"] == 30
-        assert vs.retrieve_args["fetch_k"] == 30
+        selected = service.select_diverse(pool, query_embedding=[1.0, 0.0])
+
+        assert len(selected) == 2
+        # The transient embedding must not survive into the LLM/persisted docs.
+        assert all("embedding" not in d.metadata for d in selected)
+
+    def test_select_diverse_skips_mmr_when_pool_at_or_below_k(self):
+        from config.settings import RetrievalConfig
+
+        # 3 docs, k=5 -> no selection needed; pass all through in order without
+        # needing a query embedding at all, embedding stripped.
+        pool = [
+            Document(page_content=f"a{i}", metadata={"url": f"u{i}", "embedding": [1.0, 0.0]})
+            for i in range(3)
+        ]
+        service, _ = self._service(RetrievalConfig(k=5), docs=pool)
+
+        selected = service.select_diverse(pool, query_embedding=None)
+
+        assert [d.metadata["url"] for d in selected] == ["u0", "u1", "u2"]
+        assert all("embedding" not in d.metadata for d in selected)
+
+    def test_select_diverse_falls_back_without_query_embedding(self):
+        from config.settings import RetrievalConfig
+
+        pool = [
+            Document(page_content=f"a{i}", metadata={"url": f"u{i}", "embedding": [1.0, 0.0]})
+            for i in range(4)
+        ]
+        service, _ = self._service(RetrievalConfig(k=2), docs=pool)
+
+        # No query vector -> top-k by relevance order, embedding still stripped.
+        selected = service.select_diverse(pool, query_embedding=None)
+
+        assert [d.metadata["url"] for d in selected] == ["u0", "u1"]
+        assert all("embedding" not in d.metadata for d in selected)
 
     def test_retrieve_query_date_intent_overrides_window_days(self):
         from config.settings import RetrievalConfig
@@ -197,6 +238,69 @@ class TestDocumentRetrievalService:
         assert vs.retrieve_args["window_days"] == 365
         assert vs.retrieve_args["date_from"] is None
         assert vs.retrieve_args["date_to"] is None
+
+
+def _pool_doc(url, *, themes=None, signals=None, published="2026-01-01", sim=0.75):
+    return Document(page_content=url, metadata={
+        "url": url,
+        "themes": themes or [],
+        "signals": signals or [],
+        "published_at": f"{published}T00:00:00",
+        "similarity": sim,
+    })
+
+
+class TestSelectFeedbackEvidence:
+    """_select_feedback_evidence: the refinement evidence lens. Deterministic
+    re-ranking of the wide pool by stored metadata, blended with the original
+    summary docs for continuity. Only touches which docs the LLM reads."""
+
+    # A wide pool of distinct articles with varied tags / dates / similarity.
+    POOL = [
+        _pool_doc("a", themes=["Digital Payments"], signals=["Payment Infrastructure"], published="2026-01-01", sim=0.80),
+        _pool_doc("b", themes=["Digital Lending"], published="2026-06-01", sim=0.78),
+        _pool_doc("c", themes=["Digital Payments"], signals=["AI-Driven Financial Tools"], published="2026-07-01", sim=0.75),
+        _pool_doc("d", themes=["WealthTech"], signals=["WealthTech Disruption"], published="2026-03-01", sim=0.90),
+        _pool_doc("e", published="2026-02-01", sim=0.73),
+    ]
+    # The current summary subset (distinct from the pool urls) -> top 2 kept.
+    ORIGINAL = [_pool_doc("o1"), _pool_doc("o2"), _pool_doc("o3")]
+
+    def _urls(self, docs):
+        return [d.metadata["url"] for d in docs]
+
+    def _run(self, feedback, key_themes=("Digital Payments",)):
+        thesis = StructuredThesis(key_themes=list(key_themes))
+        return _select_feedback_evidence(self.POOL, self.ORIGINAL, feedback, thesis, target_n=3)
+
+    def test_structural_feedback_no_lens_keeps_original(self):
+        out = self._run(["Too many risks, not enough opportunities"])
+        assert self._urls(out) == ["o1", "o2", "o3"]
+
+    def test_theme_lens_blends_theme_tagged_by_similarity(self):
+        # key theme "Digital Payments" -> a(0.80), c(0.75); keep top-2 original + a.
+        out = self._run(["Need stronger evidence for key themes"])
+        assert self._urls(out) == ["o1", "o2", "a"]
+
+    def test_signal_lens_picks_signal_tagged_by_similarity(self):
+        # signal-tagged: d(0.90), a(0.80), c(0.75) -> fill with d.
+        out = self._run(["Investment signals are too vague"])
+        assert self._urls(out) == ["o1", "o2", "d"]
+
+    def test_recency_lens_picks_most_recent(self):
+        # newest published: c (2026-07) -> fill with c.
+        out = self._run(["Missing recent market trends"])
+        assert self._urls(out) == ["o1", "o2", "c"]
+
+    def test_focus_lens_picks_highest_similarity(self):
+        # tightest cluster: d(0.90) -> fill with d.
+        out = self._run(["Analysis is too broad, be more specific"])
+        assert self._urls(out) == ["o1", "o2", "d"]
+
+    def test_lens_with_no_candidates_falls_back_to_original(self):
+        # theme lens but no pool article carries the key theme -> unchanged.
+        out = self._run(["Need stronger evidence for key themes"], key_themes=("Insurtech",))
+        assert self._urls(out) == ["o1", "o2", "o3"]
 
 
 class TestThesisGeneratorService:

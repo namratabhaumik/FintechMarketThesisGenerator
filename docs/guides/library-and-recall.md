@@ -8,12 +8,6 @@ The **Past theses** section below the results lists your previous runs, most rec
 
 The thesis you are currently viewing is excluded from its own list, so the library never points you at the page you are already on.
 
-<!-- Clip: assets/clips/library.mp4
-<video controls muted playsinline width="100%">
-  <source src="../assets/clips/library.mp4" type="video/mp4">
-</video>
--->
-
 ## Shareable URLs
 
 Every thesis has a stable URL of the form `?job_id=...`, set automatically when a thesis is generated or opened. Refreshing restores the full state; sharing the link with yourself on another device works the same way (the recipient must be signed in as you - theses are private per account).
@@ -30,10 +24,9 @@ The similarity floor is high on purpose (86%): a related entry means "you have r
 
 ## Comparing theses
 
-<!-- Clip: assets/clips/compare.mp4
-<video controls muted playsinline width="100%">
-  <source src="../assets/clips/compare.mp4" type="video/mp4">
-</video>
--->
+<iframe width="100%" height="400" src="https://www.youtube-nocookie.com/embed/umBMsORM0Nw"
+  title="FinThesis: comparing theses" frameborder="0"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+  allowfullscreen></iframe>
 
 Tick up to two related theses and click **Compare with current** for a side-by-side table: date, score, confidence, recommendation, themes, risks, and signals as rows, one column per thesis. The current thesis is always the first column. The cap of three columns total keeps the table readable; with two past theses selected, the remaining checkboxes disable themselves.

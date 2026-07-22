@@ -6,11 +6,6 @@ FinThesis is an AI research assistant for fintech markets. You give it a market 
 
 **Live app:** [https://finthesis-0f2c.onrender.com](https://finthesis-0f2c.onrender.com)
 
-<!-- Clip: assets/clips/overview.mp4
-<video controls muted playsinline width="100%">
-  <source src="assets/clips/overview.mp4" type="video/mp4">
-</video>
--->
 
 ## What it does
 

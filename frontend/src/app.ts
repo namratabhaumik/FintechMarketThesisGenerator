@@ -57,7 +57,25 @@ export class FinThesisApp {
       "max-w-5xl mx-auto px-6 h-14 flex items-center justify-between",
     );
 
-    const brand = el("div", undefined, "flex items-center gap-3");
+    const brand = el(
+      "div",
+      undefined,
+      "flex items-center gap-3 cursor-pointer",
+    );
+    brand.setAttribute("role", "button");
+    brand.setAttribute("tabindex", "0");
+    brand.setAttribute("aria-label", "FinThesis home - reload the app");
+    // Clicking the logo/name reloads to a clean root
+    const goHome = () => {
+      window.location.href = window.location.pathname;
+    };
+    brand.addEventListener("click", goHome);
+    brand.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        goHome();
+      }
+    });
     const logo = el("div", undefined, "w-7 h-7 rounded bg-primary flex items-center justify-center");
     // Static, hardcoded icon markup (not user/LLM data) - safe as innerHTML.
     logo.innerHTML =
@@ -83,7 +101,15 @@ export class FinThesisApp {
       document.createTextNode("System active"),
     );
 
-    headerInner.append(brand, auth ? this.buildUserMenu(auth) : systemStatus);
+    const docsLink = el("a", "Docs", "btn btn-ghost btn-xs font-mono");
+    docsLink.href = "https://finthesis-docs.onrender.com";
+    docsLink.target = "_blank";
+    docsLink.rel = "noopener noreferrer";
+
+    const headerRight = el("div", undefined, "flex items-center gap-2");
+    headerRight.append(docsLink, auth ? this.buildUserMenu(auth) : systemStatus);
+
+    headerInner.append(brand, headerRight);
     header.append(headerInner);
 
     const main = el("section", undefined, "print:hidden max-w-5xl mx-auto px-6 pt-12 pb-8");

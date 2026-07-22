@@ -54,6 +54,7 @@ class SupabaseJobManager(IJobManager):
             "feedback_history": [],
             "execution_log": [],
             "retrieved_docs": [],
+            "summary_docs": [],
         }
         row.update(serialise_job_fields(**fields))
         await self._client.table(TABLE).insert(row).execute()
@@ -200,3 +201,9 @@ class _RowProxy:
             if t is not None
         ]
         self.retrieved_docs = rehydrate_docs(data.get("retrieved_docs", []))
+        # The diverse subset the LLM read. Older rows (pre wide/LLM split) have
+        # no summary_docs; fall back to retrieved_docs so refinement still feeds
+        # the LLM the same docs the original summary used.
+        self.summary_docs = rehydrate_docs(
+            data.get("summary_docs") or data.get("retrieved_docs", [])
+        )

@@ -5,7 +5,7 @@ import logging
 from typing import Optional, Dict
 
 from core.interfaces.cache import ICacheManager
-from core.models.cache_entry import CacheEntry
+from core.models.cache_entry import CacheEntry, effective_ttl
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ class CacheManager(ICacheManager):
             return None
 
         entry = self._cache[key]
-        if entry.is_expired(self._ttl_seconds):
+        if entry.is_expired(effective_ttl(entry.model, self._ttl_seconds)):
             logger.debug(f"Cache entry expired: {key}")
             del self._cache[key]
             self._misses += 1

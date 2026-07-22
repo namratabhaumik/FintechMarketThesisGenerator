@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from contextvars import ContextVar
-from typing import List
+from typing import List, Optional
 
 from langchain_core.documents import Document
 
@@ -44,13 +44,17 @@ class ILanguageModel(ABC):
         documents: List[Document],
         current_thesis_text: str,
         feedback_items: List[str],
+        prior_feedback: Optional[List[List[str]]] = None,
     ) -> str:
         """Refine an existing thesis based on user feedback.
 
         Args:
             documents: List of source documents for context.
             current_thesis_text: The original thesis text to refine.
-            feedback_items: List of predefined feedback strings from user.
+            feedback_items: This round's predefined feedback strings from user.
+            prior_feedback: Earlier rounds' feedback (oldest first), given to the
+                model as already-satisfied constraints to preserve while
+                addressing this round. None/empty on the first refinement.
 
         Returns:
             Refined thesis text.

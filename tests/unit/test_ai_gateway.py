@@ -1,4 +1,4 @@
-"""Tests for AI Gateway cost optimization components."""
+"""Tests for AI Gateway routing components."""
 
 import asyncio
 import pytest
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, Mock
 from langchain_core.documents import Document
 
 from core.implementations.llm.cache_manager import CacheManager
-from core.implementations.llm.cost_tracker import CostTracker
+from core.implementations.llm.usage_tracker import UsageTracker
 from core.implementations.llm.ai_gateway import AIGateway
 from core.implementations.llm.routing_strategy import (
     ROUTE_FALLBACK,
@@ -106,7 +106,7 @@ class TestCacheManager:
 
         from config.settings import AIGatewayConfig
         from core.implementations.llm.ai_gateway import AIGateway
-        from core.implementations.llm.cost_tracker import CostTracker
+        from core.implementations.llm.usage_tracker import UsageTracker
         from core.interfaces.llm import SOURCE_LLM, summary_source_var
         from langchain_core.documents import Document
 
@@ -119,7 +119,7 @@ class TestCacheManager:
             fallback_llm=MagicMock(),
             config=AIGatewayConfig(enabled=True),
             cache_manager=CacheManager(),
-            cost_tracker=CostTracker(),
+            usage_tracker=UsageTracker(),
         )
         docs = [Document(page_content="x", metadata={"url": "u"})]
 
@@ -136,143 +136,153 @@ class TestCacheManager:
         assert local_llm.summarize.call_count == 1
         assert source == "local"
 
+    def test_refine_cache_key_includes_prior_feedback(self):
+        """The refine cache keys on prior feedback (and the evidence set), not
+        just thesis+latest-feedback - so a round with different prior context is
+        not served a stale rewrite."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
 
-class TestCostTracker:
-    """Tests for CostTracker."""
+        from config.settings import AIGatewayConfig
+        from core.implementations.llm.ai_gateway import AIGateway
+        from core.implementations.llm.usage_tracker import UsageTracker
+        from langchain_core.documents import Document
 
-    def test_cost_calculation_gemini(self):
-        """Test cost calculation for Gemini."""
-        tracker = CostTracker()
+        primary = MagicMock()
+        primary.get_model_name.return_value = "gemini"
+        primary.refine = AsyncMock(return_value="refined")
 
-        # Gemini 2.5 Flash pricing: $0.30 per 1M input, $2.50 per 1M output
-        cost = tracker.calculate_cost("gemini", "gemini-2.5-flash", 1_000_000, 1_000_000)
-        assert cost == pytest.approx(2.80, rel=0.01)  # 0.30 + 2.50
+        gateway = AIGateway(
+            primary_llm=primary,
+            fallback_llm=MagicMock(),
+            config=AIGatewayConfig(enabled=True, strategy="quality_first"),
+            cache_manager=CacheManager(),
+            usage_tracker=UsageTracker(),
+        )
+        docs = [Document(page_content="x", metadata={"url": "u"})]
 
-    def test_cost_calculation_local(self):
-        """Test cost calculation for local model (free)."""
-        tracker = CostTracker()
+        async def scenario():
+            await gateway.refine(docs, "thesis", ["fb"], prior_feedback=[["r1"]])
+            # same thesis+feedback+docs but different prior -> must miss, not
+            # return the first (stale) rewrite.
+            await gateway.refine(docs, "thesis", ["fb"], prior_feedback=[["r2"]])
+            # identical to the second -> genuine cache hit, no new call.
+            await gateway.refine(docs, "thesis", ["fb"], prior_feedback=[["r2"]])
 
-        cost = tracker.calculate_cost("local", "local-extractor", 1_000_000, 1_000_000)
-        assert cost == 0.0
+        asyncio.run(scenario())
+        assert primary.refine.call_count == 2
 
-    def test_cost_record_call(self):
-        """Test recording API call cost."""
-        tracker = CostTracker()
 
-        cost = tracker.record_call(
-            provider="gemini",
-            model="gemini-2.5-flash",
+class TestUsageTracker:
+    """Tests for UsageTracker (call counts / tokens, no dollars)."""
+
+    def test_record_call_returns_daily_primary_count(self):
+        """A real primary call increments and returns the daily primary count."""
+        tracker = UsageTracker()
+
+        count = tracker.record_call(
+            provider="primary",
+            model="gemini-x",
             input_tokens=1000,
             output_tokens=500,
             latency_ms=1500.0,
         )
 
-        assert cost > 0
+        assert count == 1
         metrics = tracker.get_metrics()
         assert metrics["total_calls"] == 1
-        assert metrics["daily_spend"] > 0
+        assert metrics["daily_primary_calls"] == 1
 
-    def test_cache_hit_recording(self):
-        """Test recording cache hits."""
-        tracker = CostTracker()
+    def test_cache_hits_and_local_do_not_consume_budget(self):
+        """Cache hits and local-summarizer calls don't count against budget."""
+        tracker = UsageTracker()
 
-        tracker.record_call(
-            provider="gemini",
-            model="gemini-2.0-flash",
-            input_tokens=1000,
-            output_tokens=500,
-            latency_ms=50.0,
-            cache_hit=True,
-        )
+        tracker.record_call("primary", "gemini-x", 1000, 500, 50.0, cache_hit=True)
+        tracker.record_call("local", "local-extractor", 0, 0, 100.0)
 
+        assert tracker.get_daily_calls() == 0
         metrics = tracker.get_metrics()
         assert metrics["cache_hits"] == 1
-        assert metrics["cache_hit_rate"] == 100.0
+        assert metrics["daily_primary_calls"] == 0
 
-    def test_daily_spend_calculation(self):
-        """Test daily spend calculation."""
-        tracker = CostTracker()
+    def test_daily_calls_counts_only_billable(self):
+        """Daily calls counts real primary calls only."""
+        tracker = UsageTracker()
 
-        # Add a call for today
-        tracker.record_call(
-            provider="gemini",
-            model="gemini-2.5-flash",
-            input_tokens=1_000_000,
-            output_tokens=1_000_000,
-            latency_ms=1000.0,
-        )
+        tracker.record_call("primary", "gemini-x", 1000, 500, 1000.0)
+        tracker.record_call("primary", "gemini-x", 1000, 500, 1000.0)
+        tracker.record_call("local", "local-extractor", 0, 0, 100.0)
 
-        daily_spend = tracker.get_daily_spend()
-        assert daily_spend > 0
+        assert tracker.get_daily_calls() == 2
 
     def test_metrics_aggregation_by_provider(self):
         """Test metrics aggregation by provider."""
-        tracker = CostTracker()
+        tracker = UsageTracker()
 
-        tracker.record_call("gemini", "gemini-2.0-flash", 1000, 500, 1000.0)
+        tracker.record_call("primary", "gemini-x", 1000, 500, 1000.0)
         tracker.record_call("local", "local-extractor", 1000, 500, 100.0)
 
         metrics = tracker.get_metrics()
-        assert "gemini" in metrics["by_provider"]
+        assert "primary" in metrics["by_provider"]
         assert "local" in metrics["by_provider"]
-        assert metrics["by_provider"]["gemini"]["calls"] == 1
+        assert metrics["by_provider"]["primary"]["calls"] == 1
         assert metrics["by_provider"]["local"]["calls"] == 1
 
 
 class TestRoutingStrategies:
-    """Tests for routing strategies."""
+    """Tests for routing strategies (size + daily call budget)."""
 
     def test_cost_optimized_strategy_large_documents(self):
         """Test cost-optimized routing for large documents."""
         strategy = CostOptimizedStrategy(size_threshold_tokens=5000)
         docs = [Document(page_content=" ".join(["word"] * 4000))]  # ~5200 tokens
 
-        assert strategy.select_route(docs, "topic", 0, 5.0) == ROUTE_FALLBACK
+        assert strategy.select_route(docs, "topic", 0, 50) == ROUTE_FALLBACK
 
-    def test_cost_optimized_strategy_cost_limit(self):
-        """Test cost-optimized routing when approaching cost limit."""
+    def test_cost_optimized_strategy_call_budget(self):
+        """Test cost-optimized routing when approaching the call budget."""
         strategy = CostOptimizedStrategy(size_threshold_tokens=5000)
         docs = [Document(page_content="small doc")]  # ~10 tokens
 
-        # 85% of limit - should route to the local summarizer
-        assert strategy.select_route(docs, "topic", 4.25, 5.0) == ROUTE_FALLBACK
+        # 90% of budget (>80%) - should route to the local summarizer
+        assert strategy.select_route(docs, "topic", 45, 50) == ROUTE_FALLBACK
 
     def test_cost_optimized_strategy_small_documents(self):
-        """Test cost-optimized routing for small documents within limit."""
+        """Test cost-optimized routing for small documents within budget."""
         strategy = CostOptimizedStrategy(size_threshold_tokens=5000)
         docs = [Document(page_content="small doc")]  # ~10 tokens
 
-        # 50% of limit - should route to the primary LLM
-        assert strategy.select_route(docs, "topic", 2.5, 5.0) == ROUTE_PRIMARY
+        # 50% of budget - should route to the primary LLM
+        assert strategy.select_route(docs, "topic", 25, 50) == ROUTE_PRIMARY
 
     def test_quality_first_strategy_always_gemini(self):
         """Test quality-first strategy always uses the primary LLM."""
         strategy = QualityFirstStrategy()
         docs = [Document(page_content="any content")]
 
-        assert strategy.select_route(docs, "topic", 4.9, 5.0) == ROUTE_PRIMARY
+        assert strategy.select_route(docs, "topic", 49, 50) == ROUTE_PRIMARY
 
-    def test_hybrid_strategy_hard_cost_limit(self):
-        """Test hybrid strategy enforces hard cost limit."""
+    def test_hybrid_strategy_hard_call_budget(self):
+        """Test hybrid strategy enforces the hard daily call budget."""
         strategy = HybridStrategy(size_threshold_tokens=5000)
         docs = [Document(page_content="small doc")]
 
-        # Cost limit exceeded - hard constraint
-        assert strategy.select_route(docs, "topic", 5.0, 5.0) == ROUTE_FALLBACK
+        # Call budget reached - hard constraint
+        assert strategy.select_route(docs, "topic", 50, 50) == ROUTE_FALLBACK
 
     def test_hybrid_strategy_large_documents(self):
         """Test hybrid strategy routes large docs to local."""
         strategy = HybridStrategy(size_threshold_tokens=5000)
         docs = [Document(page_content=" ".join(["word"] * 4000))]  # ~5200 tokens
 
-        assert strategy.select_route(docs, "topic", 1.0, 5.0) == ROUTE_FALLBACK
+        assert strategy.select_route(docs, "topic", 1, 50) == ROUTE_FALLBACK
 
     def test_hybrid_strategy_small_documents_in_budget(self):
         """Test hybrid strategy routes small docs to the primary LLM when in budget."""
         strategy = HybridStrategy(size_threshold_tokens=5000)
         docs = [Document(page_content="small doc")]
 
-        assert strategy.select_route(docs, "topic", 1.0, 5.0) == ROUTE_PRIMARY
+        assert strategy.select_route(docs, "topic", 1, 50) == ROUTE_PRIMARY
 
     def test_get_strategy_factory(self):
         """Test strategy factory function."""
@@ -298,7 +308,7 @@ class TestAIGateway:
     def mock_llms(self):
         """Create mock LLM instances."""
         primary = Mock()
-        primary.get_model_name.return_value = "gemini-2.0-flash"
+        primary.get_model_name.return_value = "gemini-x"
         primary.summarize = AsyncMock(return_value="Primary summary")
 
         fallback = Mock()
@@ -315,23 +325,20 @@ class TestAIGateway:
             strategy="hybrid",
             cache_enabled=True,
             cache_ttl_seconds=3600,
-            cost_limit_daily=5.0,
-            cost_limit_monthly=100.0,
+            call_budget_daily=50,
             track_metrics=True,
         )
 
     def test_gateway_initialization(self, mock_llms, gateway_config):
         """Test AI Gateway initialization."""
         primary, fallback = mock_llms
-        cache_manager = CacheManager()
-        cost_tracker = CostTracker()
 
         gateway = AIGateway(
             primary_llm=primary,
             fallback_llm=fallback,
             config=gateway_config,
-            cache_manager=cache_manager,
-            cost_tracker=cost_tracker,
+            cache_manager=CacheManager(),
+            usage_tracker=UsageTracker(),
         )
 
         assert gateway is not None
@@ -341,7 +348,6 @@ class TestAIGateway:
         """Test gateway returns cached result on cache hit."""
         primary, fallback = mock_llms
         cache_manager = CacheManager()
-        cost_tracker = CostTracker()
 
         # Pre-populate cache
         cache_key = cache_manager.generate_key("content", "fintech", "combined")
@@ -352,7 +358,7 @@ class TestAIGateway:
             fallback_llm=fallback,
             config=gateway_config,
             cache_manager=cache_manager,
-            cost_tracker=cost_tracker,
+            usage_tracker=UsageTracker(),
         )
 
         docs = [Document(page_content="content")]
@@ -365,15 +371,13 @@ class TestAIGateway:
     def test_gateway_calls_primary_on_cache_miss(self, mock_llms, gateway_config):
         """Test gateway calls primary LLM on cache miss."""
         primary, fallback = mock_llms
-        cache_manager = CacheManager()
-        cost_tracker = CostTracker()
 
         gateway = AIGateway(
             primary_llm=primary,
             fallback_llm=fallback,
             config=gateway_config,
-            cache_manager=cache_manager,
-            cost_tracker=cost_tracker,
+            cache_manager=CacheManager(),
+            usage_tracker=UsageTracker(),
         )
 
         docs = [Document(page_content="new content")]
@@ -387,15 +391,12 @@ class TestAIGateway:
         primary, fallback = mock_llms
         primary.summarize.side_effect = Exception("Primary failed")
 
-        cache_manager = CacheManager()
-        cost_tracker = CostTracker()
-
         gateway = AIGateway(
             primary_llm=primary,
             fallback_llm=fallback,
             config=gateway_config,
-            cache_manager=cache_manager,
-            cost_tracker=cost_tracker,
+            cache_manager=CacheManager(),
+            usage_tracker=UsageTracker(),
         )
 
         docs = [Document(page_content="content")]
@@ -404,43 +405,63 @@ class TestAIGateway:
         assert result == "Fallback summary"
         fallback.summarize.assert_called_once()
 
-    def test_gateway_cost_tracking(self, mock_llms, gateway_config):
-        """Test gateway tracks costs."""
+    def test_gateway_usage_tracking(self, mock_llms, gateway_config):
+        """Test gateway tracks usage."""
         primary, fallback = mock_llms
-        cache_manager = CacheManager()
-        cost_tracker = CostTracker()
+        usage_tracker = UsageTracker()
 
         gateway = AIGateway(
             primary_llm=primary,
             fallback_llm=fallback,
             config=gateway_config,
-            cache_manager=cache_manager,
-            cost_tracker=cost_tracker,
+            cache_manager=CacheManager(),
+            usage_tracker=usage_tracker,
         )
 
         docs = [Document(page_content="content " * 100)]
         asyncio.run(gateway.summarize(docs))
 
-        metrics = cost_tracker.get_metrics()
+        metrics = usage_tracker.get_metrics()
         assert metrics["total_calls"] > 0
 
-    def test_gateway_metrics(self, mock_llms, gateway_config):
-        """Test gateway metrics aggregation."""
+    def test_gateway_call_budget_forces_fallback(self, mock_llms, gateway_config):
+        """Past the daily call budget, the gateway routes to the local summarizer."""
         primary, fallback = mock_llms
-        cache_manager = CacheManager()
-        cost_tracker = CostTracker()
+        usage_tracker = UsageTracker()
+        # Saturate the budget with real primary calls.
+        for _ in range(gateway_config.call_budget_daily):
+            usage_tracker.record_call("primary", "gemini-x", 100, 50, 10.0)
 
         gateway = AIGateway(
             primary_llm=primary,
             fallback_llm=fallback,
             config=gateway_config,
-            cache_manager=cache_manager,
-            cost_tracker=cost_tracker,
+            cache_manager=CacheManager(),
+            usage_tracker=usage_tracker,
+        )
+
+        docs = [Document(page_content="fresh content")]
+        result = asyncio.run(gateway.summarize(docs))
+
+        assert result == "Fallback summary"
+        primary.summarize.assert_not_called()
+        fallback.summarize.assert_called_once()
+
+    def test_gateway_metrics(self, mock_llms, gateway_config):
+        """Test gateway metrics aggregation."""
+        primary, fallback = mock_llms
+
+        gateway = AIGateway(
+            primary_llm=primary,
+            fallback_llm=fallback,
+            config=gateway_config,
+            cache_manager=CacheManager(),
+            usage_tracker=UsageTracker(),
         )
 
         metrics = gateway.get_metrics()
         assert "cache" in metrics
-        assert "costs" in metrics
+        assert "usage" in metrics
         assert metrics["gateway_enabled"] is True
         assert metrics["strategy"] == "hybrid"
 

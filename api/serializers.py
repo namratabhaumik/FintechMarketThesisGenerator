@@ -103,11 +103,15 @@ def serialise_docs(docs: list) -> list:
     Each Document is flattened to {page_content, metadata} (the shape
     rehydrate_docs expects). Items that are not Documents are passed through
     unchanged, mirroring the read side.
+
+    The transient "embedding" metadata key (carried only from retrieval into the
+    in-request MMR pass) is dropped.
     """
     result = []
     for d in docs:
         if hasattr(d, "page_content"):
-            result.append({"page_content": d.page_content, "metadata": d.metadata})
+            metadata = {k: v for k, v in (d.metadata or {}).items() if k != "embedding"}
+            result.append({"page_content": d.page_content, "metadata": metadata})
         else:
             result.append(d)
     return result
@@ -138,7 +142,7 @@ def serialise_job_fields(**fields) -> Dict[str, Any]:
             payload[key] = [serialise_thesis(t) for t in value]
         elif key == "refinement_status" and isinstance(value, RefinementStatus):
             payload[key] = value.value
-        elif key == "retrieved_docs":
+        elif key in ("retrieved_docs", "summary_docs"):
             payload[key] = serialise_docs(value)
         elif key == "query_embedding":
             payload[key] = serialise_query_embedding(value)
