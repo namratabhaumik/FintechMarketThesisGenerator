@@ -2,11 +2,13 @@ name: Semgrep Scan
 
 on:
   push:
-    branches: 
+    branches:
       - master
+      - develop
   pull_request:
     branches:
       - master
+      - develop
 
 permissions:
   contents: read
