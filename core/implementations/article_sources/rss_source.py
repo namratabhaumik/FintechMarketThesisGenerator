@@ -8,115 +8,29 @@ from urllib.parse import urlparse
 import feedparser
 
 from config.settings import RSSFeedConfig
-from core.exceptions import NoArticlesFetchedError, NoRelevantArticlesError
-from core.interfaces.article_source import IArticleSource
-from core.interfaces.relevance_classifier import IRelevanceClassifier
-from core.interfaces.scraper import IWebScraper
-from core.models.article import Article
 from core.models.raw_article import RawArticle
 from core.utils.data_quality import check_ingestion
-from core.utils.text_utils import clean_article_text
 
 logger = logging.getLogger(__name__)
 
 
-class RSSArticleSource(IArticleSource):
-    """Fetches articles from RSS feeds.
+class RSSArticleSource:
+    """Reads the configured RSS feeds and lands raw entries verbatim (Bronze).
 
-    Two paths out of this class:
-      - collect_raw() --> land raw feed entries verbatim (Bronze).
-      - fetch_articles() --> classify each entry --> scrape full text -->
-        return ready-to-use Article objects (Silver).
+    No classifying or scraping happens here - that is Silver's job, reading
+    the Bronze rows this class produced.
     """
 
-    def __init__(
-        self,
-        feeds: List[RSSFeedConfig],
-        scraper: IWebScraper,
-        classifier: Optional[IRelevanceClassifier] = None,
-    ):
+    def __init__(self, feeds: List[RSSFeedConfig]):
         # The feeds to read (each has a URL, a display name, and an enabled flag).
         self._feeds = feeds
-        # Pulls the full article text from a page URL (used by fetch_articles).
-        self._scraper = scraper
-        # Decides if an entry is fintech-relevant. Optional, so it may be None.
-        self._classifier = classifier
-
-    def fetch_articles(self, query: str, limit: int) -> List[Article]:
-        """Fetch up to `limit` articles from configured RSS feeds.
-
-        Each entry is first classified by its RSS <title> + <description> (when
-        a classifier is configured); only relevant entries get scraped and kept.
-
-        Raises:
-            NoArticlesFetchedError: The feeds returned no usable entries (empty
-                or unreachable).
-            NoRelevantArticlesError: Entries were fetched but the classifier
-                rejected every one of them.
-        """
-        # Gather deduped feed entries first --> if none came back, the feeds were
-        # empty or unreachable --> raise so the caller knows nothing was fetched.
-        entries = self._collect_entries(limit)
-        if not entries:
-            raise NoArticlesFetchedError(
-                "No articles returned from RSS feeds (feed empty or unreachable)."
-            )
-
-        # articles: the finished Article objects we will hand back.
-        # relevant: count of entries the classifier accepted (for logging and
-        # to tell "all rejected" apart from "all failed to build").
-        articles = []
-        relevant = 0
-        # Walk every collected entry and turn the good ones into Articles.
-        for entry in entries:
-            title = entry.get("title", "")
-            description = entry.get("description", "")
-
-            # Classify using only the RSS title + description first. If a
-            # classifier is set and says "not fintech" --> skip (never scrape it).
-            if self._classifier is not None and not self._classifier.is_relevant(title, description):
-                continue
-            relevant += 1
-
-            # No link --> nothing to scrape or cite --> skip this entry.
-            url = entry.get("link", "")
-            if not url:
-                continue
-
-            # Scrape the full page --> if that fails, fall back to the RSS
-            # description --> if even that is empty, use a placeholder string.
-            text = self._scraper.scrape(url) or description or "No content available"
-            article = self._build_article(entry, url, text)
-            # _build_article returns None for unusable entries (e.g. no pubDate);
-            # only keep the ones that built successfully.
-            if article:
-                articles.append(article)
-
-        if self._classifier is not None:
-            logger.info(f"Fintech classifier kept {relevant}/{len(entries)} entries")
-
-        # Nothing built --> decide which error fits:
-        #   classifier ran but accepted zero --> NoRelevantArticlesError.
-        #   otherwise (entries were relevant but all failed to build) -->
-        #   NoArticlesFetchedError.
-        if not articles:
-            if self._classifier is not None and relevant == 0:
-                raise NoRelevantArticlesError(
-                    f"Fetched {len(entries)} articles but none were classified as fintech."
-                )
-            raise NoArticlesFetchedError(
-                "No valid articles could be built from the fetched entries."
-            )
-
-        logger.info(f"Fetched {len(articles)} articles from RSS feeds")
-        return articles
 
     def collect_raw(self, limit: int) -> List[RawArticle]:
         """Collect feed entries.
 
-        Unlike fetch_articles, this does NOT classify or scrape: it lands the
-        raw feed entry (title, summary, link, <pubDate>, feed name) so the
-        corpus accumulates cheaply.
+        Lands the raw feed entry (title, summary, link, <pubDate>, feed name)
+        so the corpus accumulates cheaply. Returns [] when the feeds are empty
+        or unreachable; the caller reports the landed count.
         """
         entries = self._collect_entries(limit)
         # raw_articles: the Bronze records we successfully landed.
@@ -207,41 +121,12 @@ class RSSArticleSource(IArticleSource):
                 if link:
                     seen_links.add(link)
                 # Stash provenance so collect_raw can record which feed an
-                # entry came from (fetch_articles ignores this key).
+                # entry came from.
                 entry["_feed_name"] = feed_config.name
                 entries.append(entry)
                 added += 1
             logger.info(f"Collected {added} new entries from {feed_config.name}")
         return entries
-
-    def _build_article(self, entry, url: str, text: str) -> Optional[Article]:
-        """Assemble one Article from a feed entry plus its scraped text.
-
-        Returns None (entry skipped) when there is no usable <pubDate> or the
-        Article fails validation.
-        """
-        title = entry.get("title", "Untitled")
-        published_at = self._parse_published(entry)
-        # No publish date --> we won't place it on the time axis --> skip it.
-        if published_at is None:
-            logger.warning(f"Skipping article without a <pubDate>: {url}")
-            return None
-        try:
-            # Strip boilerplate, then cap length so one giant page can't bloat
-            # storage or downstream prompts.
-            text = clean_article_text(text)
-            return Article(
-                title=title,
-                text=text[:4000],
-                source=urlparse(url).netloc,
-                url=url,
-                published_at=published_at,
-            )
-        except ValueError as e:
-            # Article validation failed (e.g. empty text after cleaning) -->
-            # log and skip.
-            logger.warning(f"Invalid article skipped: {e}")
-            return None
 
     @staticmethod
     def _parse_published(entry) -> Optional[datetime]:
@@ -260,7 +145,3 @@ class RSSArticleSource(IArticleSource):
             return datetime(year, month, day, hour, minute, second, tzinfo=timezone.utc)
         except (TypeError, ValueError):
             return None
-
-    def get_source_name(self) -> str:
-        """Return the name of this article source."""
-        return "RSS Feeds"

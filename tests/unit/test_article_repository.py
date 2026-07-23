@@ -78,6 +78,22 @@ def test_save_dedupes_by_url():
     assert repo.count() == 3
 
 
+def test_save_stamps_one_load_id_per_run():
+    """Every row from a single save() shares one load_id (the run that landed
+    them); a second run gets a different id, so rows trace back to their load."""
+    client = _FakeClient()
+    repo = SupabaseArticleRepository(client)
+
+    repo.save([_raw("https://x/1"), _raw("https://x/2")])
+    repo.save([_raw("https://x/3")])
+
+    rows = list(client.store.values())
+    by_url = {r["url"]: r["load_id"] for r in rows}
+    assert by_url["https://x/1"] == by_url["https://x/2"]  # same run -> same id
+    assert by_url["https://x/3"] != by_url["https://x/1"]  # new run -> new id
+    assert all(r["load_id"] is not None for r in rows)
+
+
 def test_save_empty_is_noop():
     repo = SupabaseArticleRepository(_FakeClient())
     assert repo.save([]) == 0

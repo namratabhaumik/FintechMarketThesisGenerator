@@ -1,10 +1,10 @@
 """Dependency Injection Container for wiring dependencies."""
 
 import logging
+import threading
 from typing import Dict, Optional, Type
 
 from config.settings import AppConfig
-from core.implementations.article_sources.rss_source import RSSArticleSource
 from core.implementations.classifiers.huggingface_classifier import (
     HuggingFaceFintechClassifier,
 )
@@ -13,9 +13,11 @@ from core.implementations.embeddings.fastembed_embeddings import (
     FastEmbedEmbeddingModel,
 )
 from finthesis_internal.keyword_scoring_strategy import KeywordCountScoringStrategy
+from finthesis_internal.semantic_scoring_strategy import SemanticScoringStrategy
 from core.implementations.llm.ai_gateway import AIGateway
 from core.implementations.llm.cache_manager import CacheManager
-from core.implementations.llm.cost_tracker import CostTracker
+from core.implementations.llm.supabase_cache_manager import SupabaseCacheManager
+from core.implementations.llm.usage_tracker import UsageTracker
 from core.implementations.llm.gemini_llm import GeminiLanguageModel
 from core.implementations.llm.local_summarizer import LocalSummarizerModel
 from core.implementations.llm.llm_wrapper import LLMWrapper
@@ -39,9 +41,9 @@ from core.implementations.repositories.supabase_untagged_repository import (
     SupabaseUntaggedRepository,
 )
 from core.implementations.vectorstores.supabase_vector_store import SupabaseVectorStoreImpl
+from core.interfaces.cache import ICacheManager
 from core.interfaces.article_content_repository import IArticleContentRepository
 from core.interfaces.article_repository import IArticleRepository
-from core.interfaces.article_source import IArticleSource
 from core.interfaces.quarantine_repository import IQuarantineRepository
 from core.interfaces.silver_repository import ISilverRepository
 from core.interfaces.trend_repository import ITrendRepository
@@ -52,9 +54,7 @@ from core.interfaces.relevance_classifier import IRelevanceClassifier
 from core.interfaces.scraper import IWebScraper
 from core.interfaces.scoring_strategy import IScoringStrategy
 from core.interfaces.vectorstore import IVectorStore
-from core.services.approval_service import ApprovalService
 from core.services.gold_service import GoldService
-from core.services.ingestion_service import ArticleIngestionService
 from core.services.silver_service import SilverService
 from finthesis_internal.category_mappings import (
     ThemeMappings,
@@ -69,13 +69,15 @@ from core.services.thesis_generator_service import ThesisGeneratorService
 # that implements it. get_llm/get_embedding_model/get_relevance_classifier look
 # up the configured name here, so swapping a backend is a config change, not a
 # code change.
-# To add a new LLM provider, see README.md
+# To add a new LLM provider: implement ILanguageModel, register it here, and
+# add its API key/model env vars to PROVIDER_API_KEY_ENV/PROVIDER_MODEL_ENV
+# in config/settings.py.
 LLM_PROVIDER_REGISTRY: Dict[str, Type[ILanguageModel]] = {
     "gemini": GeminiLanguageModel,
     "local": LocalSummarizerModel,
 }
 
-# To add a new embedding provider, see README.md
+# To add a new embedding provider: implement IEmbeddingModel and register it here.
 EMBEDDING_PROVIDER_REGISTRY: Dict[str, Type[IEmbeddingModel]] = {
     "fastembed": FastEmbedEmbeddingModel,
 }
@@ -138,10 +140,19 @@ class ServiceContainer:
         """
         self._config = config or AppConfig.from_env()
 
+        # Guards the lazy check-then-set in the getters reached from request
+        # handling: routes run embed/retrieve/graph-build in worker threads
+        # (asyncio.to_thread), so two concurrent FIRST requests could otherwise
+        # both see an empty slot and double-build a singleton (e.g. two ONNX
+        # embedding models in memory at once). Re-entrant because getters nest
+        # (get_retrieval_service -> get_vectorstore -> get_embedding_model).
+        # Offline-pipeline getters (scraper, repos, Silver/Gold services) run
+        # single-threaded and stay unguarded.
+        self._lock = threading.RLock()
+
         # Lazy-loaded interface implementations (singletons)
         self._scraper: Optional[IWebScraper] = None
         self._relevance_classifier: Optional[IRelevanceClassifier] = None
-        self._article_source: Optional[IArticleSource] = None
         self._embedding_model: Optional[IEmbeddingModel] = None
         self._vectorstore: Optional[IVectorStore] = None
         self._article_repository: Optional[IArticleRepository] = None
@@ -152,17 +163,16 @@ class ServiceContainer:
         self._untagged_repository: Optional[IUntaggedRepository] = None
         self._llm: Optional[ILanguageModel] = None
         self._scoring_strategy: Optional[IScoringStrategy] = None
+        self._silver_scoring_strategy: Optional[IScoringStrategy] = None
 
         # AI Gateway components (singletons)
-        self._cache_manager: Optional[CacheManager] = None
-        self._cost_tracker: Optional[CostTracker] = None
+        self._cache_manager: Optional[ICacheManager] = None
+        self._usage_tracker: Optional[UsageTracker] = None
 
         # Services
-        self._ingestion_service: Optional[ArticleIngestionService] = None
         self._silver_service: Optional[SilverService] = None
         self._gold_service: Optional[GoldService] = None
         self._retrieval_service: Optional[DocumentRetrievalService] = None
-        self._approval_service: Optional[ApprovalService] = None
         self._opportunity_scoring_service: Optional[OpportunityScoringService] = None
         self._thesis_service: Optional[ThesisGeneratorService] = None
 
@@ -217,27 +227,6 @@ class ServiceContainer:
             self._relevance_classifier = classifier_class(self._config.classifier)
         return self._relevance_classifier
 
-    def get_article_source(self) -> IArticleSource:
-        """Get or create article source implementation.
-
-        Builds the Bronze entry point: reads the configured RSS feeds and yields
-        candidate articles. Wires in get_scraper (to fetch text) and
-        get_relevance_classifier (to gate by relevance). This is where raw data
-        first enters the pipeline.
-
-        Returns:
-            IArticleSource implementation (RSSArticleSource).
-        """
-        if not self._article_source:
-            logger.info("Creating RSSArticleSource")
-            scraper = self.get_scraper()
-            self._article_source = RSSArticleSource(
-                feeds=self._config.rss_feeds,
-                scraper=scraper,
-                classifier=self.get_relevance_classifier(),
-            )
-        return self._article_source
-
     def get_embedding_model(self) -> IEmbeddingModel:
         """Get or create embedding model implementation.
 
@@ -252,17 +241,21 @@ class ServiceContainer:
             ValueError: If configured embedding provider is not in the registry.
         """
         if not self._embedding_model:
-            provider = self._config.embedding.provider
-            embedding_class = EMBEDDING_PROVIDER_REGISTRY.get(provider)
+            with self._lock:
+                if not self._embedding_model:
+                    provider = self._config.embedding.provider
+                    embedding_class = EMBEDDING_PROVIDER_REGISTRY.get(provider)
 
-            if not embedding_class:
-                raise ValueError(
-                    f"Unknown embedding provider: '{provider}'. "
-                    f"Supported: {list(EMBEDDING_PROVIDER_REGISTRY.keys())}"
-                )
+                    if not embedding_class:
+                        raise ValueError(
+                            f"Unknown embedding provider: '{provider}'. "
+                            f"Supported: {list(EMBEDDING_PROVIDER_REGISTRY.keys())}"
+                        )
 
-            logger.info(f"Creating {provider} embedding model ({embedding_class.__name__})")
-            self._embedding_model = embedding_class(self._config.embedding)
+                    logger.info(
+                        f"Creating {provider} embedding model ({embedding_class.__name__})"
+                    )
+                    self._embedding_model = embedding_class(self._config.embedding)
 
         return self._embedding_model
 
@@ -280,18 +273,20 @@ class ServiceContainer:
             ValueError: If configured vectorstore provider is unknown.
         """
         if not self._vectorstore:
-            provider = self._config.vectorstore.provider
-            factory = VECTORSTORE_PROVIDER_REGISTRY.get(provider)
+            with self._lock:
+                if not self._vectorstore:
+                    provider = self._config.vectorstore.provider
+                    factory = VECTORSTORE_PROVIDER_REGISTRY.get(provider)
 
-            if not factory:
-                raise ValueError(
-                    f"Unknown vectorstore provider: '{provider}'. "
-                    f"Supported: {list(VECTORSTORE_PROVIDER_REGISTRY.keys())}"
-                )
+                    if not factory:
+                        raise ValueError(
+                            f"Unknown vectorstore provider: '{provider}'. "
+                            f"Supported: {list(VECTORSTORE_PROVIDER_REGISTRY.keys())}"
+                        )
 
-            logger.info(f"Creating {provider} vectorstore")
-            embedding_model = self.get_embedding_model()
-            self._vectorstore = factory(self._config, embedding_model)
+                    logger.info(f"Creating {provider} vectorstore")
+                    embedding_model = self.get_embedding_model()
+                    self._vectorstore = factory(self._config, embedding_model)
 
         return self._vectorstore
 
@@ -462,35 +457,61 @@ class ServiceContainer:
             self._untagged_repository = SupabaseUntaggedRepository(client)
         return self._untagged_repository
 
-    def get_cache_manager(self) -> CacheManager:
+    def get_cache_manager(self) -> ICacheManager:
         """Get or create cache manager for AI Gateway.
 
         Builds the response cache (TTL from config) the AI Gateway uses to avoid
-        repeating identical LLM calls. Only wired in when the gateway is enabled.
+        repeating identical LLM calls. cache_type selects the backend: "memory"
+        (per-process, cleared on restart) or "supabase" (persistent, shared).
+        The version tag defaults to the primary model name so a model swap busts
+        the cache; set AI_GATEWAY_CACHE_VERSION to also bust after a prompt change.
 
         Returns:
-            CacheManager instance.
+            ICacheManager instance.
         """
         if not self._cache_manager:
-            logger.info("Creating CacheManager")
-            self._cache_manager = CacheManager(
-                ttl_seconds=self._config.ai_gateway.cache_ttl_seconds
-            )
+            gw = self._config.ai_gateway
+            version = gw.cache_version or self._config.llm.model_name
+
+            if gw.cache_type == "supabase":
+                if not self._config.supabase.enabled:
+                    raise ValueError(
+                        "The persistent (supabase) LLM cache requires SUPABASE_URL "
+                        "and SUPABASE_SERVICE_ROLE_KEY"
+                    )
+                from supabase import create_client
+
+                logger.info("Creating SupabaseCacheManager (persistent LLM cache)")
+                client = create_client(
+                    self._config.supabase.url, self._config.supabase.service_role_key
+                )
+                self._cache_manager = SupabaseCacheManager(
+                    client,
+                    ttl_seconds=gw.cache_ttl_seconds,
+                    version=version,
+                )
+            else:
+                logger.info("Creating in-memory CacheManager")
+                self._cache_manager = CacheManager(
+                    ttl_seconds=gw.cache_ttl_seconds,
+                    version=version,
+                )
         return self._cache_manager
 
-    def get_cost_tracker(self) -> CostTracker:
-        """Get or create cost tracker for AI Gateway.
+    def get_usage_tracker(self) -> UsageTracker:
+        """Get or create the usage tracker for the AI Gateway.
 
-        Builds the token/cost accountant the AI Gateway uses to tally LLM spend.
-        Leaf component. Only wired in when the gateway is enabled.
+        Builds the call/token accountant that powers the gateway's daily
+        call-budget guardrail (dollars live in Langfuse, not here). Leaf
+        component. Only wired in when the gateway is enabled.
 
         Returns:
-            CostTracker instance.
+            UsageTracker instance.
         """
-        if not self._cost_tracker:
-            logger.info("Creating CostTracker")
-            self._cost_tracker = CostTracker()
-        return self._cost_tracker
+        if not self._usage_tracker:
+            logger.info("Creating UsageTracker")
+            self._usage_tracker = UsageTracker()
+        return self._usage_tracker
 
     def get_llm(self) -> ILanguageModel:
         """Get or create LLM implementation.
@@ -515,48 +536,57 @@ class ServiceContainer:
             ValueError: If configured LLM provider is not in the registry.
         """
         if not self._llm:
-            provider = self._config.llm.provider
-            llm_class = LLM_PROVIDER_REGISTRY.get(provider)
-
-            if not llm_class:
-                raise ValueError(
-                    f"Unknown LLM provider: '{provider}'. "
-                    f"Supported: {list(LLM_PROVIDER_REGISTRY.keys())}"
-                )
-
-            logger.info(f"Creating {provider} LLM ({llm_class.__name__})")
-            primary_llm = llm_class(self._config.llm)
-
-            # Wrap Gemini with fallback to Local for resilience
-            if provider == "gemini":
-                logger.info("Wrapping Gemini with fallback to Local")
-                fallback_llm = LocalSummarizerModel(self._config.llm)
-                self._llm = LLMWrapper(
-                    primary_llm=primary_llm,
-                    fallback_llm=fallback_llm,
-                    max_retries=2
-                )
-            else:
-                self._llm = primary_llm
-
-            # Wrap with AI Gateway if enabled
-            if self._config.ai_gateway.enabled:
-                logger.info("Wrapping LLM with AI Gateway for cost optimization")
-                cache_manager = self.get_cache_manager()
-                cost_tracker = self.get_cost_tracker()
-
-                # Create fallback LLM for gateway if not already created
-                fallback_llm = fallback_llm if provider == "gemini" else LocalSummarizerModel(self._config.llm)
-
-                self._llm = AIGateway(
-                    primary_llm=self._llm,
-                    fallback_llm=fallback_llm,
-                    config=self._config.ai_gateway,
-                    cache_manager=cache_manager,
-                    cost_tracker=cost_tracker,
-                )
-
+            with self._lock:
+                if not self._llm:
+                    self._llm = self._build_llm()
         return self._llm
+
+    def _build_llm(self) -> ILanguageModel:
+        """Construct the layered LLM (provider + fallback + optional gateway).
+
+        Called only under self._lock from get_llm."""
+        provider = self._config.llm.provider
+        llm_class = LLM_PROVIDER_REGISTRY.get(provider)
+
+        if not llm_class:
+            raise ValueError(
+                f"Unknown LLM provider: '{provider}'. "
+                f"Supported: {list(LLM_PROVIDER_REGISTRY.keys())}"
+            )
+
+        logger.info(f"Creating {provider} LLM ({llm_class.__name__})")
+        primary_llm = llm_class(self._config.llm)
+
+        # Wrap Gemini with fallback to Local for resilience
+        if provider == "gemini":
+            logger.info("Wrapping Gemini with fallback to Local")
+            fallback_llm = LocalSummarizerModel(self._config.llm)
+            llm: ILanguageModel = LLMWrapper(
+                primary_llm=primary_llm,
+                fallback_llm=fallback_llm,
+                max_retries=2
+            )
+        else:
+            llm = primary_llm
+
+        # Wrap with AI Gateway if enabled
+        if self._config.ai_gateway.enabled:
+            logger.info("Wrapping LLM with AI Gateway for routing")
+            cache_manager = self.get_cache_manager()
+            usage_tracker = self.get_usage_tracker()
+
+            # Create fallback LLM for gateway if not already created
+            fallback_llm = fallback_llm if provider == "gemini" else LocalSummarizerModel(self._config.llm)
+
+            llm = AIGateway(
+                primary_llm=llm,
+                fallback_llm=fallback_llm,
+                config=self._config.ai_gateway,
+                cache_manager=cache_manager,
+                usage_tracker=usage_tracker,
+            )
+
+        return llm
 
     def get_scoring_strategy(self) -> IScoringStrategy:
         """Get or create scoring strategy implementation.
@@ -573,22 +603,27 @@ class ServiceContainer:
             self._scoring_strategy = KeywordCountScoringStrategy()
         return self._scoring_strategy
 
-    # === Service Factories ===
+    def get_silver_scoring_strategy(self) -> IScoringStrategy:
+        """Get or create the Silver-time scoring strategy.
 
-    def get_ingestion_service(self) -> ArticleIngestionService:
-        """Get or create article ingestion service.
-
-        The Bronze driver: pulls articles from get_article_source and lands them.
-        Thin wrapper whose only dependency is the article source.
+        Wraps the keyword scorer with an embedding-based semantic layer that
+        adds a couple of concept-driven theme tags keywords miss (Capital
+        Markets, Crowdfunding) and vetoes lone-keyword false positives. This is
+        Silver-only: it embeds at tag time (reusing the pgvector embedder).
+        Any failure degrades to the plain keyword base.
 
         Returns:
-            ArticleIngestionService instance.
+            IScoringStrategy (SemanticScoringStrategy over the keyword base).
         """
-        if not self._ingestion_service:
-            logger.info("Creating ArticleIngestionService")
-            article_source = self.get_article_source()
-            self._ingestion_service = ArticleIngestionService(article_source)
-        return self._ingestion_service
+        if not self._silver_scoring_strategy:
+            logger.info("Creating SemanticScoringStrategy for Silver")
+            self._silver_scoring_strategy = SemanticScoringStrategy(
+                embedder=self.get_embedding_model(),
+                base_strategy=self.get_scoring_strategy(),
+            )
+        return self._silver_scoring_strategy
+
+    # === Service Factories ===
 
     def get_silver_service(self) -> SilverService:
         """Get or create the Silver service.
@@ -623,7 +658,7 @@ class ServiceContainer:
                 quarantine_repository=self.get_quarantine_repository(),
                 classifier=self.get_relevance_classifier(),
                 scraper=self.get_scraper(),
-                scoring_strategy=self.get_scoring_strategy(),
+                scoring_strategy=self.get_silver_scoring_strategy(),
                 theme_categories=ThemeMappings.get_mapping().categories,
                 risk_categories=RiskMappings.get_mapping().categories,
                 signal_categories=SignalMappings.get_mapping().categories,
@@ -672,26 +707,14 @@ class ServiceContainer:
             DocumentRetrievalService instance.
         """
         if not self._retrieval_service:
-            logger.info("Creating DocumentRetrievalService")
-            vectorstore = self.get_vectorstore()
-            self._retrieval_service = DocumentRetrievalService(
-                vectorstore, self._config.retrieval
-            )
+            with self._lock:
+                if not self._retrieval_service:
+                    logger.info("Creating DocumentRetrievalService")
+                    vectorstore = self.get_vectorstore()
+                    self._retrieval_service = DocumentRetrievalService(
+                        vectorstore, self._config.retrieval
+                    )
         return self._retrieval_service
-
-    def get_approval_service(self) -> ApprovalService:
-        """Get or create approval service.
-
-        Holds the human-in-the-loop approval state (approve / reject a generated
-        thesis). Self-contained, no dependencies.
-
-        Returns:
-            ApprovalService instance for human approval workflows.
-        """
-        if not self._approval_service:
-            logger.info("Creating ApprovalService")
-            self._approval_service = ApprovalService()
-        return self._approval_service
 
     def get_opportunity_scoring_service(self) -> OpportunityScoringService:
         """Get or create opportunity scoring service.
@@ -721,15 +744,17 @@ class ServiceContainer:
             ThesisGeneratorService instance.
         """
         if not self._thesis_service:
-            logger.info("Creating ThesisGeneratorService")
-            llm = self.get_llm()
-            scoring_service = self.get_opportunity_scoring_service()
-            self._thesis_service = ThesisGeneratorService(
-                llm=llm,
-                scoring_service=scoring_service,
-                trend_repository=self.get_trend_repository(),
-                retrieval_window_days=self._config.retrieval.window_days,
-            )
+            with self._lock:
+                if not self._thesis_service:
+                    logger.info("Creating ThesisGeneratorService")
+                    llm = self.get_llm()
+                    scoring_service = self.get_opportunity_scoring_service()
+                    self._thesis_service = ThesisGeneratorService(
+                        llm=llm,
+                        scoring_service=scoring_service,
+                        trend_repository=self.get_trend_repository(),
+                        retrieval_window_days=self._config.retrieval.window_days,
+                    )
         return self._thesis_service
 
     def get_refinement_graph(self) -> tuple:
@@ -748,19 +773,21 @@ class ServiceContainer:
             NotImplementedError: If Gemini API key is not configured.
         """
         if not self._refinement_graph:
-            if not self._config.llm.api_key:
-                raise NotImplementedError(
-                    "Refinement graph requires a Gemini API key (GOOGLE_API_KEY)."
-                )
+            with self._lock:
+                if not self._refinement_graph:
+                    if not self._config.llm.api_key:
+                        raise NotImplementedError(
+                            "Refinement graph requires a Gemini API key (GOOGLE_API_KEY)."
+                        )
 
-            logger.info("Creating LangGraph refinement graph with real tool calling")
-            from core.agents.refinement_graph import build_refinement_graph
+                    logger.info("Creating LangGraph refinement graph with real tool calling")
+                    from core.agents.refinement_graph import build_refinement_graph
 
-            self._refinement_graph, self._langfuse_handler = build_refinement_graph(
-                thesis_service=self.get_thesis_service(),
-                gemini_api_key=self._config.llm.api_key,
-                model_name=self._config.llm.model_name,
-                timeout=self._config.llm.timeout,
-                max_output_tokens=self._config.llm.max_output_tokens,
-            )
+                    self._refinement_graph, self._langfuse_handler = build_refinement_graph(
+                        thesis_service=self.get_thesis_service(),
+                        gemini_api_key=self._config.llm.api_key,
+                        model_name=self._config.llm.model_name,
+                        timeout=self._config.llm.timeout,
+                        max_output_tokens=self._config.llm.max_output_tokens,
+                    )
         return self._refinement_graph, self._langfuse_handler

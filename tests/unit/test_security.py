@@ -1,101 +1,117 @@
-"""Tests for the API security layer: the shared-key gate and rate limiting."""
+"""Tests for the API security layer: per-user JWT auth wiring + rate limiting."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 from slowapi.errors import RateLimitExceeded
 
-from api.security import (
-    API_KEY_ENV,
-    limiter,
-    rate_limit_handler,
-    require_api_key,
-)
+from api.security import _rate_limit_key, limiter, rate_limit_handler
 
 
-class TestApiKeyGate:
-    """Unit tests for require_api_key across env states. The key is read at
-    call time, so monkeypatching the env before each call exercises the gate."""
-
-    def test_open_when_key_unset(self, monkeypatch):
-        """Unset key -> gate is a no-op regardless of the header (local dev)."""
-        monkeypatch.delenv(API_KEY_ENV, raising=False)
-        assert require_api_key(x_api_key=None) is None
-        assert require_api_key(x_api_key="anything") is None
-
-    def test_missing_header_rejected_when_key_set(self, monkeypatch):
-        monkeypatch.setenv(API_KEY_ENV, "s3cret")
-        with pytest.raises(HTTPException) as exc:
-            require_api_key(x_api_key=None)
-        assert exc.value.status_code == 401
-        assert exc.value.detail["code"] == "unauthorized"
-
-    def test_wrong_key_rejected(self, monkeypatch):
-        monkeypatch.setenv(API_KEY_ENV, "s3cret")
-        with pytest.raises(HTTPException) as exc:
-            require_api_key(x_api_key="wrong")
-        assert exc.value.status_code == 401
-
-    def test_correct_key_accepted(self, monkeypatch):
-        monkeypatch.setenv(API_KEY_ENV, "s3cret")
-        assert require_api_key(x_api_key="s3cret") is None
-
-
-def _client(mock_jm=None):
-    """A TestClient over the real router with the job manager/container mocked."""
-    from api.deps import get_container, get_job_manager
+def _client() -> TestClient:
+    """TestClient over the real router with auth NOT overridden, so the real
+    get_current_user runs and a missing bearer token 401s. get_container is
+    mocked because it resolves before the auth dependency (and would otherwise
+    raise 'not initialized' before the 401 is reached)."""
+    from api.deps import get_container
     from api.routes import router
 
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[get_job_manager] = lambda: mock_jm or MagicMock()
     app.dependency_overrides[get_container] = lambda: MagicMock()
     return TestClient(app)
 
 
-class TestGateWiredToRoutes:
-    """The gate must be applied to every mutating endpoint and to none of the
-    reads. A 401 fires in the dependency before the body, so no container setup
-    is needed."""
+class TestAuthWiredToRoutes:
+    """Every job endpoint (reads included) now requires a Supabase JWT: a
+    missing bearer token 401s in get_current_user before the handler runs.
+    Public meta endpoints stay open."""
 
-    def test_create_thesis_401_without_key(self, monkeypatch):
-        monkeypatch.setenv(API_KEY_ENV, "s3cret")
+    def test_create_thesis_401_without_token(self):
         res = _client().post("/api/theses", json={"query": "digital lending"})
         assert res.status_code == 401
         assert res.json()["detail"]["code"] == "unauthorized"
 
-    def test_refinement_401_without_key(self, monkeypatch):
-        monkeypatch.setenv(API_KEY_ENV, "s3cret")
+    def test_refinement_401_without_token(self):
         res = _client().post(
             "/api/theses/x/refinements", json={"feedback": ["Too broad"]})
         assert res.status_code == 401
 
-    def test_approval_401_without_key(self, monkeypatch):
-        monkeypatch.setenv(API_KEY_ENV, "s3cret")
-        res = _client().put("/api/theses/x/approval")
-        assert res.status_code == 401
+    def test_approval_401_without_token(self):
+        assert _client().put("/api/theses/x/approval").status_code == 401
 
-    def test_valid_key_passes_the_gate(self, monkeypatch):
-        """A correct key clears the gate (approval reaches the handler -> 404,
-        not 401, since the job does not exist)."""
-        monkeypatch.setenv(API_KEY_ENV, "s3cret")
-        mock_jm = MagicMock()
-        mock_jm.get_job = AsyncMock(return_value=None)  # handler awaits this
-        res = _client(mock_jm).put(
-            "/api/theses/x/approval", headers={"X-API-Key": "s3cret"})
-        assert res.status_code == 404
-        assert res.json()["detail"]["code"] == "job_not_found"
+    def test_list_401_without_token(self):
+        assert _client().get("/api/theses").status_code == 401
 
-    def test_reads_stay_open_when_key_set(self, monkeypatch):
-        """Reads are intentionally ungated (deferred RBAC)."""
-        monkeypatch.setenv(API_KEY_ENV, "s3cret")
-        mock_jm = MagicMock()
-        mock_jm.list_jobs = AsyncMock(return_value=[])  # handler awaits this
-        client = _client(mock_jm)
-        assert client.get("/api/theses").status_code == 200
+    def test_get_401_without_token(self):
+        assert _client().get("/api/theses/x").status_code == 401
+
+    def test_delete_401_without_token(self):
+        assert _client().delete("/api/theses/x").status_code == 401
+
+    def test_public_meta_endpoints_stay_open(self):
+        client = _client()
         assert client.get("/api/feedback-options").status_code == 200
+        assert client.get("/api/health").status_code == 200
+
+
+class TestRequireAdmin:
+    """The delete endpoint is admin-only: require_admin gates on the JWT's
+    app_metadata.role claim before the handler (and RLS) ever run."""
+
+    def _client_as(self, role: str) -> TestClient:
+        from api.auth import AuthUser, get_current_user, get_user_job_manager
+        from api.deps import get_container
+        from api.routes import router
+
+        mock_jm = MagicMock()
+        mock_jm.get_job = AsyncMock(return_value=MagicMock(id="x"))
+        mock_jm.delete_job = AsyncMock()
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_current_user] = lambda: AuthUser(
+            id="u1", token="t", role=role
+        )
+        app.dependency_overrides[get_user_job_manager] = lambda: mock_jm
+        app.dependency_overrides[get_container] = lambda: MagicMock()
+        client = TestClient(app)
+        client._mock_jm = mock_jm  # type: ignore[attr-defined]
+        return client
+
+    def test_delete_403_for_non_admin(self):
+        res = self._client_as("user").delete("/api/theses/x")
+        assert res.status_code == 403
+        assert res.json()["detail"]["code"] == "forbidden"
+
+    def test_delete_204_for_admin(self):
+        client = self._client_as("admin")
+        res = client.delete("/api/theses/x")
+        assert res.status_code == 204
+        client._mock_jm.delete_job.assert_awaited_once_with("x")  # type: ignore[attr-defined]
+
+
+class TestRateLimitKey:
+    """Behind a reverse proxy (e.g. Render) the key is the client IP recorded
+    in X-Forwarded-For, so users get separate buckets; without the header
+    (local dev, direct access) it falls back to the peer address."""
+
+    @staticmethod
+    def _request(headers=(), client=("10.0.0.1", 1234)) -> Request:
+        scope = {
+            "type": "http", "method": "GET", "path": "/", "query_string": b"",
+            "headers": list(headers), "client": client,
+            "server": ("test", 80), "scheme": "http",
+        }
+        return Request(scope)
+
+    def test_prefers_first_forwarded_hop(self):
+        req = self._request([(b"x-forwarded-for", b"203.0.113.7, 10.1.2.3")])
+        assert _rate_limit_key(req) == "203.0.113.7"
+
+    def test_falls_back_to_peer_address_without_header(self):
+        assert _rate_limit_key(self._request()) == "10.0.0.1"
 
 
 class TestRateLimit:

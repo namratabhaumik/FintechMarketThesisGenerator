@@ -1,6 +1,6 @@
 [project]
 name = "finthesis"
-version = "0.1.0"
+version = "1.0.0"
 requires-python = ">=3.14"
 dependencies = [
     # LangChain & AI
@@ -23,6 +23,9 @@ dependencies = [
     "supabase==2.30.0",
     # Utilities
     "python-dotenv==1.0.0",
+    "dateparser==1.4.1",
+    "spacy==3.8.13",
+    "en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
     # Data
     "pandas==2.3.3",
     "slowapi>=0.1.10",
@@ -36,8 +39,12 @@ dev = [
     "mypy==1.7.1",
     "types-requests==2.32.4.20260107",
     "types-beautifulsoup4==4.12.0.20250516",
+    "types-dateparser==1.4.1.20260617",
     "ruff==0.15.17",
     "pre-commit==3.6.0",
+]
+docs = [
+    "mkdocs-material==9.7.7",
 ]
 
 [build-system]
@@ -46,6 +53,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["core", "api", "config", "dependency_injection"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

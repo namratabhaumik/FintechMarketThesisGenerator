@@ -8,10 +8,9 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from langchain_core.documents import Document
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 from core.agents.refinement_graph import (
-    _create_langfuse_handler,
     _diff_thesis,
     _make_assemble_node,
     _resolve_components,
@@ -52,9 +51,10 @@ class TestResolveComponents:
         result = {
             "tool": "refine_thesis", "key_themes": ["A", "B"], "risks": ["R"],
             "investment_signals": ["S"], "sources": ["x"], "raw_output": "new",
+            "summary_status": "refused", "refusal_reason": "llm_judgment",
         }
         assert _resolve_components("refine_thesis", result, current_thesis) == (
-            ["A", "B"], ["R"], ["S"], ["x"], "new"
+            ["A", "B"], ["R"], ["S"], ["x"], "new", "refused", "llm_judgment"
         )
 
     def test_refine_thesis_falls_back_to_current_for_missing_keys(self, current_thesis):
@@ -62,7 +62,8 @@ class TestResolveComponents:
         assert comp == (
             current_thesis.key_themes, current_thesis.risks,
             current_thesis.investment_signals, current_thesis.sources,
-            current_thesis.raw_output,
+            current_thesis.raw_output, current_thesis.summary_status,
+            current_thesis.refusal_reason,
         )
 
     def test_unknown_tool_returns_none(self, current_thesis):
@@ -79,7 +80,8 @@ class TestScoreAndBuild:
 
     def test_freezes_numbers_and_swaps_content(self, current_thesis):
         components = (["Digital Payments"], ["Regulatory Risk", "Credit Risk"],
-                      ["Payment Infrastructure"], ["u1", "u2"], "new prose")
+                      ["Payment Infrastructure"], ["u1", "u2"], "new prose",
+                      "ok", None)
         thesis = _score_and_build(components, current_thesis)
 
         assert isinstance(thesis, StructuredThesis)
@@ -92,12 +94,14 @@ class TestScoreAndBuild:
         assert thesis.recommendation == current_thesis.recommendation
         # key_risk_factors follows the refined (displayed) risks, top 3.
         assert thesis.key_risk_factors == ["Regulatory Risk", "Credit Risk"]
+        assert thesis.summary_status == "ok"
+        assert thesis.refusal_reason is None
 
     def test_numbers_frozen_regardless_of_content(self, current_thesis):
         # Different refined prose / tags must NOT move any number - they reflect
         # the retrieved evidence and Gold snapshot, which a refinement leaves alone.
-        a = _score_and_build(([], [], [], [], SIGNAL_RICH), current_thesis)
-        b = _score_and_build((["T"], ["R1", "R2"], ["S"], ["u"], RISK_HEAVY), current_thesis)
+        a = _score_and_build(([], [], [], [], SIGNAL_RICH, "ok", None), current_thesis)
+        b = _score_and_build((["T"], ["R1", "R2"], ["S"], ["u"], RISK_HEAVY, "ok", None), current_thesis)
         assert a.opportunity_score == b.opportunity_score == current_thesis.opportunity_score
         assert a.confidence_level == b.confidence_level == current_thesis.confidence_level
 
@@ -122,10 +126,13 @@ class TestDiffThesis:
         assert not any(c.startswith("Signals:") for c in changes)  # unchanged dim omitted
         assert "Score, confidence, recommendation unchanged" in changes
 
-    def test_identical_content_reports_only_frozen_numbers(self):
+    def test_identical_content_reports_explicit_no_op(self):
         current = StructuredThesis(key_themes=["A"], raw_output="same")
         new = StructuredThesis(key_themes=["A"], raw_output="same")
-        assert _diff_thesis(current, new) == ["Score, confidence, recommendation unchanged"]
+        assert _diff_thesis(current, new) == [
+            "No changes made - the current thesis reflects this feedback",
+            "Score, confidence, recommendation unchanged",
+        ]
 
 
 class TestAssembleNode:
@@ -223,6 +230,91 @@ class TestRefineThesisContentOnly:
         assert result.opportunity_score == 0.0
         assert result.recommendation == ""
 
+    def test_refine_feeds_lens_evidence_and_prior_feedback_to_llm(self):
+        # The latest round's feedback drives the evidence lens (which pool docs
+        # the rewrite reads); earlier rounds flow through as prior_feedback.
+        captured = {}
+
+        async def capture(documents, current_thesis_text, feedback_items, prior_feedback=None):
+            captured["docs"] = documents
+            captured["prior"] = prior_feedback
+            return SIGNAL_RICH
+
+        llm = Mock()
+        llm.refine = capture
+        service = ThesisGeneratorService(
+            llm=llm, scoring_service=OpportunityScoringService(), trend_repository=Mock()
+        )
+        pool = [
+            Document(page_content="p", metadata={"url": "u_theme", "themes": ["Payments"], "similarity": 0.9}),
+            Document(page_content="q", metadata={"url": "u_other", "themes": ["WealthTech"], "similarity": 0.8}),
+        ]
+        # >CONTINUITY_KEEP(2) originals so the lens has a slot to fill.
+        original = [
+            Document(page_content="s1", metadata={"url": "u_sum1"}),
+            Document(page_content="s2", metadata={"url": "u_sum2"}),
+            Document(page_content="s3", metadata={"url": "u_sum3"}),
+        ]
+        current = StructuredThesis(raw_output="old", key_themes=["Payments"], summary_status="ok")
+
+        asyncio.run(service.refine_thesis(
+            topic="x",
+            documents=pool,
+            current_thesis=current,
+            feedback_items=["Need stronger evidence for key themes"],
+            summary_documents=original,
+            prior_feedback=[["Missing recent market trends"]],
+        ))
+
+        # Prior feedback reached the LLM untouched.
+        assert captured["prior"] == [["Missing recent market trends"]]
+        # The theme lens pulled the Payments-tagged pool article into the read set.
+        assert "u_theme" in [d.metadata["url"] for d in captured["docs"]]
+
+
+class TestToolErrorsPropagate:
+    """A tool failure (e.g. a Gemini outage inside refine_thesis) propagates out
+    of graph.ainvoke instead of being swallowed as an error-string ToolMessage,
+    so the route can 502 and the failed round is never persisted."""
+
+    def test_tool_exception_propagates_out_of_ainvoke(self, monkeypatch, current_thesis):
+        from core.agents import refinement_graph as rg
+
+        monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+        monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+
+        # Stub the planner LLM: no network, always calls refine_thesis.
+        planner_response = AIMessage(content="", tool_calls=[{
+            "name": "refine_thesis",
+            "args": {"feedback_focus": "x", "theme_delta": 0,
+                     "risk_delta": 0, "signal_delta": 0},
+            "id": "call1",
+        }])
+        bound_llm = Mock()
+        bound_llm.ainvoke = AsyncMock(return_value=planner_response)
+        fake_chat = Mock()
+        fake_chat.bind_tools.return_value = bound_llm
+        monkeypatch.setattr(rg, "ChatGoogleGenerativeAI", Mock(return_value=fake_chat))
+
+        service = Mock()
+        service.refine_thesis = AsyncMock(side_effect=RuntimeError("gemini outage"))
+        graph, _ = rg.build_refinement_graph(
+            thesis_service=service, gemini_api_key="test-key"
+        )
+
+        state = {
+            "topic": "t",
+            "documents": [Document(page_content="doc", metadata={"url": "u1"})],
+            "current_thesis": current_thesis,
+            "feedback_history": [["Too broad"]],
+            "refinement_count": 0,
+            "status": "refining",
+            "execution_log": [],
+            "messages": [],
+        }
+        with pytest.raises(RuntimeError, match="gemini outage"):
+            asyncio.run(graph.ainvoke(state))
+
 
 class TestLangfuseHandler:
     """Cheap branch: no credentials -> tracing disabled (None)."""
@@ -230,4 +322,10 @@ class TestLangfuseHandler:
     def test_no_credentials_returns_none(self, monkeypatch):
         monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
         monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
-        assert _create_langfuse_handler() is None
+        # Reset the cached singleton so _init re-reads the env.
+        import core.utils.observability as obs
+
+        monkeypatch.setattr(obs, "_initialized", False)
+        monkeypatch.setattr(obs, "_client", None)
+        monkeypatch.setattr(obs, "_handler", None)
+        assert obs.get_callback_handler() is None

@@ -7,12 +7,14 @@ from unittest.mock import Mock
 from langchain_core.documents import Document
 
 from core.models.trend_metric import TrendMetric
-from core.services.ingestion_service import ArticleIngestionService
+from core.services.ingestion_service import article_to_document
+from core.models.thesis import StructuredThesis
 from core.services.thesis_generator_service import (
     ThesisGeneratorService,
     _apply_cap_deltas,
     _gold_confidence_inputs,
     _ranked_tags_from_documents,
+    _select_feedback_evidence,
 )
 
 
@@ -20,6 +22,7 @@ def _empty_trend():
     """Trend repo stub with no Gold metrics (confidence falls to 0)."""
     repo = Mock()
     repo.fetch_all.return_value = []
+    repo.fetch_recent.return_value = []
     return repo
 
 
@@ -71,41 +74,20 @@ class TestGoldConfidenceInputs:
         assert (covered, window_weeks, as_of) == (4, 7, self.W0)
 
 
-class TestArticleIngestionService:
-    """Tests for ArticleIngestionService."""
+class TestArticleToDocument:
+    """article_to_document: the shared Article -> Document conversion."""
 
-    def test_fetch_articles(self, mock_article_source):
-        """Test fetching articles."""
-        service = ArticleIngestionService(mock_article_source)
-        articles = service.fetch_articles("fintech", limit=5)
-
-        assert len(articles) > 0
-        assert articles[0].title == "Test Article 1"
-        assert articles[0].source == "example.com"
-
-    def test_fetch_articles_respects_limit(self, mock_article_source):
-        """Test that fetch respects limit."""
-        service = ArticleIngestionService(mock_article_source)
-        articles = service.fetch_articles("fintech", limit=2)
-
-        assert len(articles) == 2
-
-    def test_convert_to_documents(self, sample_articles, mock_article_source):
-        """Test conversion of articles to documents."""
-        service = ArticleIngestionService(mock_article_source)
-        docs = service.convert_to_documents(sample_articles)
+    def test_converts_articles_to_documents(self, sample_articles):
+        docs = [article_to_document(a) for a in sample_articles]
 
         assert len(docs) == 3
         assert isinstance(docs[0], Document)
         assert "Test Article 1" in docs[0].page_content
         assert docs[0].metadata["source"] == "example.com"
 
-    def test_convert_to_documents_includes_metadata(self, sample_articles, mock_article_source):
-        """Test that documents include proper metadata."""
-        service = ArticleIngestionService(mock_article_source)
-        docs = service.convert_to_documents(sample_articles)
+    def test_documents_include_metadata(self, sample_articles):
+        doc = article_to_document(sample_articles[0])
 
-        doc = docs[0]
         assert "title" in doc.metadata
         assert "source" in doc.metadata
         assert "url" in doc.metadata
@@ -117,81 +99,64 @@ class TestArticleIngestionService:
 class _RecordingVectorStore:
     """Fake IVectorStore that records the args retrieve() was called with."""
 
-    def __init__(self):
+    def __init__(self, docs=None):
         self.retrieve_args = None
+        self._docs = docs if docs is not None else [
+            Document(page_content="r", metadata={"url": "u"})
+        ]
 
     def build(self, documents):
         return object()
 
-    def open(self):
-        return object()
-
     def retrieve(
         self,
-        vectorstore,
         query,
-        k,
         fetch_k,
-        lambda_mult,
+        max_articles,
         window_days=None,
         query_embedding=None,
         min_similarity=0.0,
+        date_from=None,
+        date_to=None,
     ):
         self.retrieve_args = {
             "query": query,
-            "k": k,
             "fetch_k": fetch_k,
-            "lambda_mult": lambda_mult,
+            "max_articles": max_articles,
             "window_days": window_days,
             "query_embedding": query_embedding,
             "min_similarity": min_similarity,
+            "date_from": date_from,
+            "date_to": date_to,
         }
-        return [Document(page_content="r", metadata={"url": "u"})]
+        return self._docs
 
 
 class TestDocumentRetrievalService:
-    """Tests for DocumentRetrievalService MMR wiring."""
+    """Tests for DocumentRetrievalService wiring.
 
-    def _service(self, config):
+    The service is stateless (no open/build step): retrieve() delegates the wide
+    pool query straight to the vector store, and select_diverse() runs MMR over
+    the result to pick the LLM's subset."""
+
+    def _service(self, config, docs=None):
         from core.services.retrieval_service import DocumentRetrievalService
 
-        vs = _RecordingVectorStore()
-        service = DocumentRetrievalService(vs, config)
-        service.build_vectorstore([Document(page_content="x", metadata={"url": "u"})])
-        return service, vs
+        vs = _RecordingVectorStore(docs=docs)
+        return DocumentRetrievalService(vs, config), vs
 
-    def test_is_built_false_initially(self):
-        from config.settings import RetrievalConfig
-        from core.services.retrieval_service import DocumentRetrievalService
-
-        service = DocumentRetrievalService(_RecordingVectorStore(), RetrievalConfig())
-        assert service.is_built() is False
-
-    def test_retrieve_lazily_opens_existing_store(self):
-        from config.settings import RetrievalConfig
-        from core.services.retrieval_service import DocumentRetrievalService
-
-        # No build_vectorstore() call: retrieve must open the existing store
-        vs = _RecordingVectorStore()
-        service = DocumentRetrievalService(vs, RetrievalConfig())
-        assert service.is_built() is False
-
-        docs = service.retrieve("query")
-
-        assert service.is_built() is True
-        assert len(docs) == 1
-
-    def test_retrieve_uses_mmr_config(self):
+    def test_retrieve_uses_pool_config(self):
         from config.settings import RetrievalConfig
 
         service, vs = self._service(
-            RetrievalConfig(k=5, fetch_k=20, lambda_mult=0.5, window_days=365)
+            RetrievalConfig(k=5, fetch_k=400, max_articles=50, window_days=365)
         )
         docs = service.retrieve("query")
 
-        assert vs.retrieve_args["k"] == 5
-        assert vs.retrieve_args["fetch_k"] == 20
-        assert vs.retrieve_args["lambda_mult"] == 0.5
+        # The wide-pool sizing (chunk pool + article cap) must reach the store;
+        # k/lambda_mult are the LLM-subset dials and belong to select_diverse.
+        assert vs.retrieve_args["fetch_k"] == 400
+        assert vs.retrieve_args["max_articles"] == 50
         # The configured relevance floor must reach the vector store.
         assert vs.retrieve_args["min_similarity"] == 0.72
         assert len(docs) == 1
@@ -205,16 +170,137 @@ class TestDocumentRetrievalService:
 
         assert vs.retrieve_args["window_days"] == 180
 
-    def test_retrieve_override_k_widens_fetch_k(self):
+    def test_select_diverse_mmr_narrows_to_k(self):
         from config.settings import RetrievalConfig
 
-        # k override above the configured fetch_k must widen fetch_k (MMR needs
-        # fetch_k >= k).
-        service, vs = self._service(RetrievalConfig(k=5, fetch_k=20, lambda_mult=0.5))
-        service.retrieve("query", k=30)
+        # Wide pool of 4 articles, each with an embedding; MMR must pick k=2.
+        pool = [
+            Document(page_content=f"a{i}", metadata={"url": f"u{i}", "embedding": vec})
+            for i, vec in enumerate(([1.0, 0.0], [0.99, 0.01], [0.0, 1.0], [0.5, 0.5]))
+        ]
+        service, _ = self._service(RetrievalConfig(k=2, lambda_mult=0.5), docs=pool)
 
-        assert vs.retrieve_args["k"] == 30
-        assert vs.retrieve_args["fetch_k"] == 30
+        selected = service.select_diverse(pool, query_embedding=[1.0, 0.0])
+
+        assert len(selected) == 2
+        # The transient embedding must not survive into the LLM/persisted docs.
+        assert all("embedding" not in d.metadata for d in selected)
+
+    def test_select_diverse_skips_mmr_when_pool_at_or_below_k(self):
+        from config.settings import RetrievalConfig
+
+        # 3 docs, k=5 -> no selection needed; pass all through in order without
+        # needing a query embedding at all, embedding stripped.
+        pool = [
+            Document(page_content=f"a{i}", metadata={"url": f"u{i}", "embedding": [1.0, 0.0]})
+            for i in range(3)
+        ]
+        service, _ = self._service(RetrievalConfig(k=5), docs=pool)
+
+        selected = service.select_diverse(pool, query_embedding=None)
+
+        assert [d.metadata["url"] for d in selected] == ["u0", "u1", "u2"]
+        assert all("embedding" not in d.metadata for d in selected)
+
+    def test_select_diverse_falls_back_without_query_embedding(self):
+        from config.settings import RetrievalConfig
+
+        pool = [
+            Document(page_content=f"a{i}", metadata={"url": f"u{i}", "embedding": [1.0, 0.0]})
+            for i in range(4)
+        ]
+        service, _ = self._service(RetrievalConfig(k=2), docs=pool)
+
+        # No query vector -> top-k by relevance order, embedding still stripped.
+        selected = service.select_diverse(pool, query_embedding=None)
+
+        assert [d.metadata["url"] for d in selected] == ["u0", "u1"]
+        assert all("embedding" not in d.metadata for d in selected)
+
+    def test_retrieve_query_date_intent_overrides_window_days(self):
+        from config.settings import RetrievalConfig
+
+        # A query naming an explicit date range takes over from the default
+        # trailing window instead of being combined with it.
+        service, vs = self._service(RetrievalConfig(window_days=365))
+        service.retrieve("fintech regulation since March 2024")
+
+        assert vs.retrieve_args["window_days"] is None
+        assert vs.retrieve_args["date_from"] is not None
+        assert vs.retrieve_args["date_to"] is not None
+
+    def test_retrieve_query_without_date_intent_keeps_window_days(self):
+        from config.settings import RetrievalConfig
+
+        service, vs = self._service(RetrievalConfig(window_days=365))
+        service.retrieve("crypto adoption in Asia")
+
+        assert vs.retrieve_args["window_days"] == 365
+        assert vs.retrieve_args["date_from"] is None
+        assert vs.retrieve_args["date_to"] is None
+
+
+def _pool_doc(url, *, themes=None, signals=None, published="2026-01-01", sim=0.75):
+    return Document(page_content=url, metadata={
+        "url": url,
+        "themes": themes or [],
+        "signals": signals or [],
+        "published_at": f"{published}T00:00:00",
+        "similarity": sim,
+    })
+
+
+class TestSelectFeedbackEvidence:
+    """_select_feedback_evidence: the refinement evidence lens. Deterministic
+    re-ranking of the wide pool by stored metadata, blended with the original
+    summary docs for continuity. Only touches which docs the LLM reads."""
+
+    # A wide pool of distinct articles with varied tags / dates / similarity.
+    POOL = [
+        _pool_doc("a", themes=["Digital Payments"], signals=["Payment Infrastructure"], published="2026-01-01", sim=0.80),
+        _pool_doc("b", themes=["Digital Lending"], published="2026-06-01", sim=0.78),
+        _pool_doc("c", themes=["Digital Payments"], signals=["AI-Driven Financial Tools"], published="2026-07-01", sim=0.75),
+        _pool_doc("d", themes=["WealthTech"], signals=["WealthTech Disruption"], published="2026-03-01", sim=0.90),
+        _pool_doc("e", published="2026-02-01", sim=0.73),
+    ]
+    # The current summary subset (distinct from the pool urls) -> top 2 kept.
+    ORIGINAL = [_pool_doc("o1"), _pool_doc("o2"), _pool_doc("o3")]
+
+    def _urls(self, docs):
+        return [d.metadata["url"] for d in docs]
+
+    def _run(self, feedback, key_themes=("Digital Payments",)):
+        thesis = StructuredThesis(key_themes=list(key_themes))
+        return _select_feedback_evidence(self.POOL, self.ORIGINAL, feedback, thesis, target_n=3)
+
+    def test_structural_feedback_no_lens_keeps_original(self):
+        out = self._run(["Too many risks, not enough opportunities"])
+        assert self._urls(out) == ["o1", "o2", "o3"]
+
+    def test_theme_lens_blends_theme_tagged_by_similarity(self):
+        # key theme "Digital Payments" -> a(0.80), c(0.75); keep top-2 original + a.
+        out = self._run(["Need stronger evidence for key themes"])
+        assert self._urls(out) == ["o1", "o2", "a"]
+
+    def test_signal_lens_picks_signal_tagged_by_similarity(self):
+        # signal-tagged: d(0.90), a(0.80), c(0.75) -> fill with d.
+        out = self._run(["Investment signals are too vague"])
+        assert self._urls(out) == ["o1", "o2", "d"]
+
+    def test_recency_lens_picks_most_recent(self):
+        # newest published: c (2026-07) -> fill with c.
+        out = self._run(["Missing recent market trends"])
+        assert self._urls(out) == ["o1", "o2", "c"]
+
+    def test_focus_lens_picks_highest_similarity(self):
+        # tightest cluster: d(0.90) -> fill with d.
+        out = self._run(["Analysis is too broad, be more specific"])
+        assert self._urls(out) == ["o1", "o2", "d"]
+
+    def test_lens_with_no_candidates_falls_back_to_original(self):
+        # theme lens but no pool article carries the key theme -> unchanged.
+        out = self._run(["Need stronger evidence for key themes"], key_themes=("Insurtech",))
+        assert self._urls(out) == ["o1", "o2", "o3"]
 
 
 class TestThesisGeneratorService:
@@ -242,11 +328,54 @@ class TestThesisGeneratorService:
         scoring_service = OpportunityScoringService()
         service = ThesisGeneratorService(mock_llm, scoring_service, _empty_trend())
 
-        docs = [Document(page_content="Digital banking is the future", metadata={"url": "http://test.com"})]
+        # Tag strength must clear the deterministic gate-2 floor (see
+        # MIN_*_STRENGTH_FOR_SUMMARY) or generate_thesis skips mock_llm.summarize
+        # entirely and this test would pass without ever exercising it.
+        docs = [Document(page_content="Digital banking is the future", metadata={
+            "url": "http://test.com",
+            "themes": ["Digital Banking"] * 3,
+            "risks": ["Regulatory Risk"] * 2,
+            "signals": ["Payment Infrastructure"] * 2,
+        })]
         thesis = asyncio.run(service.generate_thesis("Digital Banking", docs))
 
+        # Content reflects MockLanguageModel's actual return value - proves the
+        # mock was called, not just that raw_output is non-empty.
         assert thesis.raw_output is not None
+        assert thesis.raw_output.startswith("Mock summary:")
         assert thesis.sources == ["http://test.com"]
+        # A plain LLM summary carries the default provenance.
+        assert thesis.summary_source == "llm"
+
+    def test_generate_thesis_records_local_fallback_provenance(self):
+        """When the local extractive path produces the summary (it sets the
+        provenance var, like the real LocalSummarizerModel), the thesis
+        records summary_source='local'."""
+        from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
+
+        from core.interfaces.llm import SOURCE_LOCAL, summary_source_var
+
+        llm = Mock()
+
+        async def local_summarize(documents, topic=""):
+            summary_source_var.set(SOURCE_LOCAL)
+            return "extractive summary"
+
+        llm.summarize = local_summarize
+        service = ThesisGeneratorService(llm, OpportunityScoringService(), _empty_trend())
+
+        # Tag strength must clear the deterministic gate-2 floor (see
+        # MIN_*_STRENGTH_FOR_SUMMARY) or generate_thesis skips the summarize
+        # call entirely and never reaches this mock's local-fallback branch.
+        docs = [Document(page_content="x", metadata={
+            "url": "http://test.com",
+            "themes": ["Digital Banking"] * 3,
+            "risks": ["Regulatory Risk"] * 2,
+            "signals": ["Payment Infrastructure"] * 2,
+        })]
+        thesis = asyncio.run(service.generate_thesis("Digital Banking", docs))
+
+        assert thesis.summary_source == "local"
 
     def test_generate_thesis_includes_opportunity_score(self, mock_llm, mock_scoring_strategy):
         """Test that thesis includes opportunity score and confidence."""

@@ -12,8 +12,8 @@ import type {
 } from "./types";
 
 /** fetch() with the Supabase access token attached as a Bearer header when the
- * user is signed in. Sent on every call so per-user scoping works once the
- * backend enforces it; harmless while the backend still ignores it. */
+ * user is signed in. Required: the backend verifies it and scopes every jobs
+ * query to the caller via RLS; without it, job endpoints return 401. */
 async function authedFetch(url: string, init: RequestInit = {}): Promise<Response> {
   const token = await getAccessToken();
   const headers = new Headers(init.headers);
@@ -28,6 +28,7 @@ async function authedFetch(url: string, init: RequestInit = {}): Promise<Respons
  */
 export const ErrorCode = {
   NoRelevantDocuments: "no_relevant_documents",
+  InsufficientEvidence: "insufficient_evidence",
 } as const;
 
 /** An API error carrying the backend's machine-readable code (see routes.py). */
@@ -136,19 +137,33 @@ export async function getThesis(jobId: string): Promise<JobResponse> {
   return (await res.json()) as JobResponse;
 }
 
-/** Slim list of past jobs, most recent first (optionally filter by
- * refinement_status server-side ). */
+/** Slim list of past jobs, most recent first. Scoped to the caller's own jobs
+ * unless allUsers=true (admin only; the backend 403s for non-admins). Optionally
+ * filter by refinement_status server-side. */
 export async function listTheses(
   limit = 20,
+  offset = 0,
   status?: string,
+  allUsers = false,
 ): Promise<ThesisSummaryResponse[]> {
-  const params = new URLSearchParams({ limit: String(limit) });
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (status) params.set("status", status);
+  if (allUsers) params.set("all", "true");
   const res = await authedFetch(`${API_BASE}/api/theses?${params.toString()}`);
   if (!res.ok) {
     throw await toApiError(res);
   }
   return (await res.json()) as ThesisSummaryResponse[];
+}
+
+/** Delete a thesis job (admin only). */
+export async function deleteThesis(jobId: string): Promise<void> {
+  const res = await authedFetch(`${API_BASE}/api/theses/${encodeURIComponent(jobId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    throw await toApiError(res);
+  }
 }
 
 /** The fixed set of refinement feedback reasons the UI offers. */

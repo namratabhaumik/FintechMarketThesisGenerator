@@ -2,8 +2,7 @@
 
 import json
 import logging
-import os
-from typing import Annotated, Any, Dict, List, Optional, TypedDict
+from typing import Annotated, Any, Dict, List, TypedDict
 
 from langchain_core.documents import Document
 from langchain_core.messages import BaseMessage, HumanMessage, ToolMessage
@@ -12,10 +11,10 @@ from langgraph.graph import END, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
 
-from core.agents.execution_tracker import ExecutionTracker  # noqa: F401 (kept for compatibility)
 from core.agents.thesis_tools import create_thesis_tools
 from core.models.thesis import StructuredThesis
 from core.services.thesis_generator_service import ThesisGeneratorService
+from core.utils.observability import get_callback_handler
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +26,10 @@ class ThesisRefinementState(TypedDict):
 
     Attributes:
         topic: Original market topic.
-        documents: Source documents for context.
+        documents: The wide analytics pool (distinct articles) - drives the
+            displayed grounded tags on refinement.
+        summary_documents: The diverse subset the LLM rewrites from (same docs
+            the original summary read).
         current_thesis: Current StructuredThesis object.
         feedback_history: List of feedback rounds.
         refinement_count: Number of refinements completed [0, MAX_REFINEMENTS).
@@ -38,28 +40,13 @@ class ThesisRefinementState(TypedDict):
 
     topic: str
     documents: List[Document]
+    summary_documents: List[Document]
     current_thesis: StructuredThesis
     feedback_history: List[List[str]]
     refinement_count: int
     status: str
     execution_log: List[Dict[str, Any]]
     messages: Annotated[List[BaseMessage], add_messages]
-
-
-def _create_langfuse_handler() -> Optional[object]:
-    """Create a Langfuse callback handler if credentials are configured."""
-    if not (os.getenv("LANGFUSE_PUBLIC_KEY") and os.getenv("LANGFUSE_SECRET_KEY")):
-        logger.info("Langfuse credentials not set - tracing disabled")
-        return None
-
-    from langfuse import Langfuse
-    from langfuse.langchain import CallbackHandler
-
-    # v4: the CallbackHandler only binds to a global Langfuse client singleton, so it
-    # must be initialized first. Langfuse() reads keys + LANGFUSE_BASE_URL from env.
-    Langfuse()
-    logger.info("Langfuse tracing enabled")
-    return CallbackHandler()
 
 
 def _make_planner_node(llm_with_tools):
@@ -109,8 +96,9 @@ def _resolve_components(tool_name: str, result: dict, current: StructuredThesis)
     is handled downstream by _score_and_build.
 
     Returns:
-        Tuple (key_themes, risks, investment_signals, sources, raw_output),
-        or None when the tool name is not recognized.
+        Tuple (key_themes, risks, investment_signals, sources, raw_output,
+        summary_status, refusal_reason), or None when the tool name is not
+        recognized.
     """
     if tool_name == "refine_thesis":
         return (
@@ -119,6 +107,8 @@ def _resolve_components(tool_name: str, result: dict, current: StructuredThesis)
             result.get("investment_signals", current.investment_signals),
             result.get("sources", current.sources),
             result.get("raw_output", current.raw_output),
+            result.get("summary_status", current.summary_status),
+            result.get("refusal_reason", current.refusal_reason),
         )
     return None
 
@@ -132,9 +122,10 @@ def _score_and_build(components, current: StructuredThesis) -> StructuredThesis:
     from the current thesis. Only the refined content (narrative + displayed
     tags) is swapped in; key risks follow the refined risk list.
 
-    components is (key_themes, risks, investment_signals, sources, raw_output).
+    components is (key_themes, risks, investment_signals, sources, raw_output,
+    summary_status, refusal_reason).
     """
-    key_themes, risks, investment_signals, sources, raw_output = components
+    key_themes, risks, investment_signals, sources, raw_output, summary_status, refusal_reason = components
     return StructuredThesis(
         key_themes=key_themes,
         risks=risks,
@@ -146,6 +137,8 @@ def _score_and_build(components, current: StructuredThesis) -> StructuredThesis:
         confidence_as_of=current.confidence_as_of,
         recommendation=current.recommendation,
         key_risk_factors=risks[:min(3, len(risks))],
+        summary_status=summary_status,
+        refusal_reason=refusal_reason,
     )
 
 
@@ -173,6 +166,11 @@ def _diff_thesis(current: StructuredThesis, new: StructuredThesis) -> List[str]:
             parts.append("-" + ", ".join(removed))
         if parts:
             changes.append(f"{label}: " + "  ".join(parts))
+    # A round that executed but altered nothing (e.g. a re-refusal) says so
+    # outright instead of leaving the reader to infer it from absent lines.
+    # The UI keys on this exact wording (isNoOpRound in format.ts).
+    if not changes:
+        changes.append("No changes made - the current thesis reflects this feedback")
     changes.append("Score, confidence, recommendation unchanged")
     return changes
 
@@ -314,7 +312,12 @@ def build_refinement_graph(
     graph = StateGraph(ThesisRefinementState)
 
     graph.add_node("planner", _make_planner_node(planner_llm))
-    graph.add_node("tools", ToolNode(tools))
+    # handle_tool_errors=False: a tool failure (e.g. a Gemini outage inside
+    # refine_thesis) propagates out of ainvoke instead of coming back as an
+    # error-string ToolMessage that assemble would treat as a parse error. The
+    # route surfaces it as a 502 and persists nothing, so a failed round is
+    # not counted against MAX_REFINEMENTS.
+    graph.add_node("tools", ToolNode(tools, handle_tool_errors=False))
     graph.add_node("assemble", _make_assemble_node())
     graph.add_node("escalate", _escalate_node)
 
@@ -334,7 +337,7 @@ def build_refinement_graph(
     graph.add_edge("escalate", END)
 
     compiled = graph.compile()
-    langfuse_handler = _create_langfuse_handler()
+    langfuse_handler = get_callback_handler()
     logger.info(
         f"Refinement graph compiled with real tool calling, "
         f"MAX_REFINEMENTS={MAX_REFINEMENTS}, model={model_name}"

@@ -3,8 +3,6 @@
 from abc import ABC, abstractmethod
 from typing import Any, Optional
 
-from api.schemas import JobStatus
-
 
 class IJobManager(ABC):
     """Protocol for thesis generation job storage.
@@ -15,8 +13,12 @@ class IJobManager(ABC):
     """
 
     @abstractmethod
-    async def create_job(self, query: str) -> Any:
-        """Create a new job and return a job-like object."""
+    async def create_job(self, query: str, **fields) -> Any:
+        """Create a new job and return a job-like object.
+
+        Extra fields are persisted in the same (atomic) write, so a caller
+        with a finished result never leaves a half-written row behind.
+        """
         pass
 
     @abstractmethod
@@ -25,15 +27,21 @@ class IJobManager(ABC):
         pass
 
     @abstractmethod
-    async def update_status(
-        self, job_id: str, status: JobStatus, progress: Optional[str] = None
-    ) -> None:
-        """Update job status and optional progress message."""
+    async def update_job(self, job_id: str, **fields) -> None:
+        """Persist arbitrary field updates on the job."""
         pass
 
     @abstractmethod
-    async def update_job(self, job_id: str, **fields) -> None:
-        """Persist arbitrary field updates on the job."""
+    async def update_job_guarded(
+        self, job_id: str, guards: dict, **fields
+    ) -> bool:
+        """Persist field updates only if the job still matches `guards`
+        (column -> expected value, None = IS NULL), atomically.
+
+        Returns False when a concurrent writer invalidated a guard; raises on
+        storage errors (a lost race and a failed persist are different
+        outcomes for callers).
+        """
         pass
 
     @abstractmethod
@@ -42,12 +50,24 @@ class IJobManager(ABC):
         limit: Optional[int] = None,
         offset: int = 0,
         status: Optional[str] = None,
+        user_id: Optional[str] = None,
+        exclude_user_id: Optional[str] = None,
     ) -> list:
         """List jobs, most recent first.
 
         limit/offset paginate at the storage layer (limit=None returns all);
-        status filters by refinement_status.
+        status filters by refinement_status. user_id restricts to one owner:
+        redundant with RLS for a normal caller, but the only way to scope an
+        admin (whose RLS sees every row) back to their own jobs.
+        exclude_user_id is the inverse - drop one owner's rows (the admin's own,
+        so the cross-user view doesn't duplicate their personal library).
         """
+        pass
+
+    @abstractmethod
+    async def delete_job(self, job_id: str) -> None:
+        """Delete a job by ID. No-op if it doesn't exist (or isn't visible to
+        the caller under RLS)."""
         pass
 
     @abstractmethod

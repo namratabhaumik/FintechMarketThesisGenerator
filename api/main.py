@@ -11,14 +11,14 @@ load_dotenv()
 
 import logging  # noqa: E402
 from contextlib import asynccontextmanager  # noqa: E402
+from importlib.metadata import version as _package_version  # noqa: E402
 
 from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from slowapi.errors import RateLimitExceeded  # noqa: E402
 from slowapi.middleware import SlowAPIMiddleware  # noqa: E402
 
-from supabase import acreate_client  # noqa: E402
-
+from api.auth import init_client_pool, shutdown_client_pool  # noqa: E402
 from api.deps import init_dependencies  # noqa: E402
 from api.routes import router  # noqa: E402
 from api.security import (  # noqa: E402
@@ -26,7 +26,6 @@ from api.security import (  # noqa: E402
     limiter,
     rate_limit_handler,
 )
-from api.supabase_job_manager import SupabaseJobManager  # noqa: E402
 from config.settings import AppConfig  # noqa: E402
 from core.utils.logging import setup_logging  # noqa: E402
 from dependency_injection.container import ServiceContainer  # noqa: E402
@@ -53,23 +52,35 @@ async def lifespan(app: FastAPI):
             "state carrier). Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
         )
 
+    # Initialize the client pool for per-request user-scoped clients; job
+    # endpoints build their RLS-scoped manager per request (api.auth), so no
+    # service-role job manager is wired here.
+    init_client_pool(pool_size=20)
+
     container = ServiceContainer(config)
-    # acreate_client is a coroutine, so the async Supabase client is built here
-    # (in the running loop) rather than in the manager's __init__.
-    client = await acreate_client(
-        config.supabase.url, config.supabase.service_role_key
-    )
-    job_manager = SupabaseJobManager(client)
-    init_dependencies(container, job_manager)
+    init_dependencies(container)
     logger.info("FinThesis FastAPI app initialized (Supabase backend)")
     yield
+    # Shutdown: close all pooled clients
+    await shutdown_client_pool()
 
+
+# Swagger /docs, ReDoc /redoc, and the /openapi.json schema OFF by default; enabled 
+# only where ENABLE_DOCS is set truthy. Turn it on for dev; leave unset on prod - 
+# gates only the HTTP routes; app.openapi() still works; the CI type-gen 
+# (scripts/dump_openapi.py) unaffected regardless of this flag.
+_docs_enabled = os.getenv("ENABLE_DOCS", "").strip().lower() in ("1", "true", "yes")
 
 app = FastAPI(
     title="FinThesis API",
     description="Fintech market thesis generation and refinement",
-    version="0.2.0",
+    # Single source of truth for the version: pyproject.toml. Bump it there
+    # when tagging a release; Swagger/OpenAPI pick it up from package metadata.
+    version=_package_version("finthesis"),
     lifespan=lifespan,
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 # for the frontend to be deployed as a separate origin; the default covers local dev.

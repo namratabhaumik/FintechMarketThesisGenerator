@@ -4,7 +4,7 @@
 
 import { FinThesisApp } from "./app";
 import type { Session } from "@supabase/supabase-js";
-import { onAuthChange, signInWithGoogle, signOut } from "./auth";
+import { getSession, onAuthChange, signInWithGoogle, signOut } from "./auth";
 import { el } from "./dom";
 
 const root = document.querySelector<HTMLElement>("#app");
@@ -31,6 +31,13 @@ function renderLogin(container: HTMLElement): void {
   const button = el("button", "Continue with Google", "btn btn-primary w-full");
   button.addEventListener("click", () => void signInWithGoogle());
   card.append(button);
+
+  const docsLink = el("a", "Read the docs", "link link-hover text-xs text-base-content/60");
+  docsLink.href = "https://finthesis-docs.onrender.com";
+  docsLink.target = "_blank";
+  docsLink.rel = "noopener noreferrer";
+  card.append(docsLink);
+
   wrap.append(card);
   container.replaceChildren(wrap);
 }
@@ -48,6 +55,7 @@ function render(session: Session | null): void {
     if (session) {
       FinThesisApp.mount("#app", {
         email: session.user.email,
+        isAdmin: session.user.app_metadata?.role === "admin",
         onSignOut: () => void signOut(),
       });
     } else {
@@ -59,3 +67,12 @@ function render(session: Session | null): void {
 }
 
 onAuthChange((session) => render(session));
+
+// Bfcache restores the page (and its old DOM) without re-running onAuthChange,
+// so back/forward navigation can show a stale signed-in/out view. Re-check the
+// real session whenever the page is restored from bfcache.
+window.addEventListener("pageshow", (event) => {
+  if (event.persisted) {
+    void getSession().then((session) => render(session));
+  }
+});

@@ -1,8 +1,8 @@
 """Supabase-backed trend metrics store"""
 
 import logging
-from datetime import date
-from typing import List
+from datetime import date, datetime, timedelta, timezone
+from typing import List, Optional
 
 from supabase import Client
 
@@ -33,6 +33,11 @@ class SupabaseTrendRepository(ITrendRepository):
         self._client = client
 
     def upsert(self, metrics: List[TrendMetric]) -> int:
+        # Lineage: one computed_at per recompute (one upsert call) stamps every
+        # bucket this run writes. Gold aggregates across many ingestion loads, so
+        # a per-load id can't map to a bucket; the useful question is "which 
+        # recompute produced this current count".
+        computed_at = datetime.now(timezone.utc).isoformat()
         # each TrendMetric --> shape into a row keyed by week + dimension +
         # category with its article count --> collect into `rows`. week_start is
         # a date, so it is serialized to an ISO string.
@@ -42,6 +47,8 @@ class SupabaseTrendRepository(ITrendRepository):
                 "dimension": m.dimension,
                 "category": m.category,
                 "article_count": m.article_count,
+                "computed_at": computed_at,
+                "load_ids": m.load_ids,
             }
             for m in metrics
         ]
@@ -65,14 +72,52 @@ class SupabaseTrendRepository(ITrendRepository):
             .order("week_start", desc=True)
             .execute()
         )
-        rows: list = resp.data or []
+        return [self._to_metric(row) for row in (resp.data or [])]
+
+    def fetch_recent(self, window_weeks: Optional[int]) -> List[TrendMetric]:
+        # Confidence only looks at the last `window_weeks` Gold weeks ending at
+        # the latest present week, so scope the read to that range instead of
+        # scanning all of Gold.
+        # window_weeks None (whole-corpus retrieval) genuinely needs everything.
+        # The scoped set yields the SAME covered_weeks/as_of a full read would:
+        # the confidence window IS exactly [as_of - (window_weeks-1), as_of], and
+        # _gold_confidence_inputs already discards anything outside it (& window),
+        # so nothing it counts is left out.
+        if window_weeks is None:
+            return self.fetch_all()
+        as_of = self._latest_week()
+        if as_of is None:
+            return []
+        cutoff = as_of - timedelta(weeks=window_weeks - 1)
+        resp = (
+            self._client.table(TABLE)
+            .select("*")
+            .gte("week_start", cutoff.isoformat())
+            .order("week_start", desc=True)
+            .execute()
+        )
+        return [self._to_metric(row) for row in (resp.data or [])]
+
+    def _latest_week(self) -> Optional[date]:
+        # Cheap probe (LIMIT 1) for the newest week_start - the anchor the
+        # confidence window is measured back from. None when Gold is empty.
+        resp = (
+            self._client.table(TABLE)
+            .select("week_start")
+            .order("week_start", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = resp.data or []
+        return date.fromisoformat(rows[0]["week_start"]) if rows else None
+
+    @staticmethod
+    def _to_metric(row: dict) -> TrendMetric:
         # DB row --> TrendMetric, parsing week_start back into a date.
-        return [
-            TrendMetric(
-                week_start=date.fromisoformat(row["week_start"]),
-                dimension=row["dimension"],
-                category=row["category"],
-                article_count=row["article_count"],
-            )
-            for row in rows
-        ]
+        return TrendMetric(
+            week_start=date.fromisoformat(row["week_start"]),
+            dimension=row["dimension"],
+            category=row["category"],
+            article_count=row["article_count"],
+            load_ids=row.get("load_ids") or [],
+        )

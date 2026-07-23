@@ -39,3 +39,5 @@ export interface HallucinationAnalysis {
 export type RefineHandler = (jobId: string, feedback: string[]) => void;
 export type ApproveHandler = (jobId: string) => void;
 export type ResumeHandler = (jobId: string) => Promise<void>;
+export type CompareHandler = (jobIds: string[]) => void;
+export type DeleteHandler = (jobId: string) => void;

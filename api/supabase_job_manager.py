@@ -10,11 +10,10 @@ import logging
 import uuid
 from typing import Any, Dict, Optional
 
+from postgrest.types import CountMethod
 from supabase import AsyncClient
 
-from api.schemas import JobStatus
 from api.serializers import (
-    rehydrate_articles,
     rehydrate_docs,
     rehydrate_query_embedding,
     rehydrate_thesis,
@@ -38,23 +37,26 @@ class SupabaseJobManager(IJobManager):
         self._client = client
         logger.info("SupabaseJobManager connected")
 
-    async def create_job(self, query: str):
-        """Create a new job row and return it."""
+    async def create_job(self, query: str, **fields):
+        """Create a new job row and return it.
+
+        Extra fields (thesis, retrieved_docs, ...) are serialised and merged
+        over the defaults (a caller holding a finished result persists the whole
+        job in ONE atomic insert); a crash never strands a half-written row.
+        """
         job_id = uuid.uuid4().hex[:12]
         row: Dict[str, Any] = {
             "id": job_id,
             "query": query,
-            "status": JobStatus.PENDING.value,
-            "progress": None,
             "thesis": None,
-            "articles": [],
-            "error": None,
             "refinement_count": 0,
             "refinement_status": "N/A",  # becomes "refining" only once the user refines
             "feedback_history": [],
             "execution_log": [],
             "retrieved_docs": [],
+            "summary_docs": [],
         }
+        row.update(serialise_job_fields(**fields))
         await self._client.table(TABLE).insert(row).execute()
         logger.info(f"Job created in Supabase: {job_id} for query: {query!r}")
         return _RowProxy(row)
@@ -72,40 +74,81 @@ class SupabaseJobManager(IJobManager):
             return None
         return _RowProxy(resp.data)
 
-    async def update_status(
-        self, job_id: str, status: JobStatus, progress: Optional[str] = None
-    ):
-        """Update job status and optional progress message."""
-        update: Dict[str, Any] = {"status": status.value}
-        if progress is not None:
-            update["progress"] = progress
-        await self._client.table(TABLE).update(update).eq("id", job_id).execute()
-
     async def update_job(self, job_id: str, **fields):
         """Persist arbitrary field updates to the job row."""
         payload = serialise_job_fields(**fields)
         if payload:
             await self._client.table(TABLE).update(payload).eq("id", job_id).execute()
 
+    async def update_job_guarded(
+        self, job_id: str, guards: Dict[str, Any], **fields
+    ) -> bool:
+        """Persist field updates only if the row still matches `guards`.
+
+        Optimistic concurrency for racing writers (approve during an in-flight
+        refinement, or two tabs refining the same job): each guard column must
+        still hold its expected value (None means IS NULL), checked atomically
+        in the UPDATE's WHERE clause. Returns False when another writer got
+        there first - the caller decides how to surface the conflict.
+
+        DB errors intentionally propagate: the caller must tell a failed persist 
+        (exception -> 500) apart from a lost race (False -> 409); swallowing 
+        errors into False would report an outage as a user conflict.
+        """
+        payload = serialise_job_fields(**fields)
+        if not payload:
+            return True
+        query = self._client.table(TABLE).update(
+            payload, count=CountMethod.exact
+        ).eq("id", job_id)
+        for column, expected in guards.items():
+            if expected is None:
+                query = query.is_(column, "null")
+            else:
+                query = query.eq(column, expected)
+        resp = await query.execute()
+        # count is authoritative when present; representation rows otherwise.
+        updated = bool(getattr(resp, "count", None) or getattr(resp, "data", None))
+        if not updated:
+            logger.warning(
+                f"Guarded update lost the race for job {job_id} (guards={guards})"
+            )
+        return updated
+
     async def list_jobs(
         self,
         limit: Optional[int] = None,
         offset: int = 0,
         status: Optional[str] = None,
+        user_id: Optional[str] = None,
+        exclude_user_id: Optional[str] = None,
     ) -> list:
         """List jobs, most recent first, filtering/paginating at the DB.
 
         limit=None returns all rows (episodic recall needs the full set);
-        status filters on refinement_status.
+        status filters on refinement_status; user_id scopes to one owner
+        (for an admin, whose RLS otherwise returns every user's rows);
+        exclude_user_id drops one owner's rows (the admin's own, so the
+        cross-user view doesn't duplicate their personal library).
         """
         query = self._client.table(TABLE).select("*").order("created_at", desc=True)
         if status is not None:
             query = query.eq("refinement_status", status)
+        if user_id is not None:
+            query = query.eq("user_id", user_id)
+        if exclude_user_id is not None:
+            query = query.neq("user_id", exclude_user_id)
         if limit is not None:
             # Supabase range() is inclusive on both ends, 0-indexed.
             query = query.range(offset, offset + limit - 1)
         resp = await query.execute()
         return [_RowProxy(row) for row in resp.data]
+
+    async def delete_job(self, job_id: str) -> None:
+        """Delete a job row. RLS scopes this to rows the caller may delete
+        (owner, or admin via the admin RLS policy); deleting a row outside
+        that scope is a silent no-op at the DB layer, not an error here."""
+        await self._client.table(TABLE).delete().eq("id", job_id).execute()
 
     async def match_jobs(
         self,
@@ -140,18 +183,15 @@ class _RowProxy:
     """
 
     def __init__(self, data: dict):
-        self._data = data
         self.id: str = data["id"]
         self.query: str = data["query"]
-        self.status: JobStatus = JobStatus(data["status"])
-        self.progress: Optional[str] = data.get("progress")
-        self.error: Optional[str] = data.get("error")
         self.refinement_count: int = data.get("refinement_count", 0)
         self.refinement_status: str = data.get("refinement_status", "N/A")
         self.created_at: Optional[str] = data.get("created_at")
         self.feedback_history: list = data.get("feedback_history", [])
         self.execution_log: list = data.get("execution_log", [])
         self.approved_at: Optional[str] = data.get("approved_at")
+        self.user_id: Optional[str] = data.get("user_id")
         self.query_embedding: Optional[list] = rehydrate_query_embedding(
             data.get("query_embedding")
         )
@@ -160,5 +200,10 @@ class _RowProxy:
             t for t in (rehydrate_thesis(x) for x in data.get("thesis_history") or [])
             if t is not None
         ]
-        self.articles = rehydrate_articles(data.get("articles", []))
         self.retrieved_docs = rehydrate_docs(data.get("retrieved_docs", []))
+        # The diverse subset the LLM read. Older rows (pre wide/LLM split) have
+        # no summary_docs; fall back to retrieved_docs so refinement still feeds
+        # the LLM the same docs the original summary used.
+        self.summary_docs = rehydrate_docs(
+            data.get("summary_docs") or data.get("retrieved_docs", [])
+        )

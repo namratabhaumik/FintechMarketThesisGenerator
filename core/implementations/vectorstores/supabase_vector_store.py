@@ -2,14 +2,13 @@
 
 import json
 import logging
+from datetime import datetime
 from typing import List, Optional, Set
 
-import numpy as np
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.vectorstores import VectorStore
 from langchain_community.vectorstores import SupabaseVectorStore
-from langchain_community.vectorstores.utils import maximal_marginal_relevance
 from supabase import Client
 
 from config.settings import VectorStoreConfig
@@ -88,10 +87,10 @@ class SupabaseVectorStoreImpl(IVectorStore):
         return self.open()
 
     def open(self) -> VectorStore:
-        """Open the existing persistent store for reading.
+        """Retriever-ready LangChain handle over the persisted store.
 
-        This is the read path a thesis request takes: it only retrieves from
-        what is already persisted, so build() reuses this for its final handle.
+        Only build() needs this (its return value); the API read path queries
+        the match_documents RPC directly via retrieve() below.
         """
         return SupabaseVectorStore(
             client=self._client,
@@ -102,19 +101,22 @@ class SupabaseVectorStoreImpl(IVectorStore):
 
     def retrieve(
         self,
-        vectorstore: VectorStore,
         query: str,
-        k: int,
         fetch_k: int,
-        lambda_mult: float,
+        max_articles: int,
         window_days: Optional[int] = None,
         query_embedding: Optional[List[float]] = None,
         min_similarity: float = 0.0,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
     ) -> List[Document]:
-        """Date-windowed MMR retrieval.
+        """Date-windowed wide retrieval, deduped to distinct articles.
 
-        Pull `fetch_k` candidates from pgvector (within the last `window_days`
-        when set), drop any below `min_similarity`, then MMR-select `k`.
+        Pull `fetch_k` chunk candidates from pgvector (within the last
+        `window_days`, or between `date_from`/`date_to` when those are set), drop
+        any below `min_similarity`, then keep one chunk per article URL (the
+        highest-similarity one) and cap to `max_articles`. No MMR here - the
+        diverse subset for the LLM is chosen downstream from what this returns.
 
         Reuse `query_embedding` when the caller already computed it (so the
         query is embedded once per run); otherwise embed `query` here.
@@ -127,6 +129,10 @@ class SupabaseVectorStoreImpl(IVectorStore):
         # here so match_documents falls back to NULL = whole corpus.
         if window_days and window_days > 0:
             params["window_days"] = window_days
+        if date_from is not None:
+            params["date_from"] = date_from.isoformat()
+        if date_to is not None:
+            params["date_to"] = date_to.isoformat()
         rows = self._client.rpc(QUERY_NAME, params).execute().data or []
 
         # Relevance floor: an off-topic query returns fewer/zero docs
@@ -135,21 +141,37 @@ class SupabaseVectorStoreImpl(IVectorStore):
         if not rows:
             return []
 
-        # MMR over the candidates' stored vectors (match_documents returns them).
-        candidate_embeddings = [self._parse_embedding(r["embedding"]) for r in rows]
-        selected = maximal_marginal_relevance(
-            np.array(query_embedding, dtype=np.float32),
-            candidate_embeddings,
-            k=min(k, len(rows)),
-            lambda_mult=lambda_mult,
-        )
-        return [
-            Document(
-                page_content=rows[i].get("content", ""),
-                metadata=rows[i].get("metadata") or {},
+        # Dedupe to distinct articles. Rows arrive similarity-ordered (best
+        # first), so the first row seen for a URL is that article's most
+        # relevant chunk; later chunks of the same article are dropped. This
+        # makes the analytics one-vote-per-article (every chunk of an article
+        # carries identical Silver tags) and the sources list one-per-article.
+        docs: List[Document] = []
+        seen_urls: Set[str] = set()
+        for r in rows:
+            metadata = r.get("metadata") or {}
+            url = metadata.get("url", "")
+            # Keep at most one chunk per non-empty URL; a URL-less chunk (legacy)
+            # can never dedupe so it is passed through as its own article.
+            if url and url in seen_urls:
+                continue
+            if url:
+                seen_urls.add(url)
+            docs.append(
+                Document(
+                    page_content=r.get("content", ""),
+                    metadata={
+                        **metadata,
+                        "similarity": round(float(r.get("similarity") or 0.0), 4),
+                        # The chunk vector rides along so a later MMR pass avoids
+                        # a second DB read; persistence strips it before storing.
+                        "embedding": self._parse_embedding(r["embedding"]),
+                    },
+                )
             )
-            for i in selected
-        ]
+            if len(docs) >= max_articles:
+                break
+        return docs
 
     @staticmethod
     def _parse_embedding(value):

@@ -2,11 +2,17 @@ name: CI with Private Submodule
 
 on:
   push:
-    branches: 
+    branches:
       - master
+      - develop
   pull_request:
-    branches: 
+    branches:
       - master
+      - develop
+
+# Only the `deploy` job below raises this to contents: write.
+permissions:
+  contents: read
 
 jobs:
   build-and-test:
@@ -69,3 +75,70 @@ jobs:
     - name: Typecheck frontend against the generated types
       working-directory: frontend
       run: npm run typecheck
+
+    # On push (not PRs), build the prod bundle for the matching source branch,
+    # baking in that env's API_BASE/Supabase values.
+    - name: Build frontend (dev)
+      if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+      working-directory: frontend
+      env:
+        API_BASE: ${{ vars.DEV_API_BASE }}
+        SUPABASE_URL: ${{ vars.DEV_SUPABASE_URL }}
+        SUPABASE_ANON_KEY: ${{ vars.DEV_SUPABASE_ANON_KEY }}
+      run: npm run build
+
+    - name: Build frontend (prod)
+      if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+      working-directory: frontend
+      env:
+        API_BASE: ${{ vars.PROD_API_BASE }}
+        SUPABASE_URL: ${{ vars.PROD_SUPABASE_URL }}
+        SUPABASE_ANON_KEY: ${{ vars.PROD_SUPABASE_ANON_KEY }}
+      run: npm run build
+
+    - name: Upload built frontend
+      if: github.event_name == 'push'
+      uses: actions/upload-artifact@v4
+      with:
+        name: frontend-dist
+        path: frontend/dist
+        retention-days: 1
+
+  # Publishes the prebuilt dist/ to the deploy branch the Render Static Site
+  # tracks. Runs only if build-and-test passed (needs:) and only on push.
+  # This is the ONLY job with write access, and it installs nothing - it just
+  # downloads the artifact and pushes it.
+  deploy:
+    needs: build-and-test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Download built frontend
+      uses: actions/download-artifact@v4
+      with:
+        name: frontend-dist
+        path: frontend/dist
+
+    - name: Publish dist/ to deploy-dev
+      if: github.ref == 'refs/heads/develop'
+      uses: peaceiris/actions-gh-pages@v4
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./frontend/dist
+        publish_branch: deploy-dev
+        force_orphan: true
+
+    - name: Publish dist/ to deploy-prod
+      if: github.ref == 'refs/heads/master'
+      uses: peaceiris/actions-gh-pages@v4
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./frontend/dist
+        publish_branch: deploy-prod
+        force_orphan: true

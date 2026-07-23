@@ -63,22 +63,6 @@ def test_record_and_processed_urls():
     assert repo.processed_urls() == {"https://x/1", "https://x/2"}
 
 
-def test_fintech_themes_returns_themes_for_relevant_only():
-    repo = SupabaseSilverRepository(_FakeClient())
-    repo.record(
-        [
-            SilverVerdict(url="https://x/1", fintech_relevant=True, themes=["Payments"]),
-            SilverVerdict(url="https://x/2", fintech_relevant=False),
-            SilverVerdict(url="https://x/3", fintech_relevant=True, themes=["Crypto", "Payments"]),
-        ]
-    )
-    assert repo.fintech_themes() == {
-        "https://x/1": ["Payments"],
-        "https://x/3": ["Crypto", "Payments"],
-    }
-    assert repo.processed_urls() == {"https://x/1", "https://x/2", "https://x/3"}
-
-
 def test_fintech_tags_returns_all_dimensions_for_relevant_only():
     repo = SupabaseSilverRepository(_FakeClient())
     repo.record(

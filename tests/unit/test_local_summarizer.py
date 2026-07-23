@@ -127,13 +127,15 @@ class TestSummarize:
         result = asyncio.run(model.summarize(docs))
         assert isinstance(result, str)
 
-    def test_empty_documents_returns_fallback(self, model):
-        result = asyncio.run(model.summarize([_doc("")]))
-        assert result == "No content to summarize."
+    def test_empty_documents_raises(self, model):
+        # No extractable content must raise, not return a truthy placeholder that
+        # would pass generate_thesis's `if not summary` guard and get persisted.
+        with pytest.raises(RuntimeError):
+            asyncio.run(model.summarize([_doc("")]))
 
-    def test_no_documents_returns_fallback(self, model):
-        result = asyncio.run(model.summarize([]))
-        assert result == "No content to summarize."
+    def test_no_documents_raises(self, model):
+        with pytest.raises(RuntimeError):
+            asyncio.run(model.summarize([]))
 
     def test_summarizes_single_document(self, model):
         text = (

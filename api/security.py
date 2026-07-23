@@ -1,9 +1,9 @@
-"""Security primitives for the API: an optional shared-key gate and a per-IP
-rate limiter.
+"""Security primitives for the API: a per-IP rate limiter.
+
+(Per-user auth is handled separately in api.auth via Supabase JWTs, which
+replaced the earlier shared-key cost gate.)
 
 Env knobs (all optional):
-    FINTHESIS_API_KEY         Shared key for mutating endpoints. Unset -> gate
-                              off (local dev).
     RATE_LIMIT_STORAGE_URI    limits backend. Default "memory://" (per-worker,
                               fine for one instance). Set "redis://host:6379/0"
                               to share buckets across instances.
@@ -16,24 +16,29 @@ Env knobs (all optional):
 """
 
 import os
-import secrets
 
-from fastapi import Header, HTTPException, Request
+from fastapi import Request
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-API_KEY_HEADER = "X-API-Key"
-API_KEY_ENV = "FINTHESIS_API_KEY"
-
 
 # --- Rate limiter -------------------------------------------------------------
 
 def _rate_limit_key(request: Request) -> str:
-    """per-user limiting on a shared bucket for all endpoints (frontend surfaces 
-    a single "rate limit exceeded" error). This is the default key_func for the 
-    Limiter instance below."""
+    """per-user limiting on a shared bucket for all endpoints (frontend surfaces
+    a single "rate limit exceeded" error). This is the default key_func for the
+    Limiter instance below.
+
+    Behind a reverse proxy, the TCP peer is the proxy, so keying
+    on it would put every user in ONE bucket and let a single client's burst
+    429 everyone. Prefer the client IP the proxy records in X-Forwarded-For;
+    absent that header (local dev, direct access), fall back to the peer
+    address."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
     return get_remote_address(request)
 
 
@@ -66,22 +71,3 @@ def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse
             }
         },
     )
-
-
-# --- Shared-key gate ----------------------------------------------------------
-
-def require_api_key(
-    x_api_key: str | None = Header(default=None, alias=API_KEY_HEADER),
-) -> None:
-    """Gate mutating endpoints behind a shared key when one is configured.
-
-    No-op when FINTHESIS_API_KEY is unset. Raises 401 when the header is missing or invalid.
-    """
-    expected = os.getenv(API_KEY_ENV)
-    if not expected:
-        return
-    if not x_api_key or not secrets.compare_digest(x_api_key, expected):
-        raise HTTPException(
-            status_code=401,
-            detail={"code": "unauthorized", "message": "Missing or invalid API key"},
-        )

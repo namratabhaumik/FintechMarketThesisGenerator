@@ -12,10 +12,21 @@ from core.interfaces.llm import ILanguageModel
 
 @pytest.fixture
 def test_documents():
-    """Create test documents."""
+    """Create test documents.
+
+    The page content is real, extractable prose (>20 chars, sentence-final
+    punctuation) so tests that exercise the real local summarizer fallback get a
+    non-empty extractive summary; the mock-LLM tests ignore the content.
+    """
     return [
-        Document(page_content="Test content 1", metadata={"url": "http://test1.com"}),
-        Document(page_content="Test content 2", metadata={"url": "http://test2.com"}),
+        Document(
+            page_content="Fintech adoption is accelerating across emerging markets this year.",
+            metadata={"url": "http://test1.com"},
+        ),
+        Document(
+            page_content="Digital payment platforms are attracting significant investment momentum.",
+            metadata={"url": "http://test2.com"},
+        ),
     ]
 
 
@@ -149,6 +160,30 @@ class TestLLMWrapperRetry:
         mock_sleep.assert_any_call(1.0)
         mock_sleep.assert_any_call(2.0)
 
+    def test_retry_budget_stops_slow_hangs(self, test_documents, mock_primary_llm, mock_fallback_llm):
+        """A slow-failing primary (per-attempt timeout) exhausts the wall-clock
+        budget after one attempt: no further retries even though max_retries
+        allows them, so hangs cannot stack past a gateway timeout."""
+        async def slow_failure(*args, **kwargs):
+            await asyncio.sleep(0.1)  # longer than the whole budget below
+            raise RuntimeError("hang then fail")
+
+        mock_primary_llm.summarize.side_effect = slow_failure
+        mock_fallback_llm.summarize.return_value = "Fallback summary"
+
+        wrapper = LLMWrapper(
+            primary_llm=mock_primary_llm,
+            fallback_llm=mock_fallback_llm,
+            max_retries=5,
+            initial_delay_seconds=0.01,
+            retry_budget_seconds=0.05,
+        )
+
+        result = asyncio.run(wrapper.summarize(test_documents))
+
+        assert result == "Fallback summary"
+        assert mock_primary_llm.summarize.call_count == 1
+
     def test_max_retries_respected(self, test_documents, mock_primary_llm, mock_fallback_llm):
         """Respects max_retries configuration."""
         mock_primary_llm.summarize.side_effect = RuntimeError("Always fails")
@@ -199,7 +234,72 @@ class TestLLMWrapperEdgeCases:
         result = asyncio.run(wrapper.summarize([]))
 
         assert result == "Empty summary"
-        mock_primary_llm.summarize.assert_called_once_with([])
+        mock_primary_llm.summarize.assert_called_once_with([], "")
+
+    def test_fallback_summary_marks_local_provenance(self, test_documents, mock_primary_llm):
+        """A summary served by the real local fallback flips the per-call
+        provenance to 'local', so the thesis can record the degradation."""
+        from config.settings import LLMConfig
+        from core.implementations.llm.local_summarizer import LocalSummarizerModel
+        from core.interfaces.llm import SOURCE_LLM, summary_source_var
+
+        mock_primary_llm.summarize.side_effect = RuntimeError("API down")
+        local = LocalSummarizerModel(LLMConfig(provider="local", model_name="x", api_key=""))
+        wrapper = LLMWrapper(
+            primary_llm=mock_primary_llm,
+            fallback_llm=local,
+            max_retries=0,
+        )
+
+        async def run():
+            # Read the var inside the task: context changes don't propagate
+            # out of asyncio.run (in production the thesis service reads it
+            # inside the same request task, like this).
+            summary_source_var.set(SOURCE_LLM)
+            result = await wrapper.summarize(test_documents)
+            return result, summary_source_var.get()
+
+        result, source = asyncio.run(run())
+
+        assert result  # extractive text came back
+        assert source == "local"
+
+    def test_refine_raises_without_touching_fallback(self, test_documents, mock_primary_llm, mock_fallback_llm):
+        """refine retries the primary but never falls back (the local summarizer
+        cannot rewrite a thesis); the error propagates to the caller so the API
+        surfaces it instead of silently consuming a refinement round."""
+        mock_primary_llm.refine.side_effect = RuntimeError("API down")
+
+        wrapper = LLMWrapper(
+            primary_llm=mock_primary_llm,
+            fallback_llm=mock_fallback_llm,
+            max_retries=1,
+            initial_delay_seconds=0.01,
+        )
+
+        with pytest.raises(RuntimeError, match="API down"):
+            asyncio.run(wrapper.refine(test_documents, "thesis text", ["Too broad"]))
+
+        # 1 attempt + 1 retry on primary; fallback never consulted.
+        assert mock_primary_llm.refine.call_count == 2
+        assert mock_fallback_llm.refine.call_count == 0
+
+    def test_refine_not_implemented_raises_immediately(self, test_documents, mock_primary_llm, mock_fallback_llm):
+        """NotImplementedError from refine is re-raised at once - no retry, no fallback."""
+        mock_primary_llm.refine.side_effect = NotImplementedError("no refine")
+
+        wrapper = LLMWrapper(
+            primary_llm=mock_primary_llm,
+            fallback_llm=mock_fallback_llm,
+            max_retries=2,
+            initial_delay_seconds=0.01,
+        )
+
+        with pytest.raises(NotImplementedError):
+            asyncio.run(wrapper.refine(test_documents, "thesis text", ["Too broad"]))
+
+        assert mock_primary_llm.refine.call_count == 1
+        assert mock_fallback_llm.refine.call_count == 0
 
     def test_different_exception_types(self, test_documents, mock_primary_llm, mock_fallback_llm):
         """Handles different exception types from primary."""
