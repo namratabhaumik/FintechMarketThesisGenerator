@@ -11,24 +11,21 @@ import type {
   ThesisSummaryResponse,
 } from "./types";
 
-/** fetch() with the Supabase access token attached as a Bearer header when the
- * user is signed in. Required: the backend verifies it and scopes every jobs
- * query to the caller via RLS; without it, job endpoints return 401. */
-async function authedFetch(url: string, init: RequestInit = {}): Promise<Response> {
-  const token = await getAccessToken();
-  const headers = new Headers(init.headers);
-  if (token) headers.set("Authorization", `Bearer ${token}`);
-  return fetch(url, { ...init, headers });
-}
-
 /**
- * Machine-readable error codes the UI special-cases. Values must match the
- * codes emitted by the backend's `_error()` calls in routes.py. Codes not
- * listed here still surface via ApiError.message.
+ * Machine-readable error codes the UI special-cases. The first two must match
+ * the codes emitted by the backend's `_error()` calls in routes.py; the rest
+ * are raised client-side by this module. Codes not listed here still surface
+ * via ApiError.message.
  */
 export const ErrorCode = {
   NoRelevantDocuments: "no_relevant_documents",
   InsufficientEvidence: "insufficient_evidence",
+  /** The Supabase session could not be read, or the backend rejected the JWT. */
+  SessionExpired: "session_expired",
+  /** fetch() itself failed: offline, DNS, or a CORS-blocked response. */
+  NetworkError: "network_error",
+  /** A 2xx response whose body would not parse as JSON. */
+  MalformedResponse: "malformed_response",
 } as const;
 
 /** An API error carrying the backend's machine-readable code (see routes.py). */
@@ -79,68 +76,116 @@ async function toApiError(res: Response): Promise<ApiError> {
   } catch {
     // Non-JSON error body; keep the status-based defaults.
   }
+  // A 401 the backend didn't label means the JWT was missing or rejected, which
+  // the UI explains as an expired session rather than a generic failure.
+  if (res.status === 401 && code === "error") {
+    code = ErrorCode.SessionExpired;
+  }
   return new ApiError(res.status, code, message);
 }
 
-/** Generate a thesis synchronously. Resolves once the job is persisted. */
-export async function createThesis(query: string): Promise<JobResponse> {
-  const payload: ThesisRequest = { query };
-  const res = await authedFetch(`${API_BASE}/api/theses`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+/** fetch() with the Supabase access token attached as a Bearer header when the
+ * user is signed in. Required: the backend verifies it and scopes every jobs
+ * query to the caller via RLS; without it, job endpoints return 401. */
+async function authedFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  let token: string | null;
+  try {
+    token = await getAccessToken();
+  } catch (err) {
+    // Reading the session can fail on an expired refresh token or blocked
+    // storage. Without this the raw Supabase error would reach the UI and be
+    // reported as an API outage.
+    console.error("Could not read the Supabase session", err);
+    throw new ApiError(401, ErrorCode.SessionExpired, "Your session could not be verified.");
+  }
+  const headers = new Headers(init.headers);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  try {
+    return await fetch(url, { ...init, headers });
+  } catch (err) {
+    // fetch() rejects with a TypeError when offline, on DNS failure, or when a
+    // CORS-blocked response hides the real status.
+    console.error("Request to the API failed", err);
+    throw new ApiError(
+      0,
+      ErrorCode.NetworkError,
+      "Could not reach the API. Check your connection and try again.",
+    );
+  }
+}
+
+/**
+ * Run an authed request and parse its JSON body. This is the module's error
+ * boundary: every failure path - session, network, HTTP status, unparseable
+ * body - leaves here as an ApiError, so callers only ever handle one type.
+ */
+async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await authedFetch(url, init);
   if (!res.ok) {
     throw await toApiError(res);
   }
-  return (await res.json()) as JobResponse;
+  try {
+    return (await res.json()) as T;
+  } catch (err) {
+    console.error("Could not parse the API response body", err);
+    throw new ApiError(
+      res.status,
+      ErrorCode.MalformedResponse,
+      "The API returned a response that could not be read.",
+    );
+  }
+}
+
+/** As requestJson, for endpoints that return no body. */
+async function requestVoid(url: string, init?: RequestInit): Promise<void> {
+  const res = await authedFetch(url, init);
+  if (!res.ok) {
+    throw await toApiError(res);
+  }
+}
+
+const JSON_HEADERS = { "Content-Type": "application/json" };
+
+/** Generate a thesis synchronously. Resolves once the job is persisted. */
+export function createThesis(query: string): Promise<JobResponse> {
+  const payload: ThesisRequest = { query };
+  return requestJson<JobResponse>(`${API_BASE}/api/theses`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
 }
 
 /** Run one refinement round on a job, returning its updated state. */
-export async function createRefinement(
-  jobId: string,
-  feedback: string[],
-): Promise<JobResponse> {
+export function createRefinement(jobId: string, feedback: string[]): Promise<JobResponse> {
   const payload: RefinementRequest = { feedback };
-  const res = await authedFetch(
+  return requestJson<JobResponse>(
     `${API_BASE}/api/theses/${encodeURIComponent(jobId)}/refinements`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: JSON_HEADERS,
       body: JSON.stringify(payload),
     },
   );
-  if (!res.ok) {
-    throw await toApiError(res);
-  }
-  return (await res.json()) as JobResponse;
 }
 
 /** Approve a thesis (terminal, idempotent). Returns its updated state. */
-export async function approveThesis(jobId: string): Promise<JobResponse> {
-  const res = await authedFetch(
+export function approveThesis(jobId: string): Promise<JobResponse> {
+  return requestJson<JobResponse>(
     `${API_BASE}/api/theses/${encodeURIComponent(jobId)}/approval`,
     { method: "PUT" },
   );
-  if (!res.ok) {
-    throw await toApiError(res);
-  }
-  return (await res.json()) as JobResponse;
 }
 
 /** Full state of one thesis job (for ?job_id restore and resume). */
-export async function getThesis(jobId: string): Promise<JobResponse> {
-  const res = await authedFetch(`${API_BASE}/api/theses/${encodeURIComponent(jobId)}`);
-  if (!res.ok) {
-    throw await toApiError(res);
-  }
-  return (await res.json()) as JobResponse;
+export function getThesis(jobId: string): Promise<JobResponse> {
+  return requestJson<JobResponse>(`${API_BASE}/api/theses/${encodeURIComponent(jobId)}`);
 }
 
 /** Slim list of past jobs, most recent first. Scoped to the caller's own jobs
  * unless allUsers=true (admin only; the backend 403s for non-admins). Optionally
  * filter by refinement_status server-side. */
-export async function listTheses(
+export function listTheses(
   limit = 20,
   offset = 0,
   status?: string,
@@ -149,28 +194,17 @@ export async function listTheses(
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
   if (status) params.set("status", status);
   if (allUsers) params.set("all", "true");
-  const res = await authedFetch(`${API_BASE}/api/theses?${params.toString()}`);
-  if (!res.ok) {
-    throw await toApiError(res);
-  }
-  return (await res.json()) as ThesisSummaryResponse[];
+  return requestJson<ThesisSummaryResponse[]>(`${API_BASE}/api/theses?${params.toString()}`);
 }
 
 /** Delete a thesis job (admin only). */
-export async function deleteThesis(jobId: string): Promise<void> {
-  const res = await authedFetch(`${API_BASE}/api/theses/${encodeURIComponent(jobId)}`, {
+export function deleteThesis(jobId: string): Promise<void> {
+  return requestVoid(`${API_BASE}/api/theses/${encodeURIComponent(jobId)}`, {
     method: "DELETE",
   });
-  if (!res.ok) {
-    throw await toApiError(res);
-  }
 }
 
 /** The fixed set of refinement feedback reasons the UI offers. */
-export async function getFeedbackOptions(): Promise<string[]> {
-  const res = await authedFetch(`${API_BASE}/api/feedback-options`);
-  if (!res.ok) {
-    throw await toApiError(res);
-  }
-  return (await res.json()) as string[];
+export function getFeedbackOptions(): Promise<string[]> {
+  return requestJson<string[]>(`${API_BASE}/api/feedback-options`);
 }

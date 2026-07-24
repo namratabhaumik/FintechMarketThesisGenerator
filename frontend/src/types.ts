@@ -35,6 +35,19 @@ export interface HallucinationAnalysis {
   summary?: string;
 }
 
+/** Signed-in user info + sign-out handler, passed in by the auth gate. */
+export interface AuthInfo {
+  email?: string | null;
+  isAdmin?: boolean;
+  onSignOut: () => void;
+}
+
+/** The single app-wide status line; errors get the alert styling. */
+export interface StatusMessage {
+  text: string;
+  isError: boolean;
+}
+
 // View -> controller callbacks.
 export type RefineHandler = (jobId: string, feedback: string[]) => void;
 export type ApproveHandler = (jobId: string) => void;

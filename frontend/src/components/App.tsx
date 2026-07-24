@@ -12,26 +12,31 @@ import {
 } from "../api";
 import { isNoOpRound } from "../format";
 import { RefinementStatus } from "../types";
-import type { ExecutionEvent, JobResponse, ThesisSummaryResponse } from "../types";
+import type {
+  AuthInfo,
+  ExecutionEvent,
+  JobResponse,
+  StatusMessage,
+  ThesisSummaryResponse,
+} from "../types";
+import { PAGE_SIZE, usePaginatedTheses } from "../usePaginatedTheses";
+import { AppHeader } from "./AppHeader";
 import { CompareModal } from "./CompareModal";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { JobView } from "./JobView";
 import { PastThesesList } from "./PastThesesList";
-import { ResumePicker } from "./ResumePicker";
+import { QueryPanel } from "./QueryPanel";
 
-const PAGE_SIZE = 10;
-
-/** Signed-in user info + sign-out handler, passed in by the auth gate. */
-export interface AuthInfo {
-  email?: string | null;
-  isAdmin?: boolean;
-  onSignOut: () => void;
-}
-
-// Clicking the logo/name reloads to a clean root.
-function goHome() {
-  window.location.href = window.location.pathname;
-}
+// Backend error codes the UI explains in its own words rather than surfacing
+// the raw message. Codes absent here fall through to the generic error path,
+// so adding one is an entry here, not a new branch. Values must match the
+// codes emitted by routes.py (see ErrorCode in api.ts).
+const GENERATE_ERROR_MESSAGES: Record<string, string> = {
+  [ErrorCode.NoRelevantDocuments]:
+    "No relevant documents found for this query. Try a broader or different fintech topic.",
+  [ErrorCode.InsufficientEvidence]:
+    "Not enough tagged evidence to build a complete thesis for this query.",
+};
 
 // Controller: owns app state (current job, feedback options, status) and
 // orchestrates network calls. The section components are pure and receive
@@ -40,22 +45,19 @@ export function App({ auth }: { auth: AuthInfo }) {
   const [currentJob, setCurrentJob] = useState<JobResponse | null>(null);
   const [feedbackOptions, setFeedbackOptions] = useState<string[]>([]);
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState<{ text: string; isError: boolean }>({
-    text: "",
-    isError: false,
-  });
+  const [status, setStatus] = useState<StatusMessage>({ text: "", isError: false });
   const [resumeJobs, setResumeJobs] = useState<ThesisSummaryResponse[]>([]);
   const [resumeError, setResumeError] = useState(false);
   const [compareJobs, setCompareJobs] = useState<JobResponse[] | null>(null);
   const [generating, setGenerating] = useState(false);
-  // The caller's own past runs (page + whether a next page exists), and the
-  // admin-only cross-user list. Offsets drive server-side pagination.
-  const [pastPage, setPastPage] = useState<ThesisSummaryResponse[]>([]);
-  const [pastHasMore, setPastHasMore] = useState(false);
-  const [pastOffset, setPastOffset] = useState(0);
-  const [allPage, setAllPage] = useState<ThesisSummaryResponse[]>([]);
-  const [allHasMore, setAllHasMore] = useState(false);
-  const [allOffset, setAllOffset] = useState(0);
+  // The caller's own past runs and the admin-only cross-user list. Same
+  // pagination machinery, so both come from the same hook.
+  const past = usePaginatedTheses({ errorLabel: "Failed to load past theses" });
+  const all = usePaginatedTheses({
+    allUsers: true,
+    enabled: Boolean(auth.isAdmin),
+    errorLabel: "Failed to load all theses (admin)",
+  });
   // Bumped to force-remount JobView (resetting the action bar's in-flight state)
   // after a failed refine/approve, mirroring app.ts re-rendering the current job.
   const [nonce, setNonce] = useState(0);
@@ -66,8 +68,14 @@ export function App({ auth }: { auth: AuthInfo }) {
 
   const setStatusText = (text: string, isError = false) => setStatus({ text, isError });
 
+  // Every action funnels failures through here. A dead session is reported the
+  // same way everywhere (it can expire mid-refine as easily as mid-generate),
+  // and it must not be prefixed with the action name - "Refinement failed" is
+  // the wrong thing to tell someone who just needs to sign in again.
   const reportError = (err: unknown, fallback: string, prefix: string) => {
-    if (err instanceof ApiError) {
+    if (err instanceof ApiError && err.code === ErrorCode.SessionExpired) {
+      setStatusText("Your session has expired. Please sign out and sign in again.", true);
+    } else if (err instanceof ApiError) {
       setStatusText(`${prefix}: ${err.message}`, true);
     } else {
       console.error(fallback, err);
@@ -110,14 +118,11 @@ export function App({ auth }: { auth: AuthInfo }) {
       setStatusText("");
       // Past Theses excludes the now-current job, so a thesis we just switched
       // away from surfaces and this fresh one stays out.
-      void showPastTheses();
+      void past.load();
     } catch (err) {
-      if (err instanceof ApiError && err.code === ErrorCode.NoRelevantDocuments) {
-        setStatusText(
-          "No relevant documents found for this query. Try a broader or different fintech topic.",
-        );
-      } else if (err instanceof ApiError && err.code === ErrorCode.InsufficientEvidence) {
-        setStatusText("Not enough tagged evidence to build a complete thesis for this query.");
+      const explained = err instanceof ApiError ? GENERATE_ERROR_MESSAGES[err.code] : undefined;
+      if (explained) {
+        setStatusText(explained);
       } else {
         reportError(err, "An unexpected error occurred. Is the API running?", "Error");
       }
@@ -170,15 +175,15 @@ export function App({ auth }: { auth: AuthInfo }) {
     setStatusText("Loading theses to compare...");
     void (async () => {
       const results = await Promise.allSettled(jobIds.map((id) => getThesis(id)));
-      const past = results
+      const selected = results
         .filter((r): r is PromiseFulfilledResult<JobResponse> => r.status === "fulfilled")
         .map((r) => r.value);
       setStatusText("");
-      if (past.length < 1) {
+      if (selected.length < 1) {
         setStatusText("Could not load the selected theses to compare.");
         return;
       }
-      setCompareJobs([currentJob, ...past]);
+      setCompareJobs([currentJob, ...selected]);
     })();
   };
 
@@ -192,7 +197,7 @@ export function App({ auth }: { auth: AuthInfo }) {
       setCurrentJob(job);
       setQuery(job.query);
       setStatusText("");
-      void showPastTheses();
+      void past.load();
       return true;
     } catch (err) {
       if (err instanceof ApiError && err.status === 404) {
@@ -211,47 +216,6 @@ export function App({ auth }: { auth: AuthInfo }) {
     }
   };
 
-  // The caller's OWN past runs the user can switch to. The current thesis (shown
-  // in the results panel) is filtered out at render time, so switching away from
-  // a thesis surfaces it here and the one you're viewing never self-lists.
-  const showPastTheses = async (offset = pastOffset) => {
-    try {
-      // Over-fetch by one to detect a next page without a total count.
-      const fetched = await listTheses(PAGE_SIZE + 1, offset);
-      setPastHasMore(fetched.length > PAGE_SIZE);
-      setPastPage(fetched.slice(0, PAGE_SIZE));
-    } catch (err) {
-      console.error("Failed to load past theses", err);
-      setPastPage([]);
-    }
-  };
-
-  const pagePast = (direction: number) => {
-    const next = Math.max(0, pastOffset + direction * PAGE_SIZE);
-    setPastOffset(next);
-    void showPastTheses(next);
-  };
-
-  // Admin-only cross-user management list: every user's theses with owner labels
-  // and a delete control (the backend 403s this for non-admins).
-  const showAllTheses = async (offset = allOffset) => {
-    if (!auth.isAdmin) return;
-    try {
-      const fetched = await listTheses(PAGE_SIZE + 1, offset, undefined, true);
-      setAllHasMore(fetched.length > PAGE_SIZE);
-      setAllPage(fetched.slice(0, PAGE_SIZE));
-    } catch (err) {
-      console.error("Failed to load all theses (admin)", err);
-      setAllPage([]);
-    }
-  };
-
-  const pageAll = (direction: number) => {
-    const next = Math.max(0, allOffset + direction * PAGE_SIZE);
-    setAllOffset(next);
-    void showAllTheses(next);
-  };
-
   const onDeleteThesis = async (jobId: string): Promise<void> => {
     try {
       await deleteThesis(jobId);
@@ -260,8 +224,8 @@ export function App({ auth }: { auth: AuthInfo }) {
       return;
     }
     // Deletion can affect either list, so refresh both.
-    void showAllTheses();
-    void showPastTheses();
+    void all.load();
+    void past.load();
   };
 
   // Boot: offer the resume picker (only mid-refinement runs are resumable), load
@@ -274,120 +238,27 @@ export function App({ auth }: { auth: AuthInfo }) {
         console.error("Failed to load resumable sessions", err);
         setResumeError(true);
       });
-    void showPastTheses();
-    if (auth.isAdmin) void showAllTheses();
+    void past.load();
+    void all.load();
     const jobId = new URLSearchParams(location.search).get("job_id");
     if (jobId) void restore(jobId);
     // Mount-only boot sequence; handlers close over stable setters.
   }, []);
 
-  const statusClass =
-    status.isError && status.text
-      ? "text-xs font-mono mt-3 text-error border border-error/30 bg-error/10 rounded-field px-3 py-2"
-      : "text-xs text-base-content/60 font-mono mt-3";
-
   return (
     <>
-      <header className="print:hidden border-b border-base-300 bg-base-100/80 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
-          <div
-            className="flex items-center gap-3 cursor-pointer"
-            role="button"
-            tabIndex={0}
-            aria-label="FinThesis home - reload the app"
-            onClick={goHome}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                goHome();
-              }
-            }}
-          >
-            <div className="w-7 h-7 rounded bg-primary flex items-center justify-center">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-                <path
-                  d="M2 11L5.5 6.5L8 9L11 4"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  className="text-primary-content"
-                />
-              </svg>
-            </div>
-            <span className="font-semibold tracking-tight text-sm">FinThesis</span>
-            <span className="hidden sm:block text-xs text-base-content/60 border-l border-base-300 pl-3">
-              Fintech Market Research
-            </span>
-          </div>
+      <AppHeader auth={auth} />
 
-          <div className="flex items-center gap-2">
-            <a
-              href="https://finthesis-docs.onrender.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="btn btn-ghost btn-xs font-mono"
-            >
-              Docs
-            </a>
-            <div className="flex items-center gap-3 text-xs">
-              {auth.email && (
-                <span className="text-base-content/60 font-mono hidden sm:block">{auth.email}</span>
-              )}
-              <button type="button" className="btn btn-ghost btn-xs" onClick={() => auth.onSignOut()}>
-                Sign out
-              </button>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <section className="print:hidden max-w-5xl mx-auto px-6 pt-12 pb-8">
-        <div className="mb-8">
-          <p className="text-xs font-mono text-primary uppercase tracking-widest mb-2">
-            AI Research Assistant
-          </p>
-          <h1 className="text-2xl font-semibold leading-snug">
-            What fintech market do you want to analyze?
-          </h1>
-          <p className="text-sm text-base-content/60 mt-1 leading-relaxed">
-            Enter a topic or question - we'll research recent articles and return a scored
-            investment thesis.
-          </p>
-        </div>
-
-        <div className="flex gap-3">
-          <input
-            type="text"
-            className="w-full bg-base-200 border border-base-300 rounded-field px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/40 focus:border-primary/60"
-            placeholder="e.g., What's the outlook for cross-border payments infrastructure companies?"
-            aria-label="Market topic or question"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void generate();
-            }}
-          />
-          <button
-            type="button"
-            className="btn btn-primary disabled:pointer-events-auto disabled:cursor-not-allowed disabled:bg-primary! disabled:text-primary-content! disabled:border-primary! disabled:opacity-40!"
-            disabled={query.trim().length === 0 || generating}
-            onClick={() => void generate()}
-          >
-            Generate Thesis
-          </button>
-        </div>
-
-        <div className="mt-4">
-          {resumeError ? (
-            <small className="text-base-content/60">Could not load previous sessions.</small>
-          ) : (
-            resumeJobs.length > 0 && <ResumePicker jobs={resumeJobs} onResume={onResume} />
-          )}
-        </div>
-
-        <p className={statusClass}>{status.text}</p>
-      </section>
+      <QueryPanel
+        query={query}
+        onQueryChange={setQuery}
+        onGenerate={() => void generate()}
+        generating={generating}
+        resumeJobs={resumeJobs}
+        resumeError={resumeError}
+        onResume={onResume}
+        status={status}
+      />
 
       <section className="max-w-5xl mx-auto px-6 pb-16 space-y-4">
         {currentJob && (
@@ -412,22 +283,22 @@ export function App({ auth }: { auth: AuthInfo }) {
 
       <section className="print:hidden max-w-5xl mx-auto px-6 pb-16 -mt-8">
         <PastThesesList
-          jobs={pastPage.filter((j) => j.job_id !== currentJob?.job_id)}
-          onPrevPage={() => pagePast(-1)}
-          onNextPage={() => pagePast(1)}
-          canPrevPage={pastOffset > 0}
-          canNextPage={pastHasMore}
+          jobs={past.page.filter((j) => j.job_id !== currentJob?.job_id)}
+          onPrevPage={() => past.goToPage(-1)}
+          onNextPage={() => past.goToPage(1)}
+          canPrevPage={past.offset > 0}
+          canNextPage={past.hasMore}
         />
       </section>
 
       {auth.isAdmin && (
         <section className="print:hidden max-w-5xl mx-auto px-6 pb-16 -mt-8">
           <PastThesesList
-            jobs={allPage.filter((j) => j.job_id !== currentJob?.job_id)}
-            onPrevPage={() => pageAll(-1)}
-            onNextPage={() => pageAll(1)}
-            canPrevPage={allOffset > 0}
-            canNextPage={allHasMore}
+            jobs={all.page.filter((j) => j.job_id !== currentJob?.job_id)}
+            onPrevPage={() => all.goToPage(-1)}
+            onNextPage={() => all.goToPage(1)}
+            canPrevPage={all.offset > 0}
+            canNextPage={all.hasMore}
             isAdmin
             onDelete={onDeleteThesis}
             title="Admin - all users' theses"

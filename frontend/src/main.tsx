@@ -10,6 +10,18 @@ import { App } from "./components/App";
 import "./styles.css";
 
 function Login() {
+  const [error, setError] = useState("");
+
+  // Without a catch a failed OAuth start is a silent no-op, so the button looks
+  // dead and the user just clicks it again.
+  const signIn = () => {
+    setError("");
+    void signInWithGoogle().catch((err) => {
+      console.error("Could not start Google sign-in", err);
+      setError("Could not start sign-in. Please try again.");
+    });
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center px-6">
       <div className="w-full max-w-sm bg-base-200 border border-base-300 rounded-box p-8 text-center space-y-5">
@@ -17,9 +29,14 @@ function Login() {
         <p className="text-sm text-base-content/60">
           Sign in to generate and track your investment theses.
         </p>
-        <button className="btn btn-primary w-full" onClick={() => void signInWithGoogle()}>
+        <button className="btn btn-primary w-full" onClick={signIn}>
           Continue with Google
         </button>
+        {error && (
+          <p className="text-xs font-mono text-error border border-error/30 bg-error/10 rounded-field px-3 py-2">
+            {error}
+          </p>
+        )}
         <a
           href="https://finthesis-docs.onrender.com"
           target="_blank"
@@ -49,16 +66,27 @@ function AuthGate() {
       setReady(true);
     });
     // Resolve the initial session explicitly in case the subscription's first
-    // fire is delayed.
-    void getSession().then((s) => {
-      setSession(s);
-      setReady(true);
-    });
+    // fire is delayed. On failure still mark ready: `ready` gates all rendering,
+    // so leaving it false would strand the user on a blank page with no error.
+    // Falling through with a null session shows the login screen instead.
+    void getSession()
+      .then((s) => {
+        setSession(s);
+        setReady(true);
+      })
+      .catch((err) => {
+        console.error("Could not resolve the initial session", err);
+        setReady(true);
+      });
 
     // Bfcache restores the page (and its old DOM) without re-running
     // onAuthChange, so back/forward can show a stale view. Re-check on restore.
     const onPageShow = (e: PageTransitionEvent) => {
-      if (e.persisted) void getSession().then(setSession);
+      if (e.persisted) {
+        void getSession()
+          .then(setSession)
+          .catch((err) => console.error("Could not re-check the session on restore", err));
+      }
     };
     window.addEventListener("pageshow", onPageShow);
     return () => window.removeEventListener("pageshow", onPageShow);
@@ -74,8 +102,11 @@ function AuthGate() {
         onSignOut: () => {
           // Drop the ?job_id deep-link so sign-out lands on a clean URL (a
           // fresh visit with a shared ?job_id still keeps it through login).
-          history.replaceState(null, "", window.location.pathname);
-          void signOut();
+          // Only on success: clearing it after a failed sign-out would strip
+          // the deep link while leaving the user signed in.
+          void signOut()
+            .then(() => history.replaceState(null, "", window.location.pathname))
+            .catch((err) => console.error("Sign-out failed", err));
         },
       }}
     />
