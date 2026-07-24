@@ -216,16 +216,18 @@ export function App({ auth }: { auth: AuthInfo }) {
     }
   };
 
-  const onDeleteThesis = async (jobId: string): Promise<void> => {
-    try {
-      await deleteThesis(jobId);
-    } catch (err) {
-      reportError(err, "Could not delete thesis.", "Delete failed");
-      return;
-    }
-    // Deletion can affect either list, so refresh both.
-    void all.load();
-    void past.load();
+  const onDeleteThesis = (jobId: string) => {
+    void (async () => {
+      try {
+        await deleteThesis(jobId);
+      } catch (err) {
+        reportError(err, "Could not delete thesis.", "Delete failed");
+        return;
+      }
+      // Deletion can affect either list, so refresh both.
+      void all.load();
+      void past.load();
+    })();
   };
 
   // Boot: offer the resume picker (only mid-refinement runs are resumable), load
@@ -242,7 +244,9 @@ export function App({ auth }: { auth: AuthInfo }) {
     void all.load();
     const jobId = new URLSearchParams(location.search).get("job_id");
     if (jobId) void restore(jobId);
-    // Mount-only boot sequence; handlers close over stable setters.
+    // Mount-only boot sequence; handlers close over stable setters. Adding the
+    // hook/restore deps would re-run this on every render and refetch in a loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

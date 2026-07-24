@@ -37,8 +37,8 @@ export function QueryPanel({
           What fintech market do you want to analyze?
         </h1>
         <p className="text-sm text-base-content/60 mt-1 leading-relaxed">
-          Enter a topic or question - we'll research recent articles and return a scored investment
-          thesis.
+          Enter a topic or question - we&apos;ll research recent articles and return a scored
+          investment thesis.
         </p>
       </div>
 

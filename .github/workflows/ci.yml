@@ -68,6 +68,12 @@ jobs:
       working-directory: frontend
       run: npm ci
 
+    # Audit only the deps that ship to the browser; dev-tooling advisories
+    # (build/test only) don't warrant blocking a deploy. Fails on high+.
+    - name: Audit frontend production dependencies
+      working-directory: frontend
+      run: npm audit --omit=dev --audit-level=high
+
     - name: Generate API types from the OpenAPI schema
       working-directory: frontend
       run: npm run generate
@@ -75,6 +81,10 @@ jobs:
     - name: Typecheck frontend against the generated types
       working-directory: frontend
       run: npm run typecheck
+
+    - name: Lint frontend
+      working-directory: frontend
+      run: npm run lint
 
     # On push (not PRs), build the prod bundle for the matching source branch,
     # baking in that env's API_BASE/Supabase values. Vite reads VITE_-prefixed
