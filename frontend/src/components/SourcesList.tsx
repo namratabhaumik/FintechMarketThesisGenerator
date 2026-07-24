@@ -1,13 +1,13 @@
 import { sourcesLabel } from "../format";
 import type { SourceResponse } from "../types";
-import { Collapsible } from "./Collapsible";
+import { Section } from "./Section";
 
 // Collapsible list of source articles. Each row links out (when a URL is
 // present) and shows the query-to-article retrieval similarity when stored.
 export function SourcesList({ sources }: { sources: SourceResponse[] }) {
   if (sources.length === 0) return null;
   return (
-    <Collapsible summary={sourcesLabel(sources)} defaultOpen>
+    <Section label={sourcesLabel(sources)} collapsible defaultOpen={false}>
       <ul className="space-y-1.5">
         {sources.map((s, i) => (
           <li key={i}>
@@ -31,6 +31,6 @@ export function SourcesList({ sources }: { sources: SourceResponse[] }) {
           </li>
         ))}
       </ul>
-    </Collapsible>
+    </Section>
   );
 }

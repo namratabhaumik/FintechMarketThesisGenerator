@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { RefinementStatus } from "../types";
-import type { ApproveHandler, JobResponse, RefineHandler } from "../types";
+import type { JobResponse, RefineHandler } from "../types";
 import { VersionHistory } from "./VersionHistory";
 
 // Display cap for the refinement counters. Must match MAX_REFINEMENTS in the
@@ -8,28 +8,23 @@ import { VersionHistory } from "./VersionHistory";
 // exhaustion via RefinementStatus.Escalated, which the UI honors regardless.
 const MAX_REFINEMENTS = 3;
 
-// Action bar: Approve + Refine live together. Once escalated (max refinements
-// reached), only Approve remains. A local `submitting` flag guards against
-// double-submit until the parent re-renders with the new job.
+// Refine panel. Approve lives in the document header (JobView), so this owns
+// only the feedback selection + Refine action. Once escalated (max refinements
+// reached), refinement stops and only the escalation notice remains. A local
+// `submitting` flag guards against double-submit until the parent re-renders.
 export function ActionBar({
   job,
   feedbackOptions,
   onRefine,
-  onApprove,
 }: {
   job: JobResponse;
   feedbackOptions: string[];
   onRefine: RefineHandler;
-  onApprove: ApproveHandler;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const escalated = job.refinement_status === RefinementStatus.Escalated;
 
-  const approve = () => {
-    setSubmitting(true);
-    onApprove(job.job_id);
-  };
   const refine = () => {
     if (selected.length === 0) return;
     setSubmitting(true);
@@ -38,17 +33,6 @@ export function ActionBar({
   const toggle = (opt: string, checked: boolean) => {
     setSelected((prev) => (checked ? [...prev, opt] : prev.filter((x) => x !== opt)));
   };
-
-  const approveButton = (
-    <button
-      type="button"
-      className="btn btn-primary btn-sm disabled:pointer-events-auto disabled:cursor-not-allowed disabled:bg-primary! disabled:text-primary-content! disabled:border-primary! disabled:opacity-40!"
-      disabled={submitting}
-      onClick={approve}
-    >
-      Approve
-    </button>
-  );
 
   return (
     <section className="print:hidden bg-base-200 border border-base-300 rounded-box px-6 py-5 space-y-4">
@@ -70,13 +54,10 @@ export function ActionBar({
       </div>
 
       {escalated ? (
-        <>
-          <p className="bg-accent/10 border border-accent/30 rounded-field px-4 py-3 text-xs text-accent">
-            {`Max refinements reached (${MAX_REFINEMENTS}/${MAX_REFINEMENTS}). ` +
-              "Please refine your original query for a fresh analysis."}
-          </p>
-          {approveButton}
-        </>
+        <p className="bg-accent/10 border border-accent/30 rounded-field px-4 py-3 text-xs text-accent">
+          {`Max refinements reached (${MAX_REFINEMENTS}/${MAX_REFINEMENTS}). ` +
+            "Please refine your original query for a fresh analysis, or approve above."}
+        </p>
       ) : (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -109,7 +90,6 @@ export function ActionBar({
             >
               Refine Thesis
             </button>
-            {approveButton}
           </div>
         </>
       )}

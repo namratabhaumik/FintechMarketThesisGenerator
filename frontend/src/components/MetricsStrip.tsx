@@ -7,7 +7,7 @@ import { RecommendationBadge } from "./RecommendationBadge";
 export function MetricsStrip({ thesis }: { thesis: ThesisResponse }) {
   const pct = Math.round(thesis.confidence_level * 100);
   return (
-    <div className="border-b border-base-300 pb-4 flex flex-wrap items-center justify-between gap-6">
+    <div className="pb-6 flex flex-wrap items-center justify-between gap-6">
       <div className="min-w-0">
         <p className="text-xs text-base-content/60 font-mono uppercase tracking-wider mb-1">
           Investment Score

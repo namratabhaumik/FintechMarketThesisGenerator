@@ -28,7 +28,7 @@ export function QueryPanel({
       : "text-xs text-base-content/60 font-mono mt-3";
 
   return (
-    <section className="print:hidden max-w-5xl mx-auto px-6 pt-12 pb-8">
+    <section className="print:hidden px-6 md:px-8 pt-12 pb-8">
       <div className="mb-8">
         <p className="text-xs font-mono text-primary uppercase tracking-widest mb-2">
           AI Research Assistant

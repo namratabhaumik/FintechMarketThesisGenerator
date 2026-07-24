@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { fmtDate } from "../format";
 import type { CompareHandler, RelatedThesisResponse } from "../types";
-import { Collapsible } from "./Collapsible";
 import { RecommendationBadge } from "./RecommendationBadge";
+import { Section } from "./Section";
 
 // Compare renders as a table (attributes as rows), which stops being
 // skimmable past a handful of columns. The modal always includes the current
@@ -35,7 +35,7 @@ export function RelatedTheses({
   };
 
   return (
-    <Collapsible summary={`Related past theses (${related.length})`}>
+    <Section label={`Related past theses (${related.length})`} collapsible defaultOpen={false}>
       <div className="space-y-2">
         {related.map((r) => {
           const checked = selected.includes(r.job_id);
@@ -81,6 +81,6 @@ export function RelatedTheses({
             : "Compare with current"}
         </button>
       </div>
-    </Collapsible>
+    </Section>
   );
 }

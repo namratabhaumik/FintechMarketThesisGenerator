@@ -264,7 +264,7 @@ export function App({ auth }: { auth: AuthInfo }) {
         status={status}
       />
 
-      <section className="max-w-5xl mx-auto px-6 pb-16 space-y-4">
+      <section className="px-6 md:px-8 pb-16 space-y-4">
         {currentJob && (
           <ErrorBoundary
             key={`${currentJob.job_id}:${currentJob.refinement_count}:${nonce}`}
@@ -285,7 +285,7 @@ export function App({ auth }: { auth: AuthInfo }) {
         )}
       </section>
 
-      <section className="print:hidden max-w-5xl mx-auto px-6 pb-16 -mt-8">
+      <section className="print:hidden px-6 md:px-8 pb-16 -mt-8">
         <PastThesesList
           jobs={past.page.filter((j) => j.job_id !== currentJob?.job_id)}
           onPrevPage={() => past.goToPage(-1)}
@@ -296,7 +296,7 @@ export function App({ auth }: { auth: AuthInfo }) {
       </section>
 
       {auth.isAdmin && (
-        <section className="print:hidden max-w-5xl mx-auto px-6 pb-16 -mt-8">
+        <section className="print:hidden px-6 md:px-8 pb-16 -mt-8">
           <PastThesesList
             jobs={all.page.filter((j) => j.job_id !== currentJob?.job_id)}
             onPrevPage={() => all.goToPage(-1)}

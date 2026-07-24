@@ -10,7 +10,7 @@ function goHome() {
 export function AppHeader({ auth }: { auth: AuthInfo }) {
   return (
     <header className="print:hidden border-b border-base-300 bg-base-100/80 backdrop-blur-sm sticky top-0 z-50">
-      <div className="max-w-5xl mx-auto px-6 h-14 flex items-center justify-between">
+      <div className="px-6 md:px-8 h-14 flex items-center justify-between">
         <div
           className="flex items-center gap-3 cursor-pointer"
           role="button"
