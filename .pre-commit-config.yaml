@@ -32,7 +32,7 @@ repos:
   - repo: local
     hooks:
       - id: pip-audit
-        name: pip-audit (dependency vulnerability audit)
+        name: pip-audit (backend dependency vulnerability audit)
         entry: >-
           bash -c 'uv export --no-hashes --format pylock.toml -o pylock.toml -q &&
           uv run --with pip-audit==2.10.1 pip-audit --locked .;
@@ -40,3 +40,13 @@ repos:
         language: system
         pass_filenames: false
         files: ^(pyproject\.toml|uv\.lock)$
+
+  # Frontend dependency vulnerability audit (ci.yml's push-triggered check is prod-only).
+  - repo: local
+    hooks:
+      - id: npm-audit
+        name: npm audit (frontend dependency vulnerability audit)
+        entry: bash -c 'cd frontend && npm audit --audit-level=high'
+        language: system
+        pass_filenames: false
+        files: ^frontend/package(-lock)?\.json$
