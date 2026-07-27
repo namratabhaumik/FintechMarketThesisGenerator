@@ -98,6 +98,10 @@ Deliberate scope boundaries of the current platform:
 - **Single news source.** Articles come only from TechCrunch's RSS feeds. Multi-source ingestion, and detecting or adapting to a source changing its feed format, are out of scope - the pipeline assumes the current feed structure.
 - **Point-in-time history, not restated.** Raw articles are retained indefinitely and each article's fintech classification is recorded once and frozen. Changing the classifier model applies to new articles only - past records are not retroactively re-classified, so historical trends reflect what was judged at the time.
 
+## Local development
+
+Security/lint checks (gitleaks, semgrep, ruff, pip-audit) run via `pre-commit`. After `uv sync`, run `pre-commit install` once to wire it into `git commit` for this repo - it then runs automatically on staged files whenever you commit. To check manually beforehand: `pre-commit run`.
+
 ## Deployment
 
 Frontend and backend are decoupled and deployed as separate Render services, across two environments (development and production).

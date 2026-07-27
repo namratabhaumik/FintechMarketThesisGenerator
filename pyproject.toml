@@ -70,3 +70,6 @@ ignore_missing_imports = true
 line-length = 88
 target-version = "py314"
 exclude = ["finthesis_internal"]
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "S", "ASYNC"]
