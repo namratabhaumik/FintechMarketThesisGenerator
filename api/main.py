@@ -103,7 +103,7 @@ app.add_middleware(
 # Rate limiting: per-route limits (see routes.py) always apply; the global
 # ceiling is opt-in via RATE_LIMIT_DEFAULT and only then needs the middleware.
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, rate_limit_handler)
+app.add_exception_handler(RateLimitExceeded, rate_limit_handler)  # type: ignore[arg-type]
 if GLOBAL_RATE_LIMIT_ENABLED:
     app.add_middleware(SlowAPIMiddleware)
 
