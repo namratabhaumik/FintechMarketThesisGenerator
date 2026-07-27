@@ -21,6 +21,7 @@ import type {
 } from "../types";
 import { PAGE_SIZE, usePaginatedTheses } from "../usePaginatedTheses";
 import { AppHeader } from "./AppHeader";
+import { CommandPalette } from "./CommandPalette";
 import { CompareModal } from "./CompareModal";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { JobView } from "./JobView";
@@ -50,6 +51,7 @@ export function App({ auth }: { auth: AuthInfo }) {
   const [resumeError, setResumeError] = useState(false);
   const [compareJobs, setCompareJobs] = useState<JobResponse[] | null>(null);
   const [generating, setGenerating] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   // The caller's own past runs and the admin-only cross-user list. Same
   // pagination machinery, so both come from the same hook.
   const past = usePaginatedTheses({ errorLabel: "Failed to load past theses" });
@@ -249,9 +251,22 @@ export function App({ auth }: { auth: AuthInfo }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Global ⌘K / Ctrl-K toggles the command palette. preventDefault stops
+  // Chrome's Ctrl-K omnibox-search default on Windows/Linux.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setPaletteOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   return (
     <>
-      <AppHeader auth={auth} />
+      <AppHeader auth={auth} onOpenSearch={() => setPaletteOpen(true)} />
 
       <QueryPanel
         query={query}
@@ -309,6 +324,13 @@ export function App({ auth }: { auth: AuthInfo }) {
           />
         </section>
       )}
+
+      <CommandPalette
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
+        isAdmin={Boolean(auth.isAdmin)}
+        onOpenThesis={(jobId) => void onResume(jobId)}
+      />
 
       {compareJobs && <CompareModal jobs={compareJobs} onClose={() => setCompareJobs(null)} />}
     </>

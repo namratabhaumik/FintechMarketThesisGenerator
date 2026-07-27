@@ -5,9 +5,15 @@ function goHome() {
   window.location.href = window.location.pathname;
 }
 
-// Sticky page chrome: logo/home control, docs link, signed-in identity and
-// sign-out. Presentational - the only behaviour it owns is goHome.
-export function AppHeader({ auth }: { auth: AuthInfo }) {
+// Platform-correct shortcut label (⌘ on Apple, Ctrl elsewhere), computed once.
+const shortcutHint =
+  typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent)
+    ? "⌘K"
+    : "Ctrl K";
+
+// Sticky page chrome: logo/home control, search, docs link, signed-in identity
+// and sign-out. Presentational - owns goHome; search is delegated up.
+export function AppHeader({ auth, onOpenSearch }: { auth: AuthInfo; onOpenSearch: () => void }) {
   return (
     <header className="print:hidden border-b border-base-300 bg-base-100/80 backdrop-blur-sm sticky top-0 z-50">
       <div className="px-6 md:px-8 h-14 flex items-center justify-between">
@@ -43,6 +49,31 @@ export function AppHeader({ auth }: { auth: AuthInfo }) {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Looks like a search field but is a button: clicking (or ⌘K)
+              expands the real search overlay, so there's no second input to
+              keep in sync. Icon-only on the smallest screens. */}
+          <button
+            type="button"
+            onClick={onOpenSearch}
+            aria-label="Search theses"
+            className="flex items-center gap-2 h-8 px-2.5 rounded-field border border-base-300 bg-base-200 text-base-content/50 hover:border-base-content/30 hover:text-base-content/70 transition-colors cursor-pointer sm:w-56"
+          >
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              aria-hidden="true"
+              className="flex-shrink-0"
+            >
+              <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+              <path d="M21 21l-4.3-4.3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+            </svg>
+            <span className="hidden sm:inline text-xs">Search theses...</span>
+            <kbd className="hidden sm:inline ml-auto text-[10px] font-mono border border-base-300 rounded px-1 py-0.5">
+              {shortcutHint}
+            </kbd>
+          </button>
           <a
             href="https://finthesis-docs.onrender.com"
             target="_blank"

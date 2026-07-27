@@ -34,6 +34,7 @@
   "dependencies": {
     "@radix-ui/react-tabs": "^1.1.20",
     "@supabase/supabase-js": "^2.110.2",
+    "cmdk": "^1.1.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   }
