@@ -4,6 +4,7 @@
 
 import { StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { BrowserRouter } from "react-router";
 import type { Session } from "@supabase/supabase-js";
 import { getSession, onAuthChange, signInWithGoogle, signOut } from "./auth";
 import { App } from "./components/App";
@@ -100,12 +101,12 @@ function AuthGate() {
         email: session.user.email,
         isAdmin: session.user.app_metadata?.role === "admin",
         onSignOut: () => {
-          // Drop the ?job_id deep-link so sign-out lands on a clean URL (a
-          // fresh visit with a shared ?job_id still keeps it through login).
-          // Only on success: clearing it after a failed sign-out would strip
-          // the deep link while leaving the user signed in.
+          // Drop any thesis deep-link so sign-out lands on a clean URL (a fresh
+          // visit with a shared link still keeps it through login). Only on
+          // success: clearing it after a failed sign-out would strip the deep
+          // link while leaving the user signed in.
           void signOut()
-            .then(() => history.replaceState(null, "", window.location.pathname))
+            .then(() => history.replaceState(null, "", "/"))
             .catch((err) => console.error("Sign-out failed", err));
         },
       }}
@@ -117,7 +118,11 @@ const root = document.querySelector<HTMLElement>("#app");
 if (root) {
   createRoot(root).render(
     <StrictMode>
-      <AuthGate />
+      {/* Real paths (not hash routing), so the deployed static site needs a
+          rewrite of /* -> /index.html or a hard load of /theses 404s. */}
+      <BrowserRouter>
+        <AuthGate />
+      </BrowserRouter>
     </StrictMode>,
   );
 }

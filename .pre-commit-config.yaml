@@ -41,12 +41,14 @@ repos:
         pass_filenames: false
         files: ^(pyproject\.toml|uv\.lock)$
 
-  # Frontend dependency vulnerability audit (ci.yml's push-triggered check is prod-only).
+  # Frontend dependency vulnerability audit, same as ci.yml. Dev-tooling advisories 
+  # are covered by cve-scan.yml, which audits the full tree on a
+  # schedule.
   - repo: local
     hooks:
       - id: npm-audit
         name: npm audit (frontend dependency vulnerability audit)
-        entry: bash -c 'cd frontend && npm audit --audit-level=high'
+        entry: bash -c 'cd frontend && npm audit --omit=dev --audit-level=high'
         language: system
         pass_filenames: false
         files: ^frontend/package(-lock)?\.json$

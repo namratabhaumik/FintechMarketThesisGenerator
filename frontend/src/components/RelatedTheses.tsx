@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router";
 import { fmtDate } from "../format";
 import type { CompareHandler, RelatedThesisResponse } from "../types";
 import { RecommendationBadge } from "./RecommendationBadge";
@@ -53,12 +54,12 @@ export function RelatedTheses({
                 onChange={(e) => toggle(r.job_id, e.target.checked)}
               />
               <div className="flex flex-col gap-0.5 min-w-0">
-                <a
-                  href={`?job_id=${encodeURIComponent(r.job_id)}`}
+                <Link
+                  to={`/thesis/${encodeURIComponent(r.job_id)}`}
                   className="text-xs text-primary hover:text-primary/80 font-medium truncate"
                 >
                   {r.query}
-                </a>
+                </Link>
                 <span className="text-[10px] text-base-content/60 font-mono">{metaLine(r)}</span>
               </div>
               <div className="flex items-center gap-3 flex-shrink-0 ml-4">

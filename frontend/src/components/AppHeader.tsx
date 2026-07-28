@@ -1,9 +1,5 @@
+import { Link } from "react-router";
 import type { AuthInfo } from "../types";
-
-// Clicking the logo/name reloads to a clean root.
-function goHome() {
-  window.location.href = window.location.pathname;
-}
 
 // Platform-correct shortcut label (⌘ on Apple, Ctrl elsewhere), computed once.
 const shortcutHint =
@@ -11,41 +7,57 @@ const shortcutHint =
     ? "⌘K"
     : "Ctrl K";
 
-// Sticky page chrome: logo/home control, search, docs link, signed-in identity
-// and sign-out. Presentational - owns goHome; search is delegated up.
-export function AppHeader({ auth, onOpenSearch }: { auth: AuthInfo; onOpenSearch: () => void }) {
+// Sticky page chrome: nav trigger, logo/home link, search, docs, signed-in
+// identity and sign-out. Presentational - search and nav are delegated up.
+export function AppHeader({
+  auth,
+  onOpenSearch,
+  onToggleNav,
+}: {
+  auth: AuthInfo;
+  onOpenSearch: () => void;
+  onToggleNav: () => void;
+}) {
   return (
     <header className="print:hidden border-b border-base-300 bg-base-100/80 backdrop-blur-sm sticky top-0 z-50">
       <div className="px-6 md:px-8 h-14 flex items-center justify-between">
-        <div
-          className="flex items-center gap-3 cursor-pointer"
-          role="button"
-          tabIndex={0}
-          aria-label="FinThesis home - reload the app"
-          onClick={goHome}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              goHome();
-            }
-          }}
-        >
-          <div className="w-7 h-7 rounded bg-primary flex items-center justify-center">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+        <div className="flex items-center gap-3">
+          {/* One control for both layouts: opens the drawer below md, collapses
+              or expands the rail from md up. */}
+          <button
+            type="button"
+            onClick={onToggleNav}
+            aria-label="Toggle navigation"
+            className="btn btn-ghost btn-xs px-1"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
               <path
-                d="M2 11L5.5 6.5L8 9L11 4"
+                d="M4 6h16M4 12h16M4 18h16"
                 stroke="currentColor"
-                strokeWidth="1.5"
+                strokeWidth="2"
                 strokeLinecap="round"
-                strokeLinejoin="round"
-                className="text-primary-content"
               />
             </svg>
-          </div>
-          <span className="font-semibold tracking-tight text-sm">FinThesis</span>
-          <span className="hidden sm:block text-xs text-base-content/60 border-l border-base-300 pl-3">
-            Fintech Market Research
-          </span>
+          </button>
+
+          <Link to="/" className="flex items-center gap-3" aria-label="FinThesis home">
+            <div className="w-7 h-7 rounded bg-primary flex items-center justify-center">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                <path
+                  d="M2 11L5.5 6.5L8 9L11 4"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="text-primary-content"
+                />
+              </svg>
+            </div>
+            <span className="font-semibold tracking-tight text-sm">FinThesis</span>
+            <span className="hidden sm:block text-xs text-base-content/60 border-l border-base-300 pl-3">
+              Fintech Market Research
+            </span>
+          </Link>
         </div>
 
         <div className="flex items-center gap-2">

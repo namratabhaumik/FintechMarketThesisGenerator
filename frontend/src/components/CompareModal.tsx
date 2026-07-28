@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ReactNode } from "react";
+import { Link } from "react-router";
 import { fmtDate } from "../format";
 import type { JobResponse } from "../types";
 import { BulletList } from "./BulletList";
@@ -72,12 +73,15 @@ export function CompareModal({ jobs, onClose }: { jobs: JobResponse[]; onClose: 
                         Current
                       </span>
                     )}
-                    <a
-                      href={`?job_id=${encodeURIComponent(job.job_id)}`}
+                    {/* Close on navigate: the dialog would otherwise stay open
+                        over the thesis it just sent you to. */}
+                    <Link
+                      to={`/thesis/${encodeURIComponent(job.job_id)}`}
+                      onClick={() => ref.current?.close()}
                       className="block text-primary hover:text-primary/80 font-medium text-xs"
                     >
                       {job.query}
-                    </a>
+                    </Link>
                   </th>
                 ))}
               </tr>

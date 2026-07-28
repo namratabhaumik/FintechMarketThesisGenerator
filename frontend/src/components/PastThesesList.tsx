@@ -1,3 +1,4 @@
+import { Link } from "react-router";
 import { fmtDate } from "../format";
 import type { DeleteHandler, ThesisSummaryResponse } from "../types";
 import { Collapsible } from "./Collapsible";
@@ -56,12 +57,12 @@ export function PastThesesList({
             className="flex items-center justify-between py-2.5 px-3 rounded-field bg-base-300/50 hover:bg-base-300"
           >
             <div className="flex flex-col gap-0.5 min-w-0">
-              <a
-                href={`?job_id=${encodeURIComponent(j.job_id)}`}
+              <Link
+                to={`/thesis/${encodeURIComponent(j.job_id)}`}
                 className="text-xs text-primary hover:text-primary/80 font-medium truncate"
               >
                 {j.query}
-              </a>
+              </Link>
               <span className="text-[10px] text-base-content/60 font-mono">
                 {metaLine(j, isAdmin)}
               </span>
