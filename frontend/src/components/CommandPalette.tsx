@@ -6,8 +6,8 @@ import type { ThesisSummaryResponse } from "../types";
 // Results shown for a typed query. Ranking is best-match (no backend search endpoint).
 const MAX_RESULTS = 10;
 
-// How many theses to load for client-side search.
-const FETCH_SIZE = 50;
+// How many theses to load for client-side search, per group (own + all)
+const FETCH_SIZE = 100;
 
 // Dot color by recommendation, matching the metrics/badge palette.
 function dotColor(rec?: string | null): string {

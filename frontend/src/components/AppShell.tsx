@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Outlet, useNavigate } from "react-router";
+import { Outlet, useLocation, useNavigate } from "react-router";
 import type { AuthInfo } from "../types";
 import { AppHeader } from "./AppHeader";
 import { CommandPalette } from "./CommandPalette";
@@ -26,6 +26,7 @@ export function AppShell({ auth }: { auth: AuthInfo }) {
     }
   });
   const navigate = useNavigate();
+  const location = useLocation();
 
   // One trigger for both layouts: below md it opens the drawer, from md up it
   // collapses/expands the rail.
@@ -77,12 +78,14 @@ export function AppShell({ auth }: { auth: AuthInfo }) {
         </main>
       </div>
 
-      {/* Global search stays scoped to the caller's own theses; the All Theses
-          page opens its own all-scope search. */}
+      {/* One search surface for the whole app, scoped by where you are: the
+          library page searches everything visible to you, everywhere else
+          searches your own theses. */}
       <CommandPalette
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
         isAdmin={Boolean(auth.isAdmin)}
+        scope={location.pathname === "/theses" ? "all" : "mine"}
         onOpenThesis={(jobId) => void navigate(`/thesis/${encodeURIComponent(jobId)}`)}
       />
     </div>
