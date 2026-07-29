@@ -18,7 +18,7 @@ repos:
   # Python lint + security rules (S = bandit-equivalent, B = bugbear, ASYNC = async pitfalls)
   # --fix only for style/correctness rules; security findings (S) are review-only, never auto-rewritten.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.0
+    rev: v0.15.17
     hooks:
       - id: ruff
         name: ruff (autofix style/bugs)

@@ -23,12 +23,12 @@ class TestProviderRegistries:
 
     def test_llm_provider_registry_values_are_classes(self):
         """Test that LLM registry values are class types."""
-        for provider, cls in LLM_PROVIDER_REGISTRY.items():
+        for cls in LLM_PROVIDER_REGISTRY.values():
             assert isinstance(cls, type)
 
     def test_llm_provider_registry_values_inherit_from_interface(self):
         """Test that all LLM providers inherit from ILanguageModel."""
-        for provider, cls in LLM_PROVIDER_REGISTRY.items():
+        for cls in LLM_PROVIDER_REGISTRY.values():
             assert issubclass(cls, ILanguageModel)
 
     def test_embedding_provider_registry_contains_fastembed(self):
@@ -37,12 +37,12 @@ class TestProviderRegistries:
 
     def test_embedding_provider_registry_values_are_classes(self):
         """Test that embedding registry values are class types."""
-        for provider, cls in EMBEDDING_PROVIDER_REGISTRY.items():
+        for cls in EMBEDDING_PROVIDER_REGISTRY.values():
             assert isinstance(cls, type)
 
     def test_embedding_provider_registry_values_inherit_from_interface(self):
         """Test that all embedding providers inherit from IEmbeddingModel."""
-        for provider, cls in EMBEDDING_PROVIDER_REGISTRY.items():
+        for cls in EMBEDDING_PROVIDER_REGISTRY.values():
             assert issubclass(cls, IEmbeddingModel)
 
 

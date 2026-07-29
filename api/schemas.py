@@ -9,7 +9,7 @@ collections stay lightweight (no docs, histories, or embeddings).
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # --- Enums ---
@@ -113,3 +113,114 @@ class JobResponse(BaseModel):
     # Owner of the job. Only meaningfully distinct from the caller for an
     # admin, who sees other users' jobs too (RLS admin policy).
     user_id: Optional[str] = None
+
+
+# --- Annotations ---
+
+class AnnotationSection(str, Enum):
+    """Which block of a thesis an annotation's offsets index into. Mirrors the
+    annotations_section_valid constraint in sql/annotations.sql; the section
+    keeps a note on Risks from ever resolving against the Raw Summary."""
+    RAW_SUMMARY = "raw_summary"
+    KEY_THEMES = "key_themes"
+    RISKS = "risks"
+    INVESTMENT_SIGNALS = "investment_signals"
+
+
+class AnnotationResolution(str, Enum):
+    """Thread outcome. Absent means still open; a rejection's reason lives in a
+    reply, not here, so every piece of prose belongs to its author."""
+    ACCEPTED = "accepted"  # the tick
+    REJECTED = "rejected"  # the cross
+
+
+class AnnotationAuthor(BaseModel):
+    """Display identity for a comment, resolved from the profiles table. Both
+    fields may be null: a profile row can lag a brand-new signup, and a nameless
+    author must not break the thread."""
+    user_id: str
+    display_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+
+class AnnotationCreateRequest(BaseModel):
+    """Create a root annotation (anchored) or a reply (parent_id set).
+
+    Anchors are pinned to one version: offsets are only meaningful against that
+    version's text, which is frozen once superseded. The server takes `version`
+    from the request because the client knows which version it rendered.
+    """
+    body: str = Field(..., min_length=1)
+    # Root only. A reply carries none of these.
+    version: Optional[int] = Field(None, gt=0)
+    section: Optional[AnnotationSection] = None
+    start_offset: Optional[int] = Field(None, ge=0)
+    end_offset: Optional[int] = Field(None, gt=0)
+    quote: Optional[str] = None
+    # Reply only.
+    parent_id: Optional[str] = None
+
+    @model_validator(mode="after")
+    def check_range(self):
+        """An inverted or empty range marks nothing. The DB rejects it too
+        (annotations_range_valid), but that arrives as a 500; validating here
+        makes it the 400 it actually is."""
+        if self.start_offset is not None and self.end_offset is not None:
+            if self.end_offset <= self.start_offset:
+                raise ValueError("end_offset must be greater than start_offset")
+        return self
+
+
+class AnnotationUpdateRequest(BaseModel):
+    """Edit a comment's text. Author-only; resolution is a separate endpoint
+    because it is a state change other participants may make."""
+    body: str = Field(..., min_length=1)
+
+
+class AnnotationResolveRequest(BaseModel):
+    """Tick, cross, or reopen. Null reopens."""
+    resolution: Optional[AnnotationResolution] = None
+
+
+class AnnotationResponse(BaseModel):
+    """One annotation - a root with its anchor, or a reply."""
+    id: str
+    job_id: str
+    version: int
+    body: str
+    section: Optional[AnnotationSection] = None
+    start_offset: Optional[int] = None
+    end_offset: Optional[int] = None
+    quote: Optional[str] = None
+    parent_id: Optional[str] = None
+    resolution: Optional[AnnotationResolution] = None
+    resolved_at: Optional[str] = None
+    resolved_by: Optional[str] = None
+    author: AnnotationAuthor
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+# --- Sharing ---
+
+class ShareRole(str, Enum):
+    """What a share conveys. Never refine/approve/delete - those stay with the
+    owner (and admins)."""
+    COMMENTER = "commenter"  # may read and annotate
+    VIEWER = "viewer"        # may read annotations only
+
+
+class ShareCreateRequest(BaseModel):
+    user_id: str
+    role: ShareRole = ShareRole.COMMENTER
+
+
+class ShareResponse(BaseModel):
+    job_id: str
+    user_id: str
+    role: ShareRole
+    granted_by: Optional[str] = None
+    created_at: Optional[str] = None
+    # Display identity of the collaborator, when a profile row exists.
+    display_name: Optional[str] = None
+    avatar_url: Optional[str] = None

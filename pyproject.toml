@@ -67,9 +67,37 @@ strict = false
 ignore_missing_imports = true
 
 [tool.ruff]
-line-length = 88
+line-length = 120
 target-version = "py314"
 exclude = ["finthesis_internal"]
 
 [tool.ruff.lint]
 select = ["E", "F", "B", "S", "ASYNC"]
+
+[tool.ruff.lint.per-file-ignores]
+# S101 (bandit's "assert detected") targets production code, where -O strips
+# asserts. In pytest, assert IS the assertion mechanism, so the rule is a false
+# positive for the entire suite. S105/S106 likewise fire on the fake tokens and
+# passwords every auth test needs; a hardcoded credential in a test fixture is
+# the point, not a leak (real secrets are caught by gitleaks, which scans
+# everything).
+"tests/**" = ["S101", "S105", "S106"]
+"evals/**" = ["S101", "S105", "S106"]
+# E501 here is prompt text inside a triple-quoted string. Wrapping it would
+# insert a newline into what the model actually receives, and a `# noqa` cannot
+# sit inside a string literal (prompt wording is not a formatting concern).
+"core/implementations/llm/gemini_llm.py" = ["E501"]
+
+[tool.ruff.lint.flake8-bugbear]
+# B008 forbids function calls in argument defaults because a shared mutable
+# default is a classic bug. FastAPI's dependency injection is expressed exactly
+# that way and the results are not mutable state.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
+    "fastapi.File",
+    "fastapi.Form",
+]

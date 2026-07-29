@@ -257,10 +257,13 @@ class TestSelectFeedbackEvidence:
 
     # A wide pool of distinct articles with varied tags / dates / similarity.
     POOL = [
-        _pool_doc("a", themes=["Digital Payments"], signals=["Payment Infrastructure"], published="2026-01-01", sim=0.80),
+        _pool_doc("a", themes=["Digital Payments"], 
+            signals=["Payment Infrastructure"], published="2026-01-01", sim=0.80),
         _pool_doc("b", themes=["Digital Lending"], published="2026-06-01", sim=0.78),
-        _pool_doc("c", themes=["Digital Payments"], signals=["AI-Driven Financial Tools"], published="2026-07-01", sim=0.75),
-        _pool_doc("d", themes=["WealthTech"], signals=["WealthTech Disruption"], published="2026-03-01", sim=0.90),
+        _pool_doc("c", themes=["Digital Payments"], 
+            signals=["AI-Driven Financial Tools"], published="2026-07-01", sim=0.75),
+        _pool_doc("d", themes=["WealthTech"], 
+            signals=["WealthTech Disruption"], published="2026-03-01", sim=0.90),
         _pool_doc("e", published="2026-02-01", sim=0.73),
     ]
     # The current summary subset (distinct from the pool urls) -> top 2 kept.
