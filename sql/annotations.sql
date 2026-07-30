@@ -171,7 +171,8 @@ declare
   target_job text;
 begin
   if new_resolution is not null and new_resolution not in ('accepted', 'rejected') then
-    raise exception 'resolution must be accepted, rejected or null';
+    -- 22023 = invalid_parameter_value.
+    raise exception 'resolution must be accepted, rejected or null' using errcode = '22023';
   end if;
 
   -- Only root annotations carry resolution state; a reply has none to set.
@@ -180,7 +181,10 @@ begin
   where id = annotation_id and parent_id is null;
 
   if target_job is null then
-    raise exception 'annotation not found or is a reply';
+    -- Explicit SQLSTATEs, not prose: the API maps these to 404/403, and matching
+    -- on message text would break silently the moment this wording changed.
+    -- P0002 = no_data_found, 42501 = insufficient_privilege.
+    raise exception 'annotation not found or is a reply' using errcode = 'P0002';
   end if;
 
   -- Resolving requires comment rights. A 'viewer' share
@@ -195,7 +199,7 @@ begin
     )
     or (auth.jwt() -> 'app_metadata' ->> 'role') = 'admin'
   ) then
-    raise exception 'not authorised to resolve this annotation';
+    raise exception 'not authorised to resolve this annotation' using errcode = '42501';
   end if;
 
   update annotations

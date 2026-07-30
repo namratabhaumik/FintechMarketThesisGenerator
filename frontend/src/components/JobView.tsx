@@ -1,5 +1,6 @@
 import * as Tabs from "@radix-ui/react-tabs";
 import { useState } from "react";
+import { SECTION_ATTR } from "../anchoring";
 import { fmtDate, refusalSummaryMessage } from "../format";
 import type {
   ApproveHandler,
@@ -26,7 +27,19 @@ const tabTriggerClass =
 
 // Raw model summary as a flat section, with a local-summarizer warning and a
 // refusal message substituted for the body when the summary was refused.
-function RawSummary({ thesis }: { thesis: ThesisResponse }) {
+//
+// This is the annotatable section: `annotationRef` is attached to the prose
+// element ONLY, so stored offsets are measured against the summary text alone
+// and are unaffected by the warning banner appearing or not. A refused summary
+// carries no model prose, so it is not annotatable.
+function RawSummary({
+  thesis,
+  annotationRef,
+}: {
+  thesis: ThesisResponse;
+  annotationRef?: React.Ref<HTMLParagraphElement>;
+}) {
+  const refused = thesis.summary_status === "refused";
   return (
     <Section label="Raw Summary">
       {thesis.summary_source === "local" && (
@@ -34,12 +47,16 @@ function RawSummary({ thesis }: { thesis: ThesisResponse }) {
           Generated without an LLM (local extractive summarizer) - narrative quality may be reduced.
         </p>
       )}
-      {thesis.summary_status === "refused" ? (
+      {refused ? (
         <p className="text-sm text-base-content/60 leading-relaxed">
           {refusalSummaryMessage(thesis)}
         </p>
       ) : (
-        <p className="text-sm text-base-content/60 leading-relaxed whitespace-pre-wrap">
+        <p
+          ref={annotationRef}
+          {...{ [SECTION_ATTR]: "raw_summary" }}
+          className="text-sm text-base-content/60 leading-relaxed whitespace-pre-wrap"
+        >
           {thesis.raw_output}
         </p>
       )}
@@ -58,12 +75,15 @@ export function JobView({
   onRefine,
   onApprove,
   onCompare,
+  summaryRef,
 }: {
   job: JobResponse;
   feedbackOptions: string[];
   onRefine: RefineHandler;
   onApprove: ApproveHandler;
   onCompare: CompareHandler;
+  /** Attached to the Raw Summary prose, which annotations anchor into. */
+  summaryRef?: React.Ref<HTMLParagraphElement>;
 }) {
   const [approving, setApproving] = useState(false);
   const thesis = job.thesis;
@@ -122,7 +142,7 @@ export function JobView({
           <div>
             <MetricsStrip thesis={thesis} />
             <SourcesList sources={job.sources} />
-            {thesis.raw_output && <RawSummary thesis={thesis} />}
+            {thesis.raw_output && <RawSummary thesis={thesis} annotationRef={summaryRef} />}
             {thesis.key_themes.length === 0 ? (
               <p className="border-t border-base-300 py-6 text-sm text-base-content/60">
                 Could not parse structured output. See raw output above.

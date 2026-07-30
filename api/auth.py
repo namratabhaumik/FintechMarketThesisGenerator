@@ -22,6 +22,7 @@ from jwt import PyJWKClient
 from supabase import acreate_client
 
 from api.supabase_annotation_manager import SupabaseAnnotationManager
+from core.interfaces.annotation_repository import IAnnotationRepository
 from api.supabase_job_manager import SupabaseJobManager
 from core.interfaces.job_manager import IJobManager
 
@@ -185,7 +186,7 @@ async def get_user_job_manager(
 
 async def get_user_annotation_manager(
     user: AuthUser = Depends(get_current_user),
-) -> AsyncIterator[SupabaseAnnotationManager]:
+) -> AsyncIterator[IAnnotationRepository]:
     """A per-request annotation manager on a user-scoped client, so annotation,
     share and profile queries all run under RLS as the caller.
 

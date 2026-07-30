@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router";
 import {
   ApiError,
@@ -10,16 +10,21 @@ import {
   getThesis,
   listTheses,
 } from "../api";
+import { applyHighlights, clearHighlights } from "../anchoring";
 import { isNoOpRound } from "../format";
 import { RefinementStatus } from "../types";
 import type {
+  AuthInfo,
   ExecutionEvent,
   JobResponse,
   StatusMessage,
   ThesisSummaryResponse,
 } from "../types";
 import { PAGE_SIZE } from "../usePaginatedTheses";
+import { useAnnotations } from "../useAnnotations";
+import { AnnotationsPanel } from "./AnnotationsPanel";
 import { CompareModal } from "./CompareModal";
+import { SelectionPopover, useSelectionDraft } from "./SelectionPopover";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { JobView } from "./JobView";
 import { QueryPanel } from "./QueryPanel";
@@ -39,7 +44,7 @@ const GENERATE_ERROR_MESSAGES: Record<string, string> = {
 // thesis on screen is addressed by the route (/thesis/:jobId), so the URL is
 // the single source of truth - reloading, sharing or hitting back all resolve
 // through the same restore path.
-export function RecentPage() {
+export function RecentPage({ auth }: { auth: AuthInfo }) {
   const { jobId } = useParams<{ jobId: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -60,6 +65,31 @@ export function RecentPage() {
   // Ids this page already holds in state, so navigating to a thesis we just
   // created or refined doesn't refetch it.
   const loadedRef = useRef<string | null>(null);
+
+  // --- Annotations ---
+  // Anchored to the Raw Summary prose and pinned to the version on screen, so
+  // refining shows a clean slate rather than notes pointing at rewritten text.
+  const summaryRef = useRef<HTMLParagraphElement | null>(null);
+  // Radix unmounts the inactive tab, so switching to Diff and back gives a
+  // brand-new paragraph node. A plain ref assignment is invisible to effects,
+  // which would leave the remounted summary unpainted until something else
+  // changed. This callback ref makes the (re)mount itself a dependency.
+  const [summaryMounts, setSummaryMounts] = useState(0);
+  const attachSummary = useCallback((el: HTMLParagraphElement | null) => {
+    summaryRef.current = el;
+    if (el) setSummaryMounts((n) => n + 1);
+  }, []);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const version = (currentJob?.refinement_count ?? 0) + 1;
+  const annotations = useAnnotations(currentJob?.job_id, version);
+  // Enabled whenever a thesis is on screen, NOT only when the panel is open:
+  // gating it on the panel made annotating undiscoverable, since nothing hints
+  // that you must open the panel before selecting text.
+  const { draft, lockDraft, clearDraft } = useSelectionDraft(
+    summaryRef,
+    Boolean(currentJob),
+  );
 
   // --- Helpers ---
 
@@ -256,6 +286,57 @@ export function RecentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobId]);
 
+  // Repaint on any change to the annotations, the active thread, or the
+  // document itself. clearHighlights runs on teardown so React never unmounts a
+  // paragraph whose text nodes we have split.
+  const repaint = useCallback(() => {
+    const root = summaryRef.current;
+    if (!root) return;
+    applyHighlights(
+      root,
+      annotations.threads
+        .filter((t) => t.root.start_offset != null && t.root.end_offset != null)
+        .map((t) => ({
+          id: t.root.id,
+          start: t.root.start_offset ?? 0,
+          end: t.root.end_offset ?? 0,
+          active: t.root.id === activeId,
+        })),
+      (id) => {
+        setActiveId(id);
+        setPanelOpen(true);
+      },
+    );
+  }, [annotations.threads, activeId]);
+
+  useEffect(() => {
+    repaint();
+    const root = summaryRef.current;
+    return () => {
+      if (root) clearHighlights(root);
+    };
+  }, [repaint, currentJob?.job_id, nonce, summaryMounts]);
+
+  const saveDraft = (body: string) => {
+    if (!draft) return;
+    void (async () => {
+      const ok = await annotations.add({
+        section: "raw_summary",
+        start: draft.start,
+        end: draft.end,
+        quote: draft.quote,
+        body,
+      });
+      if (ok) {
+        clearDraft();
+        window.getSelection()?.removeAllRanges();
+        // Reveal where the note went, so the first one is not saved into an
+        // invisible panel.
+        setPanelOpen(true);
+      }
+    })();
+  };
+
   // Resumable runs for the picker (only mid-refinement runs qualify).
   useEffect(() => {
     listTheses(PAGE_SIZE, 0, RefinementStatus.Refining)
@@ -279,26 +360,118 @@ export function RecentPage() {
         status={status}
       />
 
-      <section className="px-6 md:px-8 pb-16 space-y-4">
-        {currentJob && (
-          <ErrorBoundary
-            key={`${currentJob.job_id}:${currentJob.refinement_count}:${nonce}`}
-            fallback={
-              <p className="text-sm text-base-content/60">
-                Could not display the thesis (unexpected response shape).
-              </p>
-            }
-          >
-            <JobView
-              job={currentJob}
-              feedbackOptions={feedbackOptions}
-              onRefine={onRefine}
-              onApprove={onApprove}
-              onCompare={onCompare}
+      {/* Document + annotations. The document column is flex-1 min-w-0, so it
+          reclaims the full width whenever the panel is closed. */}
+      <div className="flex gap-0">
+        <section className="flex-1 min-w-0 px-6 md:px-8 pb-16 space-y-4">
+          {currentJob && (
+            <>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setPanelOpen((open) => !open)}
+                  aria-pressed={panelOpen}
+                  className="print:hidden flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-field border border-base-300 text-base-content/60 hover:text-base-content hover:border-base-content/30 transition-colors"
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path
+                      d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                  Notes
+                  {annotations.threads.filter((t) => t.root.resolution == null).length > 0 && (
+                    <span className="text-primary font-mono">
+                      {annotations.threads.filter((t) => t.root.resolution == null).length}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              <ErrorBoundary
+                key={`${currentJob.job_id}:${currentJob.refinement_count}:${nonce}`}
+                fallback={
+                  <p className="text-sm text-base-content/60">
+                    Could not display the thesis (unexpected response shape).
+                  </p>
+                }
+              >
+                <JobView
+                  job={currentJob}
+                  feedbackOptions={feedbackOptions}
+                  onRefine={onRefine}
+                  onApprove={onApprove}
+                  onCompare={onCompare}
+                  summaryRef={attachSummary}
+                />
+              </ErrorBoundary>
+            </>
+          )}
+        </section>
+
+        {/* From lg up the panel is a column beside the document; below that it
+            would leave the document unreadably narrow, so it becomes a sheet. */}
+        {currentJob && panelOpen && (
+          <aside className="print:hidden hidden lg:block w-80 flex-shrink-0 border-l border-base-300 sticky top-14 h-[calc(100vh-3.5rem)]">
+            <AnnotationsPanel
+              threads={annotations.threads}
+              loading={annotations.loading}
+              error={annotations.error}
+              userId={auth.userId}
+              activeId={activeId}
+              onSelect={setActiveId}
+              onReply={(parentId, body) => void annotations.reply(parentId, body)}
+              onEdit={(id, body) => void annotations.edit(id, body)}
+              onDelete={(id) => void annotations.remove(id)}
+              onResolve={(id, resolution, reason) =>
+                void annotations.resolve(id, resolution, reason)
+              }
+              onClose={() => setPanelOpen(false)}
             />
-          </ErrorBoundary>
+          </aside>
         )}
-      </section>
+      </div>
+
+      {/* Mobile: a bottom sheet rather than a side column. */}
+      {currentJob && panelOpen && (
+        <div className="lg:hidden fixed inset-0 z-[70] print:hidden">
+          <button
+            type="button"
+            aria-label="Close annotations"
+            className="absolute inset-0 w-full bg-black/50"
+            onClick={() => setPanelOpen(false)}
+          />
+          <div className="absolute left-0 right-0 bottom-0 h-[70vh] bg-base-100 border-t border-base-300 rounded-t-box overflow-hidden">
+            <AnnotationsPanel
+              threads={annotations.threads}
+              loading={annotations.loading}
+              error={annotations.error}
+              userId={auth.userId}
+              activeId={activeId}
+              onSelect={setActiveId}
+              onReply={(parentId, body) => void annotations.reply(parentId, body)}
+              onEdit={(id, body) => void annotations.edit(id, body)}
+              onDelete={(id) => void annotations.remove(id)}
+              onResolve={(id, resolution, reason) =>
+                void annotations.resolve(id, resolution, reason)
+              }
+              onClose={() => setPanelOpen(false)}
+            />
+          </div>
+        </div>
+      )}
+
+      {draft && (
+        <SelectionPopover
+          draft={draft}
+          onCompose={lockDraft}
+          onSubmit={saveDraft}
+          onDismiss={clearDraft}
+        />
+      )}
 
       {compareJobs && <CompareModal jobs={compareJobs} onClose={() => setCompareJobs(null)} />}
     </>

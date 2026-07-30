@@ -5,6 +5,9 @@
 import { getAccessToken } from "./auth";
 import { API_BASE } from "./config";
 import type {
+  AnnotationCreateRequest,
+  AnnotationResolution,
+  AnnotationResponse,
   JobResponse,
   RefinementRequest,
   ThesisRequest,
@@ -207,4 +210,58 @@ export function deleteThesis(jobId: string): Promise<void> {
 /** The fixed set of refinement feedback reasons the UI offers. */
 export function getFeedbackOptions(): Promise<string[]> {
   return requestJson<string[]>(`${API_BASE}/api/feedback-options`);
+}
+// --- Annotations ---
+
+/** Annotations on a thesis: roots and replies together, oldest first.
+ * `version` scopes to one version's anchors (annotations are version-pinned). */
+export function listAnnotations(
+  jobId: string,
+  version?: number,
+): Promise<AnnotationResponse[]> {
+  const query = version != null ? `?version=${version}` : "";
+  return requestJson<AnnotationResponse[]>(
+    `${API_BASE}/api/theses/${encodeURIComponent(jobId)}/annotations${query}`,
+  );
+}
+
+/** Add a root annotation (anchored to a passage) or a reply (parent_id set). */
+export function createAnnotation(
+  jobId: string,
+  payload: AnnotationCreateRequest,
+): Promise<AnnotationResponse> {
+  return requestJson<AnnotationResponse>(
+    `${API_BASE}/api/theses/${encodeURIComponent(jobId)}/annotations`,
+    { method: "POST", headers: JSON_HEADERS, body: JSON.stringify(payload) },
+  );
+}
+
+/** Edit a comment's text. Author-only; anyone else gets a 403. */
+export function updateAnnotation(
+  annotationId: string,
+  body: string,
+): Promise<AnnotationResponse> {
+  return requestJson<AnnotationResponse>(
+    `${API_BASE}/api/annotations/${encodeURIComponent(annotationId)}`,
+    { method: "PATCH", headers: JSON_HEADERS, body: JSON.stringify({ body }) },
+  );
+}
+
+/** Tick (accepted), cross (rejected) or reopen (null) a thread. Any
+ * participant may do this; a rejection's reason is posted as a reply. */
+export function setAnnotationResolution(
+  annotationId: string,
+  resolution: AnnotationResolution | null,
+): Promise<AnnotationResponse> {
+  return requestJson<AnnotationResponse>(
+    `${API_BASE}/api/annotations/${encodeURIComponent(annotationId)}/resolution`,
+    { method: "PATCH", headers: JSON_HEADERS, body: JSON.stringify({ resolution }) },
+  );
+}
+
+/** Delete a comment; its replies cascade. */
+export function deleteAnnotation(annotationId: string): Promise<void> {
+  return requestVoid(`${API_BASE}/api/annotations/${encodeURIComponent(annotationId)}`, {
+    method: "DELETE",
+  });
 }

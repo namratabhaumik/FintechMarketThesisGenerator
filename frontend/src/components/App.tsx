@@ -13,8 +13,8 @@ export function App({ auth }: { auth: AuthInfo }) {
   return (
     <Routes>
       <Route element={<AppShell auth={auth} />}>
-        <Route path="/" element={<RecentPage />} />
-        <Route path="/thesis/:jobId" element={<RecentPage />} />
+        <Route path="/" element={<RecentPage auth={auth} />} />
+        <Route path="/thesis/:jobId" element={<RecentPage auth={auth} />} />
         <Route path="/theses" element={<AllThesesPage auth={auth} />} />
         {/* Unknown paths fall back to the workspace rather than a dead end. */}
         <Route path="*" element={<Navigate to="/" replace />} />

@@ -8,6 +8,11 @@ export type SourceResponse = components["schemas"]["SourceResponse"];
 export type RelatedThesisResponse = components["schemas"]["RelatedThesisResponse"];
 export type ThesisSummaryResponse = components["schemas"]["ThesisSummaryResponse"];
 export type ThesisRequest = components["schemas"]["ThesisRequest"];
+export type AnnotationResponse = components["schemas"]["AnnotationResponse"];
+export type AnnotationCreateRequest = components["schemas"]["AnnotationCreateRequest"];
+export type AnnotationSection = components["schemas"]["AnnotationSection"];
+export type AnnotationResolution = components["schemas"]["AnnotationResolution"];
+export type AnnotationAuthor = components["schemas"]["AnnotationAuthor"];
 export type RefinementRequest = components["schemas"]["RefinementRequest"];
 
 // Generated union of the backend's refinement_status values ("N/A" | ...).
@@ -38,6 +43,9 @@ export interface HallucinationAnalysis {
 /** Signed-in user info + sign-out handler, passed in by the auth gate. */
 export interface AuthInfo {
   email?: string | null;
+  /** The signed-in user's id. Annotations are authored by id, so the UI needs
+   * it to tell the caller's own notes (editable) from everyone else's. */
+  userId?: string | null;
   isAdmin?: boolean;
   onSignOut: () => void;
 }

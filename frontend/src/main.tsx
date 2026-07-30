@@ -99,6 +99,7 @@ function AuthGate() {
     <App
       auth={{
         email: session.user.email,
+        userId: session.user.id,
         isAdmin: session.user.app_metadata?.role === "admin",
         onSignOut: () => {
           // Drop any thesis deep-link so sign-out lands on a clean URL (a fresh

@@ -16,6 +16,8 @@ from typing import Any, Optional
 
 from supabase import AsyncClient
 
+from core.interfaces.annotation_repository import IAnnotationRepository
+
 logger = logging.getLogger(__name__)
 
 ANNOTATIONS = "annotations"
@@ -23,8 +25,13 @@ SHARES = "thesis_shares"
 PROFILES = "profiles"
 
 
-class SupabaseAnnotationManager:
-    """Annotation/share/profile reads and writes for one request's caller."""
+class SupabaseAnnotationManager(IAnnotationRepository):
+    """Annotation/share/profile reads and writes for one request's caller.
+
+    The interface's access-scoped contract falls out of RLS here: a policy that
+    denies the caller matches no rows, so reads come back empty and writes
+    return None without raising.
+    """
 
     def __init__(self, client: AsyncClient):
         self._client = client

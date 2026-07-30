@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from postgrest.exceptions import APIError
 
 from api.auth import (
     AuthUser,
@@ -24,7 +25,6 @@ from api.auth import (
     require_admin,
 )
 from api.deps import get_container
-from api.supabase_annotation_manager import SupabaseAnnotationManager
 from api.security import (
     GENERATE_LIMIT,
     REFINE_LIMIT,
@@ -49,6 +49,7 @@ from api.schemas import (
 )
 from config.settings import FEEDBACK_OPTIONS
 from core.agents.hallucination_detector import HallucinationDetector
+from core.interfaces.annotation_repository import IAnnotationRepository
 from core.interfaces.job_manager import IJobManager
 from core.services.thesis_generator_service import _tag_strengths_from_documents
 from core.utils.observability import trace_request
@@ -62,6 +63,13 @@ router = APIRouter(prefix="/api")
 # Query-to-query comparison, so it depends on the embedding model only:
 # 0.86 = same-topic + related sub-topics, drops same-domain-different-topic.
 RECALL_MIN_SIMILARITY = 0.86
+
+# SQLSTATEs raised deliberately by set_annotation_resolution (sql/annotations.sql).
+# Matching these instead of the message text keeps the API's status codes from
+# depending on the function's prose.
+SQLSTATE_INVALID_PARAMETER = "22023"  # invalid_parameter_value
+SQLSTATE_INSUFFICIENT_PRIVILEGE = "42501"
+SQLSTATE_NO_DATA_FOUND = "P0002"
 
 
 # --- Helpers ---
@@ -560,7 +568,7 @@ def _annotation_to_response(row: dict, profiles: dict) -> AnnotationResponse:
 
 
 async def _with_authors(
-    am: SupabaseAnnotationManager, rows: list[dict]
+    am: IAnnotationRepository, rows: list[dict]
 ) -> List[AnnotationResponse]:
     """Attach display identities in one profiles query for the whole list."""
     profiles = await am.get_profiles(
@@ -580,7 +588,7 @@ async def list_annotations(
         None, gt=0, description="Scope to one thesis version"
     ),
     jm: IJobManager = Depends(get_user_job_manager),
-    am: SupabaseAnnotationManager = Depends(get_user_annotation_manager),
+    am: IAnnotationRepository = Depends(get_user_annotation_manager),
 ):
     """Annotations on a thesis, roots and replies together (threaded by the
     client) so a thread never needs a second round trip.
@@ -603,7 +611,7 @@ async def create_annotation(
     job_id: str,
     payload: AnnotationCreateRequest,
     jm: IJobManager = Depends(get_user_job_manager),
-    am: SupabaseAnnotationManager = Depends(get_user_annotation_manager),
+    am: IAnnotationRepository = Depends(get_user_annotation_manager),
 ):
     """Add a root annotation (anchored to a passage) or a reply.
 
@@ -697,25 +705,29 @@ async def create_annotation(
 async def update_annotation(
     annotation_id: str,
     payload: AnnotationUpdateRequest,
-    am: SupabaseAnnotationManager = Depends(get_user_annotation_manager),
+    am: IAnnotationRepository = Depends(get_user_annotation_manager),
 ):
     """Edit a comment's text. Author-only - RLS matches no row for anyone else,
     which surfaces here as 403 rather than a silent no-op."""
-    row = await am.update_annotation_body(annotation_id, payload.body)
+    try:
+        row = await am.update_annotation_body(annotation_id, payload.body)
+    except Exception as exc:
+        logger.exception(f"Failed to update annotation {annotation_id}")
+        raise _error(500, "persistence_failed", "Comment could not be updated") from exc
     if row is None:
         raise _error(403, "forbidden", "You can only edit your own comments")
     return (await _with_authors(am, [row]))[0]
 
 
-@router.post(
+@router.patch(
     "/annotations/{annotation_id}/resolution",
-    status_code=204,
+    response_model=AnnotationResponse,
     tags=["annotations"],
 )
 async def resolve_annotation(
     annotation_id: str,
     payload: AnnotationResolveRequest,
-    am: SupabaseAnnotationManager = Depends(get_user_annotation_manager),
+    am: IAnnotationRepository = Depends(get_user_annotation_manager),
 ):
     """Tick (accepted), cross (rejected), or reopen (null).
 
@@ -727,31 +739,40 @@ async def resolve_annotation(
     resolution = payload.resolution.value if payload.resolution else None
     try:
         await am.set_resolution(annotation_id, resolution)
-    except Exception as exc:
-        message = str(exc)
-        if "not authorised" in message:
-            raise _error(
-                403, "forbidden", "You cannot resolve this annotation"
-            ) from exc
-        if "not found" in message:
-            raise _error(
-                404, "not_found", "Annotation not found, or it is a reply"
-            ) from exc
+    except APIError as exc:
+        # Branch on the SQLSTATE the function raises, not its message: the
+        # wording is prose that may be reworded, the code is a contract.
+        # See the `using errcode` clauses in sql/annotations.sql.
+        if exc.code == SQLSTATE_INSUFFICIENT_PRIVILEGE:
+            raise _error(403, "forbidden", "You cannot resolve this annotation") from exc
+        if exc.code == SQLSTATE_NO_DATA_FOUND:
+            raise _error(404, "not_found", "Annotation not found, or it is a reply") from exc
+        if exc.code == SQLSTATE_INVALID_PARAMETER:
+            raise _error(400, "invalid_resolution", "Unrecognised resolution value") from exc
         logger.exception("Failed to set annotation resolution")
-        raise _error(
-            500, "persistence_failed", "Could not update the annotation"
-        ) from exc
-    return Response(status_code=204)
+        raise _error(500, "persistence_failed", "Could not update the annotation") from exc
+    except Exception as exc:
+        logger.exception("Failed to set annotation resolution")
+        raise _error(500, "persistence_failed", "Could not update the annotation") from exc
+
+    row = await am.get_annotation(annotation_id)
+    if not row:
+        raise _error(404, "not_found", "Annotation not found")
+    return (await _with_authors(am, [row]))[0]
 
 
 @router.delete("/annotations/{annotation_id}", status_code=204, tags=["annotations"])
 async def delete_annotation(
     annotation_id: str,
-    am: SupabaseAnnotationManager = Depends(get_user_annotation_manager),
+    am: IAnnotationRepository = Depends(get_user_annotation_manager),
 ):
     """Delete a comment (replies cascade). RLS scopes this to the author or the
     thesis owner; anything else deletes nothing."""
-    await am.delete_annotation(annotation_id)
+    try:
+        await am.delete_annotation(annotation_id)
+    except Exception as exc:
+        logger.exception(f"Failed to delete annotation {annotation_id}")
+        raise _error(500, "deletion_failed", "Comment could not be deleted") from exc
     return Response(status_code=204)
 
 
@@ -766,7 +787,7 @@ async def delete_annotation(
 async def list_shares(
     job_id: str,
     jm: IJobManager = Depends(get_user_job_manager),
-    am: SupabaseAnnotationManager = Depends(get_user_annotation_manager),
+    am: IAnnotationRepository = Depends(get_user_annotation_manager),
 ):
     """Who this thesis is shared with. RLS shows the owner every share and a
     collaborator only their own."""
@@ -800,7 +821,7 @@ async def create_share(
     payload: ShareCreateRequest,
     user: AuthUser = Depends(get_current_user),
     jm: IJobManager = Depends(get_user_job_manager),
-    am: SupabaseAnnotationManager = Depends(get_user_annotation_manager),
+    am: IAnnotationRepository = Depends(get_user_annotation_manager),
 ):
     """Grant a user read (viewer) or read+comment (commenter) access.
 
@@ -837,9 +858,13 @@ async def create_share(
 async def delete_share(
     job_id: str,
     user_id: str,
-    am: SupabaseAnnotationManager = Depends(get_user_annotation_manager),
+    am: IAnnotationRepository = Depends(get_user_annotation_manager),
 ):
     """Revoke access. Owner-only via RLS; revoking a share that is not yours to
     revoke deletes nothing."""
-    await am.delete_share(job_id, user_id)
+    try:
+        await am.delete_share(job_id, user_id)
+    except Exception as exc:
+        logger.exception(f"Failed to revoke share on {job_id} for {user_id}")
+        raise _error(500, "deletion_failed", "Access could not be revoked") from exc
     return Response(status_code=204)

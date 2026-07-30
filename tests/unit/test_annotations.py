@@ -8,6 +8,7 @@ annotation into a 400 instead of a database constraint error.
 """
 
 import asyncio
+from pathlib import Path
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, Mock
@@ -261,3 +262,48 @@ class TestAnnotationRequestValidation:
                 body="note", version=0, section="risks",
                 start_offset=0, end_offset=1, quote="x",
             )
+
+
+class TestResolutionErrorContract:
+    """The route maps DB failures by SQLSTATE, not message text.
+
+    These pin the contract from both ends: the SQL raises the codes, and the
+    route branches on them. Reword an exception in sql/annotations.sql and
+    nothing breaks; change a code without changing both sides and these fail.
+    """
+
+    def test_sql_raises_explicit_sqlstates(self):
+        """The definer function must attach codes, not rely on prose."""
+        sql = Path("sql/annotations.sql").read_text()
+        fn = sql.split("create or replace function set_annotation_resolution")[1]
+        # Every raise inside the function carries an errcode.
+        raises = [line for line in fn.splitlines() if "raise exception" in line]
+        assert raises, "expected the function to raise"
+        for line in raises:
+            assert "errcode" in line, f"raise without a SQLSTATE: {line.strip()}"
+
+    def test_route_constants_match_the_sql(self):
+        from api.routes import (
+            SQLSTATE_INSUFFICIENT_PRIVILEGE,
+            SQLSTATE_INVALID_PARAMETER,
+            SQLSTATE_NO_DATA_FOUND,
+        )
+
+        sql = Path("sql/annotations.sql").read_text()
+        fn = sql.split("create or replace function set_annotation_resolution")[1]
+        for code in (
+            SQLSTATE_INSUFFICIENT_PRIVILEGE,
+            SQLSTATE_INVALID_PARAMETER,
+            SQLSTATE_NO_DATA_FOUND,
+        ):
+            assert f"errcode = '{code}'" in fn, f"route expects {code}, SQL never raises it"
+
+    def test_route_branches_on_code_not_message(self):
+        """Guards the regression this replaced: branching on the exception's
+        prose. The user-facing strings may well contain words like "not found",
+        so this asserts the mechanism, not the absence of a phrase."""
+        route_src = Path("api/routes.py").read_text()
+        body = route_src.split("async def resolve_annotation")[1].split("@router")[0]
+        assert "exc.code ==" in body, "resolution errors must be matched by SQLSTATE"
+        # The old implementation did `message = str(exc)` then substring checks.
+        assert "str(exc)" not in body, "matching on the exception text is what broke"
