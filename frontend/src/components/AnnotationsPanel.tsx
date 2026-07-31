@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { fmtDate } from "../format";
+import { fmtDateTime } from "../format";
 import type { AnnotationResponse } from "../types";
 import type { AnnotationThread } from "../useAnnotations";
 
@@ -7,6 +7,27 @@ import type { AnnotationThread } from "../useAnnotations";
 // with a fresh signup - a nameless author must not blank out the comment.
 function authorName(a: AnnotationResponse): string {
   return a.author.display_name || a.author.user_id.slice(0, 8);
+}
+
+// Show the start AND end of the anchored passage ("Abc... xyz"). Clamping only
+// the tail hides where the highlight stops, which is exactly what a reader needs
+// to find it in the document.
+function previewQuote(quote: string, head = 64, tail = 40): string {
+  const clean = quote.replace(/\s+/g, " ").trim();
+  if (clean.length <= head + tail + 1) return clean;
+  return `${clean.slice(0, head).trimEnd()}\u2026${clean.slice(-tail).trimStart()}`;
+}
+
+// A comment counts as edited once its text has been rewritten. The DB trigger
+// only stamps updated_at on a body change, so a resolved thread does not make
+// its untouched comments read as edited. The small tolerance absorbs the
+// microsecond gap between the two defaults on insert.
+function wasEdited(a: AnnotationResponse): boolean {
+  if (!a.created_at || !a.updated_at) return false;
+  const created = new Date(a.created_at).getTime();
+  const updated = new Date(a.updated_at).getTime();
+  if (Number.isNaN(created) || Number.isNaN(updated)) return false;
+  return updated - created > 1000;
 }
 
 function Avatar({ a }: { a: AnnotationResponse }) {
@@ -35,14 +56,26 @@ function Comment({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(a.body);
+  const edited = wasEdited(a);
+  // Show when the text was last written: the edit time if it was edited,
+  // otherwise the original. Falls back to created_at if updated_at is missing.
+  const stamp = edited ? (a.updated_at ?? a.created_at) : a.created_at;
 
   return (
     <div className="text-xs">
       <div className="flex items-center gap-2 mb-1">
         <Avatar a={a} />
         <span className="font-medium truncate">{authorName(a)}</span>
-        <span className="text-base-content/40 font-mono text-[10px] ml-auto flex-shrink-0">
-          {a.created_at ? fmtDate(a.created_at) : ""}
+        {/* Once edited, the edit time is the useful one - the original is kept
+            in the tooltip rather than shown, so the row stays one line. */}
+        <span
+          className="text-base-content/40 font-mono text-[10px] ml-auto flex-shrink-0"
+          title={
+            edited && a.created_at ? `Written ${fmtDateTime(a.created_at)}` : undefined
+          }
+        >
+          {stamp ? fmtDateTime(stamp) : ""}
+          {edited && " (edited)"}
         </span>
       </div>
 
@@ -122,14 +155,11 @@ function Thread({
   onReply: (body: string) => void;
   onEdit: (id: string, body: string) => void;
   onDelete: (id: string) => void;
-  onResolve: (resolution: "accepted" | "rejected" | null, reason?: string) => void;
+  onResolve: (resolution: "accepted" | null) => void;
 }) {
   const { root, replies } = thread;
   const [replying, setReplying] = useState(false);
   const [draft, setDraft] = useState("");
-  // Crossing asks for a reason, which is posted as a reply so it stays the
-  // rejecter's own words rather than an edit to someone else's note.
-  const [rejecting, setRejecting] = useState(false);
   const resolved = root.resolution != null;
 
   const submitReply = () => {
@@ -147,14 +177,14 @@ function Thread({
       onClick={onSelect}
     >
       {root.quote && (
-        <p className="text-[11px] italic text-base-content/50 border-l-2 border-primary/40 pl-2 line-clamp-3">
-          {root.quote}
+        <p className="text-[11px] italic text-base-content/50 border-l-2 border-primary/40 pl-2">
+          {previewQuote(root.quote)}
         </p>
       )}
 
       <Comment
         a={root}
-        canEdit={root.author.user_id === userId}
+        canEdit={!resolved && root.author.user_id === userId}
         onEdit={(body) => onEdit(root.id, body)}
         onDelete={() => onDelete(root.id)}
       />
@@ -165,47 +195,11 @@ function Thread({
             <Comment
               key={r.id}
               a={r}
-              canEdit={r.author.user_id === userId}
+              canEdit={!resolved && r.author.user_id === userId}
               onEdit={(body) => onEdit(r.id, body)}
               onDelete={() => onDelete(r.id)}
             />
           ))}
-        </div>
-      )}
-
-      {rejecting && (
-        <div className="space-y-2" onClick={(e) => e.stopPropagation()}>
-          <textarea
-            className="w-full bg-base-100 border border-base-300 rounded-field px-2 py-1.5 text-xs"
-            rows={2}
-            placeholder="Why are you dismissing this?"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-          />
-          <div className="flex gap-2">
-            <button
-              type="button"
-              className="btn btn-primary btn-xs"
-              disabled={!draft.trim()}
-              onClick={() => {
-                onResolve("rejected", draft.trim());
-                setDraft("");
-                setRejecting(false);
-              }}
-            >
-              Dismiss
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-xs"
-              onClick={() => {
-                setDraft("");
-                setRejecting(false);
-              }}
-            >
-              Cancel
-            </button>
-          </div>
         </div>
       )}
 
@@ -241,72 +235,49 @@ function Thread({
         </div>
       )}
 
-      {!replying && !rejecting && (
+      {!replying && (
         <div
           className="flex items-center gap-3 pt-1 border-t border-base-300"
           onClick={(e) => e.stopPropagation()}
         >
-          <button
-            type="button"
-            className="text-[10px] text-base-content/50 hover:text-base-content"
-            onClick={() => setReplying(true)}
-          >
-            Reply
-          </button>
+          {/* A resolved thread is closed: no reply, no edit, no delete. Reopen
+              is the single way back in, so the state cannot drift while the
+              thread reads as settled. */}
+          {!resolved && (
+            <button
+              type="button"
+              className="text-[10px] text-base-content/50 hover:text-base-content"
+              onClick={() => setReplying(true)}
+            >
+              Reply
+            </button>
+          )}
           {resolved ? (
-            <>
-              <span
-                className={`text-[10px] font-mono ${
-                  root.resolution === "accepted" ? "text-primary" : "text-base-content/50"
-                }`}
-              >
-                {root.resolution === "accepted" ? "Accepted" : "Dismissed"}
-              </span>
-              <button
-                type="button"
-                className="text-[10px] text-base-content/50 hover:text-base-content ml-auto"
-                onClick={() => onResolve(null)}
-              >
-                Reopen
-              </button>
-            </>
+            <button
+              type="button"
+              className="text-[10px] text-base-content/50 hover:text-base-content ml-auto"
+              onClick={() => onResolve(null)}
+            >
+              Reopen
+            </button>
           ) : (
-            <div className="flex items-center gap-2 ml-auto">
-              {/* Tick = all good. Cross = dismissed, with a reason. */}
-              <button
-                type="button"
-                aria-label="Accept this note"
-                title="Accept"
-                className="btn btn-ghost btn-xs text-primary"
-                onClick={() => onResolve("accepted")}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path
-                    d="M4 12.5l5 5L20 6.5"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              </button>
-              <button
-                type="button"
-                aria-label="Dismiss this note with a reason"
-                title="Dismiss"
-                className="btn btn-ghost btn-xs text-error/70 hover:text-error"
-                onClick={() => setRejecting(true)}
-              >
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <path
-                    d="M6 6l12 12M18 6L6 18"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                  />
-                </svg>
-              </button>
-            </div>
+            <button
+              type="button"
+              aria-label="Accept this note"
+              title="Accept"
+              className="btn btn-ghost btn-xs text-primary ml-auto"
+              onClick={() => onResolve("accepted")}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path
+                  d="M4 12.5l5 5L20 6.5"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
           )}
         </div>
       )}
@@ -336,7 +307,7 @@ export function AnnotationsPanel({
   onReply: (parentId: string, body: string) => void;
   onEdit: (id: string, body: string) => void;
   onDelete: (id: string) => void;
-  onResolve: (id: string, resolution: "accepted" | "rejected" | null, reason?: string) => void;
+  onResolve: (id: string, resolution: "accepted" | null) => void;
   onClose?: () => void;
 }) {
   const [tab, setTab] = useState<"open" | "resolved">("open");
@@ -404,7 +375,7 @@ export function AnnotationsPanel({
             onReply={(body) => onReply(thread.root.id, body)}
             onEdit={onEdit}
             onDelete={onDelete}
-            onResolve={(resolution, reason) => onResolve(thread.root.id, resolution, reason)}
+            onResolve={(resolution) => onResolve(thread.root.id, resolution)}
           />
         ))}
       </div>

@@ -40,8 +40,6 @@ from api.schemas import (
     RefinementRequest,
     RefinementStatus,
     RelatedThesisResponse,
-    ShareCreateRequest,
-    ShareResponse,
     SourceResponse,
     ThesisRequest,
     ThesisResponse,
@@ -729,12 +727,11 @@ async def resolve_annotation(
     payload: AnnotationResolveRequest,
     am: IAnnotationRepository = Depends(get_user_annotation_manager),
 ):
-    """Tick (accepted), cross (rejected), or reopen (null).
+    """Tick (accepted) or reopen (null).
 
-    Any participant may resolve someone else's note, which no RLS policy can
-    express without also permitting edits to that note's body - so this goes
-    through a definer function that writes only the state columns. A rejection's
-    reason is posted separately as a reply, authored by whoever rejected it.
+    Resolving is a state change on the thread rather than an edit to anyone's
+    words, so it goes through a definer function that writes only the state
+    columns - `body` is never in its UPDATE.
     """
     resolution = payload.resolution.value if payload.resolution else None
     try:
@@ -777,94 +774,3 @@ async def delete_annotation(
 
 
 # --- Sharing -------------------------------------------------------------
-
-
-@router.get(
-    "/theses/{job_id}/shares",
-    response_model=List[ShareResponse],
-    tags=["sharing"],
-)
-async def list_shares(
-    job_id: str,
-    jm: IJobManager = Depends(get_user_job_manager),
-    am: IAnnotationRepository = Depends(get_user_annotation_manager),
-):
-    """Who this thesis is shared with. RLS shows the owner every share and a
-    collaborator only their own."""
-    await _get_job_or_404(jm, job_id)
-    rows = await am.list_shares(job_id)
-    profiles = await am.get_profiles(
-        [r.get("user_id") for r in rows if r.get("user_id")]
-    )
-    return [
-        ShareResponse(
-            job_id=r["job_id"],
-            user_id=r["user_id"],
-            role=r["role"],
-            granted_by=r.get("granted_by"),
-            created_at=r.get("created_at"),
-            display_name=profiles.get(r["user_id"], {}).get("display_name"),
-            avatar_url=profiles.get(r["user_id"], {}).get("avatar_url"),
-        )
-        for r in rows
-    ]
-
-
-@router.post(
-    "/theses/{job_id}/shares",
-    response_model=ShareResponse,
-    status_code=201,
-    tags=["sharing"],
-)
-async def create_share(
-    job_id: str,
-    payload: ShareCreateRequest,
-    user: AuthUser = Depends(get_current_user),
-    jm: IJobManager = Depends(get_user_job_manager),
-    am: IAnnotationRepository = Depends(get_user_annotation_manager),
-):
-    """Grant a user read (viewer) or read+comment (commenter) access.
-
-    Owner-only, enforced by RLS: sharing is not transitive, so a collaborator
-    cannot re-share someone else's thesis. Re-sharing to the same user changes
-    their role rather than failing.
-    """
-    await _get_job_or_404(jm, job_id)
-    if payload.user_id == user.id:
-        raise _error(
-            400, "invalid_share", "A thesis is already accessible to its owner"
-        )
-    try:
-        row = await am.create_share(
-            job_id, payload.user_id, payload.role.value, user.id
-        )
-    except Exception:
-        logger.exception("Failed to create share")
-        raise _error(
-            500, "persistence_failed", "Could not share the thesis"
-        ) from None
-    if row is None:
-        raise _error(403, "forbidden", "Only the owner can share this thesis")
-    return ShareResponse(
-        job_id=row["job_id"],
-        user_id=row["user_id"],
-        role=row["role"],
-        granted_by=row.get("granted_by"),
-        created_at=row.get("created_at"),
-    )
-
-
-@router.delete("/theses/{job_id}/shares/{user_id}", status_code=204, tags=["sharing"])
-async def delete_share(
-    job_id: str,
-    user_id: str,
-    am: IAnnotationRepository = Depends(get_user_annotation_manager),
-):
-    """Revoke access. Owner-only via RLS; revoking a share that is not yours to
-    revoke deletes nothing."""
-    try:
-        await am.delete_share(job_id, user_id)
-    except Exception as exc:
-        logger.exception(f"Failed to revoke share on {job_id} for {user_id}")
-        raise _error(500, "deletion_failed", "Access could not be revoked") from exc
-    return Response(status_code=204)

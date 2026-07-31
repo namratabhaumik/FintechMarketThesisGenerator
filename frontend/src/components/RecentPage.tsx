@@ -426,9 +426,7 @@ export function RecentPage({ auth }: { auth: AuthInfo }) {
               onReply={(parentId, body) => void annotations.reply(parentId, body)}
               onEdit={(id, body) => void annotations.edit(id, body)}
               onDelete={(id) => void annotations.remove(id)}
-              onResolve={(id, resolution, reason) =>
-                void annotations.resolve(id, resolution, reason)
-              }
+              onResolve={(id, resolution) => void annotations.resolve(id, resolution)}
               onClose={() => setPanelOpen(false)}
             />
           </aside>
@@ -455,9 +453,7 @@ export function RecentPage({ auth }: { auth: AuthInfo }) {
               onReply={(parentId, body) => void annotations.reply(parentId, body)}
               onEdit={(id, body) => void annotations.edit(id, body)}
               onDelete={(id) => void annotations.remove(id)}
-              onResolve={(id, resolution, reason) =>
-                void annotations.resolve(id, resolution, reason)
-              }
+              onResolve={(id, resolution) => void annotations.resolve(id, resolution)}
               onClose={() => setPanelOpen(false)}
             />
           </div>

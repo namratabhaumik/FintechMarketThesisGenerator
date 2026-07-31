@@ -48,6 +48,7 @@ create index if not exists jobs_query_embedding_hnsw
 -- these policies; the service_role key bypasses RLS (admin/maintenance only).
 alter table jobs enable row level security;
 
+-- Owner-only.
 create policy "jobs_select_own" on jobs
   for select using (auth.uid() = user_id);
 create policy "jobs_insert_own" on jobs
@@ -156,3 +157,4 @@ create policy "jobs_admin_update" on jobs
   with check ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin');
 create policy "jobs_admin_delete" on jobs
   for delete using ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin');
+

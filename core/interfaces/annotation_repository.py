@@ -1,4 +1,4 @@
-"""Abstract interface for annotation, share and profile persistence."""
+"""Abstract interface for annotation and profile persistence."""
 
 from abc import ABC, abstractmethod
 from typing import Any, Optional
@@ -7,11 +7,10 @@ from typing import Any, Optional
 class IAnnotationRepository(ABC):
     """Protocol for collaborative annotation storage.
 
-    Covers one bounded context: the notes on a thesis, who a thesis is shared
-    with, and the display identities of the people who wrote them. They are
-    grouped because no part is useful alone - rendering a thread needs the
-    annotations, the shares that authorise them, and the authors' names - and
-    because every method answers to the same access rules.
+    Covers one bounded context: the notes on a thesis and the display
+    identities of the people who wrote them. They are grouped because neither is
+    useful alone - rendering a thread needs both - and because they answer to the
+    same access rules.
 
     Implementations decide how/where this is persisted and how access is
     enforced. Routes depend on this abstraction so the backend can be swapped
@@ -70,36 +69,13 @@ class IAnnotationRepository(ABC):
 
     @abstractmethod
     async def set_resolution(self, annotation_id: str, resolution: Optional[str]) -> None:
-        """Tick ('accepted'), cross ('rejected') or reopen (None) a thread.
+        """Tick ('accepted') or reopen (None) a thread.
 
-        Distinct from update_annotation_body because any participant may resolve
-        someone else's note, while nobody may rewrite their words. Unlike the
-        access-scoped reads above, this raises when the annotation is missing or
-        the caller may not resolve it - the caller cannot otherwise tell a
-        forbidden resolve from a successful one.
+        Distinct from update_annotation_body: resolution is thread state, not
+        anyone's words. Unlike the access-scoped reads above, this raises when
+        the annotation is missing or the caller may not resolve it - the caller
+        cannot otherwise tell a forbidden resolve from a successful one.
         """
-        pass
-
-    # --- Shares ---
-
-    @abstractmethod
-    async def list_shares(self, job_id: str) -> list[dict]:
-        """Who a thesis is shared with, as far as the caller may see."""
-        pass
-
-    @abstractmethod
-    async def create_share(
-        self, job_id: str, user_id: str, role: str, granted_by: str
-    ) -> Optional[dict]:
-        """Grant access, or change the role if already granted.
-
-        Returns None when the caller is not permitted to share this thesis.
-        """
-        pass
-
-    @abstractmethod
-    async def delete_share(self, job_id: str, user_id: str) -> None:
-        """Revoke access."""
         pass
 
     # --- Profiles ---

@@ -8,6 +8,7 @@
 -- `version` is 1-based and matches what the UI labels: version n is
 -- thesis_history[n-1] once superseded, and jobs.thesis while current.
 --
+-- ACCESS: owner (and admin) only.
 -- THREADING: one table, self-referencing. A root row carries the anchor (which
 -- passage it marks); a reply carries only a body and its parent. The check
 -- constraint keeps those two shapes from mixing - a reply cannot smuggle in its
@@ -33,10 +34,10 @@ create table if not exists annotations (
 
     body         text        not null,
 
-    -- Resolution state (root rows only). Null = still open; 'accepted' is the
-    -- tick, 'rejected' the cross. A rejection's reason is NOT stored here - it
-    -- is posted as an ordinary reply authored by whoever rejected it, so every
-    -- piece of prose in this table belongs to the person who wrote it.
+    -- Resolution state (root rows only). Null = still open, 'accepted' = the
+    -- tick. Deliberately a constrained text column rather than a boolean: it
+    -- names the outcome instead of asserting one, so a second outcome can be
+    -- added by widening the constraint rather than migrating a column.
     resolution   text,
     resolved_at  timestamptz,
     resolved_by  uuid        references auth.users(id) on delete set null,
@@ -55,7 +56,7 @@ create table if not exists annotations (
         start_offset is null or end_offset is null or end_offset > start_offset
     ),
     constraint annotations_resolution_valid check (
-        resolution is null or resolution in ('accepted', 'rejected')
+        resolution is null or resolution = 'accepted'
     ),
     -- Only a root annotation can be resolved; a reply has no state of its own.
     constraint annotations_resolution_root_only check (
@@ -94,9 +95,15 @@ end;
 $$;
 
 drop trigger if exists annotations_set_updated_at on annotations;
+-- Only a change to the TEXT counts as an edit. Without the WHEN clause this
+-- fires on the resolution write too, so ticking a note would stamp updated_at
+-- and the UI would label an untouched comment "(edited)". Resolution timing is
+-- already recorded by resolved_at, so nothing is lost by narrowing this.
 create trigger annotations_set_updated_at
   before update on annotations
-  for each row execute function set_updated_at();
+  for each row
+  when (old.body is distinct from new.body)
+  execute function set_updated_at();
 
 alter table annotations enable row level security;
 
@@ -107,26 +114,15 @@ alter table annotations enable row level security;
 create policy "annotations_select" on annotations
   for select using (
     exists (select 1 from jobs j where j.id = annotations.job_id and j.user_id = auth.uid())
-    or exists (
-      select 1 from thesis_shares s
-      where s.job_id = annotations.job_id and s.user_id = auth.uid()
-    )
     or (auth.jwt() -> 'app_metadata' ->> 'role') = 'admin'
   );
 
--- Writing requires authorship AND access: owner, or a collaborator whose share
--- is 'commenter' (a 'viewer' share reads but never writes).
+-- Writing requires authorship AND access to the thesis.
 create policy "annotations_insert" on annotations
   for insert with check (
     auth.uid() = user_id
-    and (
-      exists (select 1 from jobs j where j.id = annotations.job_id and j.user_id = auth.uid())
-      or exists (
-        select 1 from thesis_shares s
-        where s.job_id = annotations.job_id
-          and s.user_id = auth.uid()
-          and s.role = 'commenter'
-      )
+    and exists (
+      select 1 from jobs j where j.id = annotations.job_id and j.user_id = auth.uid()
     )
   );
 
@@ -148,17 +144,15 @@ create policy "annotations_admin_all" on annotations
   for all using ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin')
   with check ((auth.jwt() -> 'app_metadata' ->> 'role') = 'admin');
 
--- Resolving a thread (tick = accepted, cross = rejected) is a state change any
--- participant may make on someone else's note. The update policy above cannot
+-- Resolving a thread (the tick) is a state change any participant may make on
+-- someone else's note. The update policy above cannot
 -- express that (RLS is row-level, not column-level), so any policy permissive
 -- enough to let a collaborator set `resolution` would equally let them rewrite
 -- that annotation's `body`.
 --
 -- This function is the narrow exception. It re-checks thesis access itself and
 -- writes ONLY the three state columns - `body` is never in its UPDATE, so no
--- caller can alter another person's words through it. A rejection's reason is
--- not passed here at all: the client posts it as an ordinary reply, authored by
--- and attributed to whoever rejected the note.
+-- caller can alter another person's words through it.
 --
 -- Pass null to reopen.
 create or replace function set_annotation_resolution(annotation_id uuid, new_resolution text)
@@ -170,9 +164,9 @@ as $$
 declare
   target_job text;
 begin
-  if new_resolution is not null and new_resolution not in ('accepted', 'rejected') then
+  if new_resolution is not null and new_resolution <> 'accepted' then
     -- 22023 = invalid_parameter_value.
-    raise exception 'resolution must be accepted, rejected or null' using errcode = '22023';
+    raise exception 'resolution must be accepted or null' using errcode = '22023';
   end if;
 
   -- Only root annotations carry resolution state; a reply has none to set.
@@ -187,16 +181,8 @@ begin
     raise exception 'annotation not found or is a reply' using errcode = 'P0002';
   end if;
 
-  -- Resolving requires comment rights. A 'viewer' share
-  -- is read-only and rejecting a thread is posting a reply with a reason.
   if not (
     exists (select 1 from jobs j where j.id = target_job and j.user_id = auth.uid())
-    or exists (
-      select 1 from thesis_shares s
-      where s.job_id = target_job
-        and s.user_id = auth.uid()
-        and s.role = 'commenter'
-    )
     or (auth.jwt() -> 'app_metadata' ->> 'role') = 'admin'
   ) then
     raise exception 'not authorised to resolve this annotation' using errcode = '42501';
@@ -209,3 +195,27 @@ begin
    where id = annotation_id;
 end;
 $$;
+
+-- Migration for deployments that already ran the earlier version of this file
+-- (which allowed 'rejected'). `create table if not exists` above will not touch
+-- an existing table, so this has to be applied by hand.
+--
+-- Existing 'rejected' rows must be dealt with first.
+--   update annotations
+--      set resolution = null, resolved_at = null, resolved_by = null
+--    where resolution = 'rejected';
+--
+--   alter table annotations drop constraint if exists annotations_resolution_valid;
+--   alter table annotations add constraint annotations_resolution_valid
+--     check (resolution is null or resolution = 'accepted');
+--
+-- Re-running set_annotation_resolution above is enough for the function itself
+-- (create or replace).
+--
+-- The updated_at trigger also gained a WHEN clause (text-only edits). A trigger
+-- cannot be replaced in place, so re-run its drop/create pair above. Rows edited
+-- before this change may carry an updated_at stamped by a resolution rather than
+-- an edit; harmless, but it makes those show as "(edited)". To clear them:
+--
+--   update annotations set updated_at = created_at
+--    where resolution is not null and updated_at > created_at;

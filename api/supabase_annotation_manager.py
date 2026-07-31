@@ -1,14 +1,14 @@
-"""Supabase-backed store for annotations, thesis shares and author profiles.
+"""Supabase-backed store for annotations and author profiles.
 
 Every method runs on a user-scoped client (anon key + the caller's JWT), so RLS
 decides what is visible or writable - see sql/annotations.sql. Nothing here
 re-implements those checks; a query that returns no rows means the policies said
 no, which the routes translate into 404/403 as appropriate.
 
-The one exception is resolution: RLS is row-level, so no policy can allow a
-collaborator to set `resolution` without also allowing them to rewrite that
-annotation's `body`. That path goes through the set_annotation_resolution
-definer function instead, which touches only the state columns.
+The one exception is resolution: RLS is row-level, so a policy permissive
+enough to set `resolution` would equally permit rewriting that annotation's
+`body`. That path goes through the set_annotation_resolution definer function
+instead, which touches only the state columns.
 """
 
 import logging
@@ -21,12 +21,11 @@ from core.interfaces.annotation_repository import IAnnotationRepository
 logger = logging.getLogger(__name__)
 
 ANNOTATIONS = "annotations"
-SHARES = "thesis_shares"
 PROFILES = "profiles"
 
 
 class SupabaseAnnotationManager(IAnnotationRepository):
-    """Annotation/share/profile reads and writes for one request's caller.
+    """Annotation and profile reads and writes for one request's caller.
 
     The interface's access-scoped contract falls out of RLS here: a policy that
     denies the caller matches no rows, so reads come back empty and writes
@@ -94,7 +93,7 @@ class SupabaseAnnotationManager(IAnnotationRepository):
     async def set_resolution(
         self, annotation_id: str, resolution: Optional[str]
     ) -> None:
-        """Tick/cross/reopen a thread via the definer function.
+        """Tick or reopen a thread via the definer function.
 
         Raises whatever the function raises (not found / not authorised); the
         route maps that onto a status code.
@@ -103,47 +102,6 @@ class SupabaseAnnotationManager(IAnnotationRepository):
             "set_annotation_resolution",
             {"annotation_id": annotation_id, "new_resolution": resolution},
         ).execute()
-
-    # --- Shares ---
-
-    async def list_shares(self, job_id: str) -> list[dict]:
-        resp = (
-            await self._client.table(SHARES)
-            .select("*")
-            .eq("job_id", job_id)
-            .execute()
-        )
-        return resp.data or []
-
-    async def create_share(
-        self, job_id: str, user_id: str, role: str, granted_by: str
-    ) -> Optional[dict]:
-        """Grant access. Upserts so re-sharing to the same user changes the role
-        rather than failing on the composite primary key."""
-        resp = (
-            await self._client.table(SHARES)
-            .upsert(
-                {
-                    "job_id": job_id,
-                    "user_id": user_id,
-                    "role": role,
-                    "granted_by": granted_by,
-                },
-                on_conflict="job_id,user_id",
-            )
-            .execute()
-        )
-        rows = resp.data or []
-        return rows[0] if rows else None
-
-    async def delete_share(self, job_id: str, user_id: str) -> None:
-        await (
-            self._client.table(SHARES)
-            .delete()
-            .eq("job_id", job_id)
-            .eq("user_id", user_id)
-            .execute()
-        )
 
     # --- Profiles ---
 

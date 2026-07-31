@@ -139,22 +139,6 @@ class TestSupabaseAnnotationManager:
         sent_ids = in_call.call_args.args[1]
         assert sorted(sent_ids) == ["u1", "u2"]
 
-    def test_create_share_upserts_so_resharing_changes_role(self, am, mock_client):
-        """Re-sharing to the same user updates their role instead of failing on
-        the composite primary key."""
-        mock_client.table.return_value.upsert.return_value.execute = AsyncMock(
-            return_value=Mock(
-                data=[{"job_id": "job-1", "user_id": "u2", "role": "viewer"}]
-            )
-        )
-
-        asyncio.run(am.create_share("job-1", "u2", "viewer", "u1"))
-
-        kwargs = mock_client.table.return_value.upsert.call_args.kwargs
-        assert kwargs["on_conflict"] == "job_id,user_id"
-        row = mock_client.table.return_value.upsert.call_args.args[0]
-        assert row["granted_by"] == "u1"
-
 
 class TestAnnotationRequestValidation:
     """The root/reply shape rules the routes enforce before reaching the DB."""
@@ -307,3 +291,31 @@ class TestResolutionErrorContract:
         assert "exc.code ==" in body, "resolution errors must be matched by SQLSTATE"
         # The old implementation did `message = str(exc)` then substring checks.
         assert "str(exc)" not in body, "matching on the exception text is what broke"
+
+
+class TestResolutionIsSingleValued:
+    """Resolution is the tick only - the cross was removed. These keep the enum,
+    the DB constraint and the definer function's validation from drifting apart,
+    since a value accepted by one and refused by another surfaces as a 500."""
+
+    def test_enum_offers_only_accepted(self):
+        from api.schemas import AnnotationResolution
+
+        assert [r.value for r in AnnotationResolution] == ["accepted"]
+
+    def test_check_constraint_matches_the_enum(self):
+        from api.schemas import AnnotationResolution
+
+        sql = Path("sql/annotations.sql").read_text()
+        constraint = sql.split("constraint annotations_resolution_valid")[1].split("),")[0]
+        for value in (r.value for r in AnnotationResolution):
+            assert value in constraint
+        assert "rejected" not in constraint
+
+    def test_definer_function_rejects_anything_else(self):
+        sql = Path("sql/annotations.sql").read_text()
+        fn = sql.split("create or replace function set_annotation_resolution")[1].split("$$;")[0]
+        # Guards the whole point: a value the API would accept must not be
+        # refused by the function, and vice versa.
+        assert "new_resolution <> 'accepted'" in fn
+        assert "'rejected'" not in fn

@@ -128,10 +128,10 @@ class AnnotationSection(str, Enum):
 
 
 class AnnotationResolution(str, Enum):
-    """Thread outcome. Absent means still open; a rejection's reason lives in a
-    reply, not here, so every piece of prose belongs to its author."""
-    ACCEPTED = "accepted"  # the tick
-    REJECTED = "rejected"  # the cross
+    """Thread outcome. Absent means still open. Single-valued today (the tick);
+    kept as an enum rather than a boolean so another outcome is an added member
+    rather than a column migration."""
+    ACCEPTED = "accepted"
 
 
 class AnnotationAuthor(BaseModel):
@@ -178,7 +178,7 @@ class AnnotationUpdateRequest(BaseModel):
 
 
 class AnnotationResolveRequest(BaseModel):
-    """Tick, cross, or reopen. Null reopens."""
+    """Tick or reopen. Null reopens."""
     resolution: Optional[AnnotationResolution] = None
 
 
@@ -199,28 +199,3 @@ class AnnotationResponse(BaseModel):
     author: AnnotationAuthor
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
-
-
-# --- Sharing ---
-
-class ShareRole(str, Enum):
-    """What a share conveys. Never refine/approve/delete - those stay with the
-    owner (and admins)."""
-    COMMENTER = "commenter"  # may read and annotate
-    VIEWER = "viewer"        # may read annotations only
-
-
-class ShareCreateRequest(BaseModel):
-    user_id: str
-    role: ShareRole = ShareRole.COMMENTER
-
-
-class ShareResponse(BaseModel):
-    job_id: str
-    user_id: str
-    role: ShareRole
-    granted_by: Optional[str] = None
-    created_at: Optional[str] = None
-    # Display identity of the collaborator, when a profile row exists.
-    display_name: Optional[str] = None
-    avatar_url: Optional[str] = None
