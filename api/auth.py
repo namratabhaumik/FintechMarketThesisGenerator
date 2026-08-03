@@ -21,7 +21,9 @@ from fastapi import Depends, Header, HTTPException
 from jwt import PyJWKClient
 from supabase import acreate_client
 
+from api.supabase_annotation_manager import SupabaseAnnotationManager
 from api.supabase_job_manager import SupabaseJobManager
+from core.interfaces.annotation_repository import IAnnotationRepository
 from core.interfaces.job_manager import IJobManager
 
 logger = logging.getLogger(__name__)
@@ -143,8 +145,8 @@ def get_current_user(authorization: str | None = Header(default=None)) -> AuthUs
             algorithms=["ES256"],
             audience="authenticated",
         )
-    except Exception:
-        raise _unauthorized("Invalid or expired token")
+    except Exception as err:
+        raise _unauthorized("Invalid or expired token") from err
     sub = claims.get("sub")
     if not sub:
         raise _unauthorized("Token has no subject")
@@ -178,5 +180,28 @@ async def get_user_job_manager(
     client.postgrest.auth(user.token)
     try:
         yield SupabaseJobManager(client)
+    finally:
+        await _client_pool.release(client)
+
+
+async def get_user_annotation_manager(
+    user: AuthUser = Depends(get_current_user),
+) -> AsyncIterator[IAnnotationRepository]:
+    """A per-request annotation manager on a user-scoped client, so annotation and
+    profile queries both run under RLS as the caller.
+
+    Same pooling contract as get_user_job_manager: the postgrest.auth() re-scope
+    below MUST run after every acquire() and before any query, because a pooled
+    client still carries the previous caller's token until it does.
+    """
+    if _client_pool is None:
+        raise RuntimeError(
+            "Client pool not initialized. Call init_client_pool() at startup."
+        )
+
+    client = await _client_pool.acquire()
+    client.postgrest.auth(user.token)
+    try:
+        yield SupabaseAnnotationManager(client)
     finally:
         await _client_pool.release(client)

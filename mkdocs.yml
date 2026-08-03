@@ -45,6 +45,7 @@ nav:
   - Guides:
       - Authentication: guides/auth.md
       - Refining a thesis: guides/refining-a-thesis.md
+      - Annotating a thesis: guides/annotating.md
       - Library, resume and recall: guides/library-and-recall.md
       - Exporting and sharing: guides/exporting.md
       - Administration: guides/admin.md

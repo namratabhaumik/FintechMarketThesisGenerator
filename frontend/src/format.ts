@@ -21,6 +21,22 @@ export function fmtDate(iso: string): string {
   return `${MONTHS[d.getMonth()]} ${day}, ${d.getFullYear()}`;
 }
 
+/** Date plus local wall-clock time, e.g. "Jul 30, 2026 12:34 pm".
+ *
+ * Comments in a thread are minutes apart, so a date alone cannot order them.
+ * Rendered in the reader's own timezone: the stored value is UTC, and a note
+ * written at 6pm should not read as though it were written the next morning. */
+export function fmtDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const hours = d.getHours();
+  const suffix = hours < 12 ? "am" : "pm";
+  // 0 and 12 both display as 12 on a 12-hour clock.
+  const hour12 = hours % 12 === 0 ? 12 : hours % 12;
+  const minutes = String(d.getMinutes()).padStart(2, "0");
+  return `${fmtDate(iso)} ${hour12}:${minutes} ${suffix}`;
+}
+
 /** "Source Articles (Jun 01, 2026 - Jul 03, 2026)", collapsing a single date. */
 export function sourcesLabel(sources: SourceResponse[]): string {
   const times = sources

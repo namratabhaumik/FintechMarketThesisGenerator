@@ -43,8 +43,10 @@ def test_collect_raw_lands_entries_verbatim(monkeypatch):
     _patch_feed(
         monkeypatch,
         [
-            {"title": "A fintech bank", "description": "banking", "link": "https://x/1", "published_parsed": PUB_PARSED},
-            {"title": "A space launch", "description": "space", "link": "https://x/2", "published_parsed": PUB_PARSED},
+            {"title": "A fintech bank", "description": "banking", 
+             "link": "https://x/1", "published_parsed": PUB_PARSED},
+            {"title": "A space launch", "description": "space", 
+             "link": "https://x/2", "published_parsed": PUB_PARSED},
         ],
     )
     source = RSSArticleSource([_feed_config(name="TechCrunch")])
@@ -63,7 +65,8 @@ def test_collect_raw_parses_published_date(monkeypatch):
     _patch_feed(
         monkeypatch,
         [
-            {"title": "A fintech bank", "description": "banking", "link": "https://x/1", "published_parsed": PUB_PARSED},
+            {"title": "A fintech bank", "description": "banking", 
+             "link": "https://x/1", "published_parsed": PUB_PARSED},
         ],
     )
     source = RSSArticleSource([_feed_config()])
@@ -82,7 +85,8 @@ def test_collect_raw_skips_dateless_entries(monkeypatch):
         monkeypatch,
         [
             {"title": "no date", "description": "d", "link": "https://x/1"},
-            {"title": "has date", "description": "d", "link": "https://x/2", "published_parsed": PUB_PARSED},
+            {"title": "has date", "description": "d", 
+             "link": "https://x/2", "published_parsed": PUB_PARSED},
         ],
     )
     source = RSSArticleSource([_feed_config()])
@@ -94,17 +98,20 @@ def test_collect_raw_skips_dateless_entries(monkeypatch):
 
 def test_collect_raw_dedupes_overlapping_entries_across_feeds(monkeypatch):
     """An article appearing in two feeds is landed only once."""
-    shared = {"title": "A fintech bank launches", "description": "banking", "link": "https://x/shared", "published_parsed": PUB_PARSED}
+    shared = {"title": "A fintech bank launches", "description": "banking", 
+              "link": "https://x/shared", "published_parsed": PUB_PARSED}
     _patch_feeds_by_url(
         monkeypatch,
         {
             "https://techcrunch.com/feed/": [
                 shared,
-                {"title": "A space launch", "description": "space", "link": "https://x/space", "published_parsed": PUB_PARSED},
+                {"title": "A space launch", "description": "space", 
+                 "link": "https://x/space", "published_parsed": PUB_PARSED},
             ],
             "https://techcrunch.com/category/fintech/feed/": [
                 shared,  # same link -> should be deduped
-                {"title": "A fintech wallet app", "description": "payments", "link": "https://x/wallet", "published_parsed": PUB_PARSED},
+                {"title": "A fintech wallet app", "description": "payments", 
+                 "link": "https://x/wallet", "published_parsed": PUB_PARSED},
             ],
         },
     )

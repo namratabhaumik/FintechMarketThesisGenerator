@@ -5,6 +5,8 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, Mock
 
+from pydantic import ValidationError
+
 from api.schemas import ThesisRequest, RefinementRequest
 
 
@@ -53,7 +55,8 @@ class TestSupabaseJobManager:
 
     def test_get_job_found(self, jm, mock_client):
         """Test retrieving an existing job."""
-        mock_client.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute = AsyncMock(
+        chain = mock_client.table.return_value.select.return_value.eq.return_value
+        chain.maybe_single.return_value.execute = AsyncMock(
             return_value=Mock(
                 data={"id": "abc123", "query": "neobanking", "thesis": None}
             )
@@ -64,7 +67,8 @@ class TestSupabaseJobManager:
 
     def test_get_job_not_found(self, jm, mock_client):
         """Test that missing job returns None."""
-        mock_client.table.return_value.select.return_value.eq.return_value.maybe_single.return_value.execute = AsyncMock(
+        chain = mock_client.table.return_value.select.return_value.eq.return_value
+        chain.maybe_single.return_value.execute = AsyncMock(
             return_value=Mock(data=None)
         )
         assert asyncio.run(jm.get_job("nonexistent")) is None
@@ -174,7 +178,7 @@ class TestSchemas:
 
     def test_thesis_request_empty_query_rejected(self):
         """Test that empty query is rejected."""
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             ThesisRequest(query="")
 
     def test_refinement_request_valid(self):
@@ -189,7 +193,7 @@ class TestSchemas:
         job = JobResponse(job_id="j", query="q", refinement_status="refining")
         assert job.refinement_status == RefinementStatus.REFINING
         assert job.model_dump(mode="json")["refinement_status"] == "refining"
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             JobResponse(job_id="j", query="q", refinement_status="bogus")
 
 

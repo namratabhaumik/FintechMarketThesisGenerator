@@ -151,7 +151,7 @@ class SilverService:
                     raise ClassifierOutageError(
                         f"Classifier failed on {consecutive_errors} articles in a "
                         f"row; aborting run. Last error: {e}"
-                    )
+                    ) from e
                 continue
 
             consecutive_errors = 0  # a success breaks the failure streak

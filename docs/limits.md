@@ -9,6 +9,7 @@ The boundaries you may run into, and why they exist.
 | Refinement rounds per thesis | 3 | After three grounded revisions, the leverage is in rephrasing the query, not re-polishing the same evidence. Enforced server-side. |
 | Sources per thesis | Up to 50 articles | Every distinct article that clears the relevance floor is shown, so the score, tags, and confidence reflect real coverage rather than a small sample. The narrative itself is written from a smaller MMR-selected subset (relevance with a redundancy penalty) to keep it focused and cheap. Configurable via `RETRIEVAL_MAX_ARTICLES`; sparse topics surface far fewer. |
 | Compare view | Current + 2 past theses | Three columns is where the side-by-side table stops being skimmable. |
+| Annotations | Pinned to one thesis version | Offsets are only meaningful against the text they were written on, and a superseded version's text is frozen. A refinement therefore starts a version with no notes. |
 | Related-theses recall floor | 86% query similarity | Recall means "same topic researched before", not "also fintech". |
 | Corpus scope | Curated fintech news feeds | Tagging, scoring, and trends all assume the fintech taxonomy; general-purpose queries refuse rather than stretch. |
 
@@ -20,8 +21,9 @@ Applied per account:
 | --- | --- |
 | Thesis generation | 10 per minute |
 | Refinement | 20 per minute |
+| Annotation writes (add, edit, resolve, delete) | 60 per minute |
 
-Exceeding a limit returns `429` with a `rate_limit_exceeded` error; wait for the window to reset and retry. The generation and refinement endpoints are limited because each invokes the language model; reads (library, single thesis, health) are not separately limited by default.
+Exceeding a limit returns `429` with a `rate_limited` error; wait for the window to reset and retry. Generation and refinement are limited because each invokes the language model. Annotation writes cost no tokens, so their limit is a row-flooding guard set well above normal note-taking. Reads (library, single thesis, annotations, health) are not separately limited by default.
 
 ## Hosting characteristics
 

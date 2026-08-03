@@ -68,6 +68,12 @@ jobs:
       working-directory: frontend
       run: npm ci
 
+    # Audit only the deps that ship to the browser; dev-tooling advisories
+    # (build/test only) don't warrant blocking a deploy. Fails on high+.
+    - name: Audit frontend production dependencies
+      working-directory: frontend
+      run: npm audit --omit=dev --audit-level=high
+
     - name: Generate API types from the OpenAPI schema
       working-directory: frontend
       run: npm run generate
@@ -76,24 +82,30 @@ jobs:
       working-directory: frontend
       run: npm run typecheck
 
+    - name: Lint frontend
+      working-directory: frontend
+      run: npm run lint
+
     # On push (not PRs), build the prod bundle for the matching source branch,
-    # baking in that env's API_BASE/Supabase values.
+    # baking in that env's API_BASE/Supabase values. Vite reads VITE_-prefixed
+    # env vars at build time (see config.ts); the vars.* source names are
+    # unchanged.
     - name: Build frontend (dev)
       if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
       working-directory: frontend
       env:
-        API_BASE: ${{ vars.DEV_API_BASE }}
-        SUPABASE_URL: ${{ vars.DEV_SUPABASE_URL }}
-        SUPABASE_ANON_KEY: ${{ vars.DEV_SUPABASE_ANON_KEY }}
+        VITE_API_BASE: ${{ vars.DEV_API_BASE }}
+        VITE_SUPABASE_URL: ${{ vars.DEV_SUPABASE_URL }}
+        VITE_SUPABASE_ANON_KEY: ${{ vars.DEV_SUPABASE_ANON_KEY }}
       run: npm run build
 
     - name: Build frontend (prod)
       if: github.event_name == 'push' && github.ref == 'refs/heads/master'
       working-directory: frontend
       env:
-        API_BASE: ${{ vars.PROD_API_BASE }}
-        SUPABASE_URL: ${{ vars.PROD_SUPABASE_URL }}
-        SUPABASE_ANON_KEY: ${{ vars.PROD_SUPABASE_ANON_KEY }}
+        VITE_API_BASE: ${{ vars.PROD_API_BASE }}
+        VITE_SUPABASE_URL: ${{ vars.PROD_SUPABASE_URL }}
+        VITE_SUPABASE_ANON_KEY: ${{ vars.PROD_SUPABASE_ANON_KEY }}
       run: npm run build
 
     - name: Upload built frontend
