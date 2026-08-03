@@ -78,6 +78,19 @@ class TestFetchExistingUrls:
         assert existing == {"a"}
         assert client.calls[0]["in_"] == ("metadata->>url", ["a", "b"])
 
+    def test_large_batch_is_split_across_several_lookups(self):
+        """`in_` is serialized into the query string, so one list of every pending
+        URL can outgrow the gateway's URI limit on a backlog run. The answer must
+        still be complete once the slices are unioned."""
+        urls = [f"u{i}" for i in range(250)]
+        client = _FakeClient(stored_urls={"u0", "u149", "u249"})
+
+        existing = _store(client)._fetch_existing_urls(urls)
+
+        assert existing == {"u0", "u149", "u249"}
+        assert len(client.calls) == 3  # 250 urls at a batch of 100
+        assert all(len(c["in_"][1]) <= 100 for c in client.calls)
+
     def test_empty_batch_skips_the_read_entirely(self):
         client = _FakeClient(stored_urls={"a"})
         assert _store(client)._fetch_existing_urls([]) == set()

@@ -30,3 +30,11 @@ The similarity floor is high on purpose (86%): a related entry means "you have r
   allowfullscreen></iframe>
 
 Tick up to two related theses and click **Compare with current** for a side-by-side table: date, score, confidence, recommendation, themes, risks, and signals as rows, one column per thesis. The current thesis is always the first column. The cap of three columns total keeps the table readable; with two past theses selected, the remaining checkboxes disable themselves.
+
+### Comparing across a change in how theses are built
+
+A thesis is a point-in-time record. It is never recomputed, which is what makes an old one still mean what it meant the day it was generated - but it also means two theses built under different versions of the pipeline are not strictly comparable, even for the same query.
+
+The change worth knowing about: theses generated before August 2026 ranked their tags by raw frequency across the sources. Later ones rank by how **over-represented** a tag is against the corpus as a whole (see [The thesis pipeline](../concepts/pipeline.md#why-tags-rank-by-lift-not-by-count)). The newer ones surface more query-specific themes, and because the opportunity score reads the same evidence, it can differ too. A difference between the columns may reflect the change in method rather than a change in the market.
+
+Theses from before that change also carry no citation trail behind their tags, and no week fraction under Confidence. Both are computed at generation time and neither can be faithfully reconstructed afterwards - the corpus has moved on since - so they are left absent rather than filled in with a guess.

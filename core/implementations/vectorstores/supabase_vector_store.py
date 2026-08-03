@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 TABLE = "documents"
 # Name of the Supabase SQL function used for similarity search over that table.
 QUERY_NAME = "match_documents"
+# How many URLs to ask about per dedup lookup. `in_` is serialized into the query
+# string, so an unbounded batch can exceed the gateway's URI limit.
+URL_LOOKUP_BATCH = 100
 
 
 class SupabaseVectorStoreImpl(IVectorStore):
@@ -199,17 +202,23 @@ class SupabaseVectorStoreImpl(IVectorStore):
         """
         if not urls:
             return set()
-        try:
-            # Ask only about this batch's URLs; `in_` filters server-side.
-            resp = (
-                self._client.table(TABLE)
-                .select("metadata->>url")
-                .in_("metadata->>url", urls)
-                .execute()
-            )
-        except Exception as e:
-            # Read failed --> raise (do NOT swallow), because an empty set here
-            # would make build() re-embed everything and duplicate chunks.
-            raise RuntimeError(f"Failed to read existing URLs from Supabase: {e}") from e
-        # Many chunks per article --> the set collapses them to one entry per URL.
-        return {row["url"] for row in resp.data if row.get("url")}
+        found: Set[str] = set()
+        # `in_` goes into the query STRING, so one list of every pending URL can
+        # outgrow the gateway's URI limit on a backlog run (a few hundred
+        # articles at ~80 chars each). Ask in slices and union the answers.
+        for i in range(0, len(urls), URL_LOOKUP_BATCH):
+            chunk = urls[i:i + URL_LOOKUP_BATCH]
+            try:
+                resp = (
+                    self._client.table(TABLE)
+                    .select("metadata->>url")
+                    .in_("metadata->>url", chunk)
+                    .execute()
+                )
+            except Exception as e:
+                # Read failed --> raise (do NOT swallow), because a short set here
+                # would make build() re-embed those articles and duplicate chunks.
+                raise RuntimeError(f"Failed to read existing URLs from Supabase: {e}") from e
+            # Many chunks per article --> the set collapses them to one per URL.
+            found.update(row["url"] for row in (resp.data or []) if row.get("url"))
+        return found

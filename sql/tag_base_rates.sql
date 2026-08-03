@@ -23,7 +23,11 @@ create table if not exists tag_base_rates (
     category        text    not null,
     article_count   integer not null,
     total_articles  integer not null,
-    computed_at     timestamptz,
+    -- NOT NULL because the stale-row cleanup is `delete ... where computed_at
+    -- <> <this run>`, and in Postgres NULL <> value is NULL, not true. An
+    -- unstamped row would survive every recompute and stay a live lift
+    -- denominator forever.
+    computed_at     timestamptz not null,
 
     primary key (dimension, category),
     constraint tag_base_rates_count_nonneg check (article_count >= 0),
@@ -31,3 +35,8 @@ create table if not exists tag_base_rates (
 );
 
 alter table tag_base_rates enable row level security;
+
+-- Migration for an environment that already created this table without the
+-- NOT NULL (every row Gold writes is stamped, so this should not rewrite any):
+--   update tag_base_rates set computed_at = now() where computed_at is null;
+--   alter table tag_base_rates alter column computed_at set not null;
