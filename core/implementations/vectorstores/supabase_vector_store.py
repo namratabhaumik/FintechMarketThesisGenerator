@@ -21,6 +21,9 @@ logger = logging.getLogger(__name__)
 TABLE = "documents"
 # Name of the Supabase SQL function used for similarity search over that table.
 QUERY_NAME = "match_documents"
+# How many URLs to ask about per dedup lookup. `in_` is serialized into the query
+# string, so an unbounded batch can exceed the gateway's URI limit.
+URL_LOOKUP_BATCH = 100
 
 
 class SupabaseVectorStoreImpl(IVectorStore):
@@ -47,8 +50,11 @@ class SupabaseVectorStoreImpl(IVectorStore):
         new --> split them into chunks --> embed + upsert --> return a retriever-
         ready vector store.
         """
-        # URLs already embedded in a previous run (our dedup key).
-        existing = self._fetch_existing_urls()
+        # URLs already embedded in a previous run (our dedup key), looked up for
+        # this batch only.
+        existing = self._fetch_existing_urls(
+            [u for u in (d.metadata.get("url", "") for d in documents) if u]
+        )
         # new_docs: documents whose URL is NOT already in the store. Anything
         # already embedded is filtered out here so we never re-embed it.
         new_docs = [
@@ -180,25 +186,39 @@ class SupabaseVectorStoreImpl(IVectorStore):
             return json.loads(value)
         return value
 
-    def _fetch_existing_urls(self) -> Set[str]:
-        """Return the article URLs already embedded, for internal build dedup.
+    def _fetch_existing_urls(self, urls: List[str]) -> Set[str]:
+        """Which of `urls` are already embedded, for internal build dedup.
+
+        Asks only about the batch's own URLs rather than reading the whole table.
+        PostgREST caps an unfiltered read at its max-rows setting; a scan of
+        every chunk silently returns a PARTIAL set once the table outgrows that
+        cap --> already-embedded articles look new --> build() re-embeds them and
+        duplicate chunks land. A filtered read returns one row per match, so the
+        answer stays complete at any table size (and costs O(batch), not O(corpus)).
 
         Raises on read failure instead of returning an empty set: a silent empty
         set would make build() treat every document as new and re-insert chunks,
-        duplicating embeddings. 
+        duplicating embeddings.
         """
-        try:
-            # Pull just the metadata column from every stored chunk.
-            resp = self._client.table(TABLE).select("metadata").execute()
-        except Exception as e:
-            # Read failed --> raise (do NOT swallow), because an empty set here
-            # would make build() re-embed everything and duplicate chunks.
-            raise RuntimeError(f"Failed to read existing URLs from Supabase: {e}") from e
-        # Build a set of the URLs found in metadata. A set gives fast "is this
-        # URL already stored?" lookups and collapses the many chunks per article
-        # down to one entry per URL.
-        return {
-            row["metadata"].get("url", "")
-            for row in resp.data
-            if row.get("metadata")
-        }
+        if not urls:
+            return set()
+        found: Set[str] = set()
+        # `in_` goes into the query STRING, so one list of every pending URL can
+        # outgrow the gateway's URI limit on a backlog run (a few hundred
+        # articles at ~80 chars each). Ask in slices and union the answers.
+        for i in range(0, len(urls), URL_LOOKUP_BATCH):
+            chunk = urls[i:i + URL_LOOKUP_BATCH]
+            try:
+                resp = (
+                    self._client.table(TABLE)
+                    .select("metadata->>url")
+                    .in_("metadata->>url", chunk)
+                    .execute()
+                )
+            except Exception as e:
+                # Read failed --> raise (do NOT swallow), because a short set here
+                # would make build() re-embed those articles and duplicate chunks.
+                raise RuntimeError(f"Failed to read existing URLs from Supabase: {e}") from e
+            # Many chunks per article --> the set collapses them to one per URL.
+            found.update(row["url"] for row in (resp.data or []) if row.get("url"))
+        return found

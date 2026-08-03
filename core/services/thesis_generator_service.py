@@ -2,20 +2,26 @@
 
 import asyncio
 import logging
-from collections import Counter
+import math
+from collections import Counter, defaultdict
 from datetime import date, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from langchain_core.documents import Document
 
 from config.settings import FEEDBACK_LENS
 from core.interfaces.llm import SOURCE_LLM, ILanguageModel, summary_source_var
 from core.interfaces.trend_repository import ITrendRepository
-from core.models.thesis import StructuredThesis
+from core.models.tag_base_rate import TagBaseRate
+from core.models.thesis import RankedTag, StructuredThesis
 from core.models.trend_metric import TrendMetric
+
 from finthesis_internal.opportunity_scoring_service import OpportunityScoringService
 
 logger = logging.getLogger(__name__)
+
+# Silver metadata key --> the dimension name Gold and the base rates use.
+DIMENSIONS = {"themes": "theme", "risks": "risk", "signals": "signal"}
 
 
 def _tag_counters(documents: List[Document]) -> Dict[str, "Counter[str]"]:
@@ -38,25 +44,114 @@ def _tag_counters(documents: List[Document]) -> Dict[str, "Counter[str]"]:
     return counters
 
 
+def _tag_evidence(documents: List[Document]) -> Dict[str, Dict[str, List[str]]]:
+    """Silver key --> tag label --> URLs of the pool articles carrying it.
+
+    One vote per article (a label repeated within one article's tag list still
+    counts once), which is what makes `article_count` mean "how many articles
+    reported this" rather than "how many times the word appeared".
+    """
+    evidence: Dict[str, Dict[str, List[str]]] = {
+        key: defaultdict(list) for key in DIMENSIONS
+    }
+    for doc in documents:
+        metadata = doc.metadata or {}
+        url = metadata.get("url", "")
+        for key, by_label in evidence.items():
+            # dict.fromkeys dedupes while keeping first-seen order.
+            for label in dict.fromkeys(metadata.get(key) or []):
+                by_label[label].append(url)
+    return {key: dict(by_label) for key, by_label in evidence.items()}
+
+
+def _min_source_articles(pool_size: int, fraction: float, floor: int = 3) -> int:
+    """How many articles a tag needs before its lift is trustworthy.
+
+    Relative to the pool, because lift on a tiny count is noise: one article
+    carrying a 0.5%-of-corpus tag scores a huge ratio purely by accident, and
+    ranking on that surfaces the rarest tag in the taxonomy every time. Scaling
+    with the pool keeps the bar at a fixed share of the displayed sources; the
+    floor keeps a narrow query (a handful of articles) from being held to a bar
+    it structurally cannot clear.
+    """
+    return max(floor, math.ceil(fraction * pool_size))
+
+
 def _ranked_tags_from_documents(
     documents: List[Document],
-) -> Tuple[List[str], List[str], List[str]]:
-    """Frequency-rank the Silver tags carried in the retrieved chunks' metadata.
+    base_rates: Optional[Dict[Tuple[str, str], float]] = None,
+    min_source_articles: int = 1,
+) -> Tuple[List[RankedTag], List[RankedTag], List[RankedTag]]:
+    """Rank the Silver tags the retrieved articles carry, best candidate first.
 
-    Returns the full ranked candidate list per dimension (themes, risks,
-    signals), most common first and UNCAPPED. These are the only tags the thesis
-    can ever surface - they come straight from the evidence, never invented.
+    Ranked by LIFT (share of this pool / share of the whole corpus), not raw
+    count. The pool is a wide slice of the corpus, so its most COMMON tags are
+    just the corpus's most common tags - ranking on count answers "what does
+    fintech news talk about?" on every query. Lift answers the question actually
+    being displayed: "what is this query's evidence unusually full of?".
+
+    Tags carried by fewer than `min_source_articles` articles are set aside before
+    ranking (see _min_source_articles). If that would leave a dimension empty - a thin
+    pool where nothing clears the bar - the unfiltered list is ranked instead,
+    so a narrow query still gets tags rather than none.
+
+    Falls back to count ranking when `base_rates` is missing or covers none of
+    these tags (Gold has not run yet). Degrading to the old behaviour beats
+    failing, and RankedTag.lift stays 0.0 to make the fallback visible.
+
+    Returns the full ranked candidate list per dimension, UNCAPPED. These are
+    the only tags the thesis can ever surface - they come from the evidence,
+    never invented.
     """
-    counters = _tag_counters(documents)
+    rates = base_rates or {}
+    evidence = _tag_evidence(documents)
+    pool_size = len(documents)
 
-    def _ranked(counter: "Counter[str]") -> List[str]:
-        return [label for label, _ in counter.most_common()]
+    def _ranked(key: str) -> List[RankedTag]:
+        dimension = DIMENSIONS[key]
+        tags = [
+            RankedTag(
+                label=label,
+                article_count=len(urls),
+                lift=(
+                    (len(urls) / pool_size) / rates[(dimension, label)]
+                    if pool_size and rates.get((dimension, label))
+                    else 0.0
+                ),
+                sources=urls,
+            )
+            for label, urls in evidence[key].items()
+        ]
+        if not any(tag.lift for tag in tags):
+            # No usable base rates -> rank by count, the pre-lift behaviour.
+            return sorted(tags, key=lambda t: (-t.article_count, t.label))
+        supported = [t for t in tags if t.article_count >= min_source_articles] or tags
+        return sorted(supported, key=lambda t: (-t.lift, -t.article_count, t.label))
 
-    return (
-        _ranked(counters["themes"]),
-        _ranked(counters["risks"]),
-        _ranked(counters["signals"]),
-    )
+    return _ranked("themes"), _ranked("risks"), _ranked("signals")
+
+
+def _labels(tags: Sequence[RankedTag]) -> List[str]:
+    """Just the labels, for the thesis fields that carry plain strings."""
+    return [tag.label for tag in tags]
+
+
+def _tag_sources(
+    themes: Sequence[RankedTag],
+    risks: Sequence[RankedTag],
+    signals: Sequence[RankedTag],
+) -> Dict[str, Dict[str, List[str]]]:
+    """The citation trail for the DISPLAYED tags only, keyed by dimension."""
+    return {
+        "themes": {t.label: t.sources for t in themes},
+        "risks": {t.label: t.sources for t in risks},
+        "signals": {t.label: t.sources for t in signals},
+    }
+
+
+def _base_rate_lookup(rates: Sequence[TagBaseRate]) -> Dict[Tuple[str, str], float]:
+    """(dimension, category) --> corpus share, the lift denominator."""
+    return {(r.dimension, r.category): r.rate for r in rates if r.rate > 0}
 
 
 def _tag_strengths_from_documents(
@@ -79,15 +174,25 @@ def _tag_strengths_from_documents(
 
 
 def _gold_confidence_inputs(
-    documents: List[Document],
+    displayed: Dict[str, Dict[str, List[str]]],
     metrics: List[TrendMetric],
     window_weeks: Optional[int],
 ) -> Tuple[int, int, Optional[date]]:
     """Derive the Gold-based confidence inputs for the thesis's categories.
 
-    Matches the FULL set of (dimension, category) tags the retrieved evidence
-    carries - across all three dimensions - against the Gold trend metrics, and
-    returns (covered_weeks, window_weeks, as_of):
+    Matches the tags the thesis DISPLAYS - across all three dimensions - against
+    the Gold trend metrics, and returns (covered_weeks, window_weeks, as_of).
+
+    Displayed rather than every tag the pool carries: a wide pool carries most of
+    the taxonomy, so some tag lands in every Gold week and the count degenerates
+    to "weeks that hold any data at all" - the same number for every query, and
+    one that stops moving once history fills in. Scoped to the handful actually
+    shown, a week counts only if the corpus discussed THOSE categories, so the
+    figure separates queries and still climbs as ingestion covers more weeks.
+
+    The weeks scanned never narrow; only the categories that count as a hit do.
+
+    Returns:
       - covered_weeks: how many of the evidence window's (i.e. Gold weeks ending at
         the latest week) had any coverage of those categories.
       - window_weeks: the window size in weeks - the confidence denominator. When
@@ -95,16 +200,24 @@ def _gold_confidence_inputs(
         Gold, earliest week to latest, inclusive.
       - as_of: the latest week present in Gold (data freshness), or None if empty.
 
-    The window is derived from the retrieval window, so a 1-year retrieval gives a
-    52-week window, a 6-month retrieval a 26-week window, and so on. Uses the
-    uncapped evidence tags, so the result is stable across a refinement session.
+    The window starts from the retrieval window (1-year retrieval --> 52 weeks,
+    6-month --> 26) but is capped at the span Gold actually holds: a week with no
+    data can never be covered (counting it in the denominator only measures
+    how much history the corpus is missing). Uncapped, the answer is to "what
+    share of a fixed year did we cover?" - which on a corpus younger than that
+    window is really just its age. Capped, it answers "of the weeks we have data
+    for, how many covered this query's categories?", which is the question the
+    number is displayed as.
+
+    Refinement can widen a dimension's cap by one, which can only ADD categories
+    and so can only add covered weeks - the figure moves monotonically with what
+    is on screen rather than jittering.
     """
-    counters = _tag_counters(documents)
-    evidence = (
-        {("theme", c) for c in counters["themes"]}
-        | {("risk", c) for c in counters["risks"]}
-        | {("signal", c) for c in counters["signals"]}
-    )
+    evidence = {
+        (DIMENSIONS[key], label)
+        for key, by_label in displayed.items()
+        for label in by_label
+    }
     if not metrics:
         return 0, (window_weeks or 1), None
 
@@ -112,11 +225,17 @@ def _gold_confidence_inputs(
     as_of = max(weeks_present)
     matching_weeks = {m.week_start for m in metrics if (m.dimension, m.category) in evidence}
 
+    # The weeks Gold actually holds, earliest to latest inclusive - the ceiling
+    # on any denominator.
+    gold_span = (as_of - min(weeks_present)).days // 7 + 1
+
     if window_weeks is None:
         # Whole-corpus retrieval: the window spans all of Gold.
-        window_weeks = (as_of - min(weeks_present)).days // 7 + 1
+        window_weeks = gold_span
         covered_weeks = len(matching_weeks)
     else:
+        # Retrieval window wider than Gold --> use Gold's span instead.
+        window_weeks = min(window_weeks, gold_span)
         window = {as_of - timedelta(weeks=i) for i in range(window_weeks)}
         covered_weeks = len(matching_weeks & window)
 
@@ -124,14 +243,14 @@ def _gold_confidence_inputs(
 
 
 def _apply_cap_deltas(
-    themes: List[str],
-    risks: List[str],
-    signals: List[str],
+    themes: List[RankedTag],
+    risks: List[RankedTag],
+    signals: List[RankedTag],
     theme_delta: int,
     risk_delta: int,
     signal_delta: int,
     base_cap: int,
-) -> Tuple[List[str], List[str], List[str]]:
+) -> Tuple[List[RankedTag], List[RankedTag], List[RankedTag]]:
     """Apply the QUANTITATIVE effect of feedback to the grounded tags.
 
     Every feedback item also drives the LLM narrative rewrite (the qualitative
@@ -271,6 +390,7 @@ class ThesisGeneratorService:
         trend_repository: ITrendRepository,
         retrieval_window_days: int = 365,
         max_tags_per_dimension: int = 3,
+        min_source_articles_fraction: float = 0.10,
     ):
         """Initialize with dependencies.
 
@@ -282,14 +402,18 @@ class ThesisGeneratorService:
             retrieval_window_days: The retrieval recency window (RETRIEVAL_WINDOW_DAYS).
                 The confidence window is derived from it - a 1-year retrieval gives
                 a 52-week confidence window. 0 (whole corpus) -> full Gold span.
-            max_tags_per_dimension: How many of the most common themes / risks /
+            max_tags_per_dimension: How many of the top-ranked themes / risks /
                 signals from the retrieved docs to surface per dimension.
+            min_source_articles_fraction: Share of the evidence pool a tag must appear in
+                before its lift is trusted (see _min_source_articles). Guards against a
+                one-article rare tag topping the ranking on an accidental ratio.
         """
         self._llm = llm
         self._scoring_service = scoring_service
         self._trend_repository = trend_repository
         self._retrieval_window_days = retrieval_window_days
         self._max_tags = max_tags_per_dimension
+        self._min_source_articles_fraction = min_source_articles_fraction
 
     async def generate_thesis(
         self,
@@ -370,16 +494,24 @@ class ThesisGeneratorService:
                 )
 
         # Step 3: Derive the structured tags - still deterministic, no LLM.
-        # Frequency-ranks the Silver tags carried in each article's metadata
-        # (matched on the raw article text at Silver time) across the WIDE pool,
-        # so the ranking reflects how broadly the market reported each tag.
+        # Lift-ranks the Silver tags carried in each article's metadata (matched
+        # on the raw article text at Silver time) across the WIDE pool, against
+        # the corpus-wide base rates, so the ranking reflects what this query's
+        # evidence is unusually full of rather than what the corpus is full of.
         logger.info("Step 3: Deriving grounded tags from retrieved documents...")
+        base_rates = await asyncio.to_thread(self._ranking_base_rates)
         ranked_themes, ranked_risks, ranked_signals = _ranked_tags_from_documents(
-            documents
+            documents,
+            base_rates,
+            _min_source_articles(len(documents), self._min_source_articles_fraction),
         )
-        key_themes = ranked_themes[: self._max_tags]
-        risks = ranked_risks[: self._max_tags]
-        investment_signals = ranked_signals[: self._max_tags]
+        top_themes = ranked_themes[: self._max_tags]
+        top_risks = ranked_risks[: self._max_tags]
+        top_signals = ranked_signals[: self._max_tags]
+        key_themes = _labels(top_themes)
+        risks = _labels(top_risks)
+        investment_signals = _labels(top_signals)
+        tag_sources = _tag_sources(top_themes, top_risks, top_signals)
 
         # Step 4: Extract sources from the wide pool (one URL per distinct
         # article - the analytics set already deduped by URL upstream).
@@ -404,7 +536,7 @@ class ThesisGeneratorService:
             self._trend_repository.fetch_recent, window_weeks
         )
         covered_weeks, window_weeks, as_of = _gold_confidence_inputs(
-            documents, metrics, window_weeks
+            tag_sources, metrics, window_weeks
         )
         score_result = self._scoring_service.score_opportunity(
             risks=risks,
@@ -424,9 +556,12 @@ class ThesisGeneratorService:
             raw_output=summary,
             opportunity_score=score_result["score"],
             confidence_level=score_result["confidence_level"],
+            covered_weeks=covered_weeks,
+            window_weeks=window_weeks,
             confidence_as_of=as_of,
             recommendation=score_result["recommendation"],
             key_risk_factors=score_result["key_risks"],
+            tag_sources=tag_sources,
             summary_source=summary_source,
             summary_status=summary_status,
             refusal_reason=refusal_reason,
@@ -528,9 +663,11 @@ class ThesisGeneratorService:
         # cap deltas (clamped, see _apply_cap_deltas).
         logger.info("Step 2: Deriving feedback-adjusted grounded tags...")
         ranked_themes, ranked_risks, ranked_signals = _ranked_tags_from_documents(
-            documents
+            documents,
+            await asyncio.to_thread(self._ranking_base_rates),
+            _min_source_articles(len(documents), self._min_source_articles_fraction),
         )
-        key_themes, risks, investment_signals = _apply_cap_deltas(
+        top_themes, top_risks, top_signals = _apply_cap_deltas(
             ranked_themes, ranked_risks, ranked_signals,
             theme_delta, risk_delta, signal_delta, self._max_tags
         )
@@ -541,11 +678,25 @@ class ThesisGeneratorService:
 
         logger.info("Successfully refined thesis content (scoring handled downstream)")
         return StructuredThesis(
-            key_themes=key_themes,
-            risks=risks,
-            investment_signals=investment_signals,
+            key_themes=_labels(top_themes),
+            risks=_labels(top_risks),
+            investment_signals=_labels(top_signals),
             sources=sources,
             raw_output=refined_summary,
+            tag_sources=_tag_sources(top_themes, top_risks, top_signals),
             summary_status=summary_status,
             refusal_reason=refusal_reason,
         )
+
+    def _ranking_base_rates(self) -> Dict[Tuple[str, str], float]:
+        """Corpus-wide tag shares, the lift denominator. Empty on any failure.
+
+        Gold may not have run yet (fresh deploy) or the read may fail; either way
+        ranking degrades to counts rather than the request failing, so a missing
+        Gold artifact never takes the thesis path down with it.
+        """
+        try:
+            return _base_rate_lookup(self._trend_repository.fetch_base_rates())
+        except Exception as e:
+            logger.warning(f"Base rates unavailable, ranking tags by count: {e}")
+            return {}

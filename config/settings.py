@@ -144,7 +144,9 @@ class RetrievalConfig:
     published within the last `window_days` from the query time (a sliding window
     that moves as time advances). The corpus is sparse and historic, so the
     default is a broad year. Set it to 0 to disable the filter and search the
-    whole corpus.
+    whole corpus. It doubles as the confidence denominator (converted to weeks in
+    `_gold_confidence_inputs`), but is capped there at the span Gold actually
+    holds, so a window wider than the corpus does not drag confidence down.
 
     `min_similarity` cosine floor applied to the `fetch_k` candidates before
     dedup (value specific to EMBEDDING_MODEL & corpus):
@@ -199,6 +201,11 @@ class AppConfig:
     classifier: ClassifierConfig = field(default_factory=ClassifierConfig)
     supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
     ai_gateway: AIGatewayConfig = field(default_factory=AIGatewayConfig)
+
+    # Share of the evidence pool a tag must appear in before its lift is trusted
+    # when ranking displayed tags. A single field rather than its own config
+    # object - it is the only knob the ranking step has.
+    tag_min_source_articles_fraction: float = 0.10
 
     rss_feeds: List[RSSFeedConfig] = field(default_factory=lambda: [
         RSSFeedConfig(
@@ -329,6 +336,12 @@ class AppConfig:
             min_similarity=float(os.getenv("RETRIEVAL_MIN_SIMILARITY", "0.72")),
         )
 
+        # Share of the evidence pool a tag must appear in before its lift is
+        # trusted for ranking. 0.10 of a 50-article pool = 5 articles.
+        tag_min_source_articles_fraction = float(
+            os.getenv("TAG_MIN_SOURCE_ARTICLES_FRACTION", "0.10")
+        )
+
         # Supabase configuration (optional — falls back to in-memory if not set)
         supabase_url = os.getenv("SUPABASE_URL", "")
         supabase_service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -367,6 +380,7 @@ class AppConfig:
             ),
             vectorstore=VectorStoreConfig(provider=vs_provider),
             retrieval=retrieval,
+            tag_min_source_articles_fraction=tag_min_source_articles_fraction,
             supabase=SupabaseConfig(
                 url=supabase_url,
                 service_role_key=supabase_service_role_key,

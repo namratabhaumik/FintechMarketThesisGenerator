@@ -754,6 +754,7 @@ class ServiceContainer:
                         scoring_service=scoring_service,
                         trend_repository=self.get_trend_repository(),
                         retrieval_window_days=self._config.retrieval.window_days,
+                        min_source_articles_fraction=self._config.tag_min_source_articles_fraction,
                     )
         return self._thesis_service
 

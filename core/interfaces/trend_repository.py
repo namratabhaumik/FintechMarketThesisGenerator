@@ -3,6 +3,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional
 
+from core.models.tag_base_rate import TagBaseRate
 from core.models.trend_metric import TrendMetric
 
 
@@ -45,5 +46,28 @@ class ITrendRepository(ABC):
         `window_weeks=None` (whole-corpus retrieval) returns everything, same as
         fetch_all. The scoped result is equivalent to fetch_all for confidence
         purposes: the window is exactly that range, so nothing counted is lost.
+        """
+        pass
+
+    @abstractmethod
+    def upsert_base_rates(self, rates: List[TagBaseRate]) -> int:
+        """Replace the stored corpus-wide tag base rates.
+
+        Same recompute-from-scratch contract as `upsert`: a write for a given
+        (dimension, category) overwrites the old rate. Categories that have since
+        disappeared from the corpus are deleted, so a stale rate can never linger
+        as a lift denominator.
+
+        Returns:
+            How many base-rate rows were written.
+        """
+        pass
+
+    @abstractmethod
+    def fetch_base_rates(self) -> List[TagBaseRate]:
+        """Return every stored base rate. Empty when Gold has not run yet.
+
+        Callers must treat empty as "no base rates available" and degrade to
+        unweighted ranking rather than failing - a fresh corpus has no Gold.
         """
         pass
