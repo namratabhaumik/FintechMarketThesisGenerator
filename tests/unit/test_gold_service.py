@@ -29,10 +29,15 @@ class _FakeSilverRepo:
 class _FakeTrendRepo:
     def __init__(self):
         self.upserted = []
+        self.base_rates = []
 
     def upsert(self, metrics):
         self.upserted = list(metrics)
         return len(metrics)
+
+    def upsert_base_rates(self, rates):
+        self.base_rates = list(rates)
+        return len(rates)
 
 
 class _FakeUntaggedRepo:
@@ -91,6 +96,40 @@ def test_buckets_by_week_dimension_and_category_excluding_non_fintech():
         (date(2026, 1, 12), "theme", "Crypto"): 1,
     }
     assert written == len(trend_repo.upserted)
+
+
+def test_base_rates_roll_the_weekly_tallies_up_across_the_corpus():
+    """Base rates are the same tallies summed over weeks: Payments appears in 2 of
+    the 3 fintech articles, so its corpus rate is 2/3. The non-fintech article is
+    excluded from the denominator, as it is from every bucket."""
+    articles = [_raw("https://x/1", 7), _raw("https://x/2", 8), _raw("https://x/3", 14), _raw("https://x/4", 7)]
+    tags = {
+        "https://x/1": _tags(themes=["Payments"], risks=["Regulatory Risk"]),
+        "https://x/2": _tags(themes=["Crypto"], signals=["Crypto & Web3 Opportunity"]),
+        "https://x/3": _tags(themes=["Payments", "Crypto"]),
+        # x/4 absent from tags -> not fintech -> excluded
+    }
+    trend_repo = _FakeTrendRepo()
+    _service(articles, tags, trend_repo).build()
+
+    rates = {(r.dimension, r.category): r for r in trend_repo.base_rates}
+    assert {k: v.article_count for k, v in rates.items()} == {
+        ("theme", "Payments"): 2,
+        ("theme", "Crypto"): 2,
+        ("risk", "Regulatory Risk"): 1,
+        ("signal", "Crypto & Web3 Opportunity"): 1,
+    }
+    # Every row shares the denominator: the fintech articles Gold aggregated.
+    assert {r.total_articles for r in trend_repo.base_rates} == {3}
+    assert rates[("theme", "Payments")].rate == 2 / 3
+    assert rates[("risk", "Regulatory Risk")].rate == 1 / 3
+
+
+def test_no_articles_writes_no_base_rates():
+    """An empty corpus must not write a zero denominator for anything to divide by."""
+    trend_repo = _FakeTrendRepo()
+    _service([], {}, trend_repo).build()
+    assert trend_repo.base_rates == []
 
 
 def test_bucket_carries_distinct_contributing_load_ids():

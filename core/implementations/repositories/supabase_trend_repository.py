@@ -7,12 +7,15 @@ from typing import List, Optional
 from supabase import Client
 
 from core.interfaces.trend_repository import ITrendRepository
+from core.models.tag_base_rate import TagBaseRate
 from core.models.trend_metric import TrendMetric
 
 logger = logging.getLogger(__name__)
 
 # Gold-layer table: one article count per (week, dimension, category) bucket.
 TABLE = "trend_metrics"
+# Gold-layer table: one corpus-wide share per (dimension, category).
+BASE_RATE_TABLE = "tag_base_rates"
 
 
 class SupabaseTrendRepository(ITrendRepository):
@@ -98,6 +101,39 @@ class SupabaseTrendRepository(ITrendRepository):
         )
         return [self._to_metric(row) for row in (resp.data or [])]
 
+    def upsert_base_rates(self, rates: List[TagBaseRate]) -> int:
+        # One computed_at per recompute, same lineage story as upsert().
+        computed_at = datetime.now(timezone.utc).isoformat()
+        rows = [
+            {
+                "dimension": r.dimension,
+                "category": r.category,
+                "article_count": r.article_count,
+                "total_articles": r.total_articles,
+                "computed_at": computed_at,
+            }
+            for r in rates
+        ]
+        if not rows:
+            return 0
+        self._client.table(BASE_RATE_TABLE).upsert(
+            rows, on_conflict="dimension,category"
+        ).execute()
+        # A category that left the corpus (taxonomy edit, or its last article
+        # dropped) would otherwise keep its old row and stay a live lift
+        # denominator. Upsert cannot remove it, so clear anything this recompute
+        # did not just stamp.
+        self._client.table(BASE_RATE_TABLE).delete().neq(
+            "computed_at", computed_at
+        ).execute()
+        logger.info(f"Gold: upserted {len(rows)} tag base rates")
+        return len(rows)
+
+    def fetch_base_rates(self) -> List[TagBaseRate]:
+        # Small by construction: one row per (dimension, category), not per week.
+        resp = self._client.table(BASE_RATE_TABLE).select("*").execute()
+        return [self._to_base_rate(row) for row in (resp.data or [])]
+
     def _latest_week(self) -> Optional[date]:
         # Cheap probe (LIMIT 1) for the newest week_start - the anchor the
         # confidence window is measured back from. None when Gold is empty.
@@ -110,6 +146,16 @@ class SupabaseTrendRepository(ITrendRepository):
         )
         rows = resp.data or []
         return date.fromisoformat(rows[0]["week_start"]) if rows else None
+
+    @staticmethod
+    def _to_base_rate(row: dict) -> TagBaseRate:
+        # DB row --> TagBaseRate. `rate` is derived, never stored.
+        return TagBaseRate(
+            dimension=row["dimension"],
+            category=row["category"],
+            article_count=row["article_count"],
+            total_articles=row["total_articles"],
+        )
 
     @staticmethod
     def _to_metric(row: dict) -> TrendMetric:

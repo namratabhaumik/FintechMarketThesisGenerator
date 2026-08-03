@@ -5,6 +5,7 @@ from datetime import date
 from core.implementations.repositories.supabase_trend_repository import (
     SupabaseTrendRepository,
 )
+from core.models.tag_base_rate import TagBaseRate
 from core.models.trend_metric import TrendMetric
 
 
@@ -14,18 +15,28 @@ class _FakeResp:
 
 
 class _FakeTable:
-    def __init__(self, store: dict):
-        self._store = store  # (week_start, dimension, category) -> row
+    def __init__(self, store: dict, key=None):
+        self._store = store  # composite key -> row
+        self._key = key or (lambda r: (r["week_start"], r["dimension"], r["category"]))
         self._op = None
         self._filters = []  # (column, min_value) for .gte
+        self._neq = None    # (column, value) for .neq
         self._order = None  # (column, desc)
         self._limit = None
 
     def upsert(self, rows, on_conflict=None):
         # Composite key overwrite, mirroring ON CONFLICT DO UPDATE.
         for r in rows:
-            self._store[(r["week_start"], r["dimension"], r["category"])] = r
+            self._store[self._key(r)] = r
         self._op = "upsert"
+        return self
+
+    def delete(self):
+        self._op = "delete"
+        return self
+
+    def neq(self, column, value):
+        self._neq = (column, value)
         return self
 
     def select(self, *args):
@@ -45,6 +56,11 @@ class _FakeTable:
         return self
 
     def execute(self):
+        if self._op == "delete":
+            column, value = self._neq
+            for k in [k for k, r in self._store.items() if r.get(column) != value]:
+                del self._store[k]
+            return _FakeResp(data=[])
         # week_start rows are ISO strings, so >= and sort compare lexically,
         # which for ISO-8601 dates matches chronological order.
         rows = list(self._store.values())
@@ -61,8 +77,13 @@ class _FakeTable:
 class _FakeClient:
     def __init__(self):
         self.store: dict = {}
+        self.base_rate_store: dict = {}
 
     def table(self, name):
+        if name == "tag_base_rates":
+            return _FakeTable(
+                self.base_rate_store, key=lambda r: (r["dimension"], r["category"])
+            )
         return _FakeTable(self.store)
 
 
@@ -175,3 +196,51 @@ def test_fetch_recent_window_one_keeps_only_as_of():
 def test_fetch_recent_empty_gold_returns_empty():
     repo = SupabaseTrendRepository(_FakeClient())
     assert repo.fetch_recent(52) == []
+
+
+def _rate(dimension, category, count, total=10):
+    return TagBaseRate(
+        dimension=dimension, category=category,
+        article_count=count, total_articles=total,
+    )
+
+
+def test_base_rates_round_trip():
+    repo = SupabaseTrendRepository(_FakeClient())
+    written = repo.upsert_base_rates([
+        _rate("theme", "Payments", 4),
+        _rate("risk", "Regulatory Risk", 2),
+    ])
+
+    assert written == 2
+    stored = {(r.dimension, r.category): r for r in repo.fetch_base_rates()}
+    assert stored[("theme", "Payments")].article_count == 4
+    assert stored[("theme", "Payments")].rate == 0.4
+
+
+def test_recompute_drops_categories_that_left_the_corpus():
+    """A stale row would stay a live lift denominator, so anything the current
+    recompute did not stamp is deleted rather than left behind."""
+    repo = SupabaseTrendRepository(_FakeClient())
+    repo.upsert_base_rates([_rate("theme", "Payments", 4), _rate("theme", "Gone", 1)])
+
+    repo.upsert_base_rates([_rate("theme", "Payments", 6, total=12)])
+
+    stored = repo.fetch_base_rates()
+    assert [(r.category, r.article_count, r.total_articles) for r in stored] == [
+        ("Payments", 6, 12)
+    ]
+
+
+def test_empty_base_rates_write_nothing_and_leave_existing_rows():
+    # Guards the delete: an empty recompute must not wipe the table, or a failed
+    # Gold run would silently disable lift ranking.
+    repo = SupabaseTrendRepository(_FakeClient())
+    repo.upsert_base_rates([_rate("theme", "Payments", 4)])
+
+    assert repo.upsert_base_rates([]) == 0
+    assert [r.category for r in repo.fetch_base_rates()] == ["Payments"]
+
+
+def test_fetch_base_rates_empty_when_gold_has_not_run():
+    assert SupabaseTrendRepository(_FakeClient()).fetch_base_rates() == []
