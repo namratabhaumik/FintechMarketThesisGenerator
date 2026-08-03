@@ -43,6 +43,19 @@ Notes on a thesis: an anchored highlight (a root) and the replies under it. See 
 
 An annotation is pinned to the thesis version it was written against: a version's text is frozen once superseded, which is what keeps the offsets valid. Refining therefore produces a version with no annotations on it.
 
+### Thesis fields worth explaining
+
+Most of the thesis response is self-describing. These few carry meaning the schema alone does not:
+
+| Field | What it holds |
+| --- | --- |
+| `tag_sources` | The citation trail: dimension (`themes` / `risks` / `investment_signals`) to displayed tag to the source URLs carrying it. Lets a client answer "why did this tag surface?" without re-deriving anything from `retrieved_docs`. Only the displayed tags appear. |
+| `covered_weeks` / `window_weeks` | The fraction behind `confidence_level`, so a client can render "17 of 47 weeks" rather than a bare decimal. `covered_weeks` counts weeks of corpus history in which the thesis's displayed tags were reported; `window_weeks` is the retrieval window in weeks, capped at the span the trend data actually holds. See [The thesis pipeline](../concepts/pipeline.md#why-confidence-counts-weeks-and-only-for-the-displayed-tags). |
+| `confidence_level` | `covered_weeks / window_weeks`. A property of the corpus behind the thesis, not a probability that the thesis is correct. |
+| `summary_status` / `refusal_reason` | Whether the narrative was written or declined, and by which gate. See [Refusals and fallbacks](../concepts/refusals.md). |
+
+Theses generated before a given field existed simply omit it; clients should treat all four as optional.
+
 For full request and response schemas, use the interactive Swagger UI served by the dev environment: [https://fintechmarketthesisgenerator.onrender.com/docs](https://fintechmarketthesisgenerator.onrender.com/docs). It reflects the current API by construction (the production API is the same code with schema browsing disabled). Note the dev service is free-tier hosted, so the first load after idle can take a minute, and executing calls from Swagger still requires a bearer token.
 
 ## Error format

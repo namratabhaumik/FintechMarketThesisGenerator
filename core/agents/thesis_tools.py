@@ -91,6 +91,10 @@ def create_thesis_tools(
             "investment_signals": refined.investment_signals,
             "sources": refined.sources,
             "raw_output": refined.raw_output,
+            # The citation trail must cross with the tags it describes: a
+            # refinement can add or drop a displayed tag, so a stale trail would
+            # cite tags no longer shown.
+            "tag_sources": refined.tag_sources,
             "summary_status": refined.summary_status,
             "refusal_reason": refined.refusal_reason,
         })

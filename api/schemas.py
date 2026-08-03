@@ -7,7 +7,7 @@ collections stay lightweight (no docs, histories, or embeddings).
 """
 
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -56,9 +56,16 @@ class ThesisResponse(BaseModel):
     raw_output: Optional[str] = None
     opportunity_score: float = 0.0
     confidence_level: float = 0.0
+    # The fraction confidence_level is, so a client can render "17 of 47 weeks"
+    # instead of a bare decimal. Frozen across refinement alongside the ratio.
+    covered_weeks: int = 0
+    window_weeks: int = 0
     confidence_as_of: Optional[str] = None
     recommendation: str = ""
     key_risk_factors: List[str] = []
+    # Citation trail: dimension -> displayed tag -> the source URLs behind it.
+    # Theses generated before this existed omit it, hence the empty default.
+    tag_sources: Dict[str, Dict[str, List[str]]] = {}
     # What produced raw_output: "llm" or "local" (extractive fallback).
     summary_source: str = "llm"
     # "refused" when the summarizer found the sources insufficient for the query.

@@ -97,8 +97,8 @@ def _resolve_components(tool_name: str, result: dict, current: StructuredThesis)
 
     Returns:
         Tuple (key_themes, risks, investment_signals, sources, raw_output,
-        summary_status, refusal_reason), or None when the tool name is not
-        recognized.
+        tag_sources, summary_status, refusal_reason), or None when the tool name
+        is not recognized.
     """
     if tool_name == "refine_thesis":
         return (
@@ -107,6 +107,7 @@ def _resolve_components(tool_name: str, result: dict, current: StructuredThesis)
             result.get("investment_signals", current.investment_signals),
             result.get("sources", current.sources),
             result.get("raw_output", current.raw_output),
+            result.get("tag_sources", current.tag_sources),
             result.get("summary_status", current.summary_status),
             result.get("refusal_reason", current.refusal_reason),
         )
@@ -119,13 +120,19 @@ def _score_and_build(components, current: StructuredThesis) -> StructuredThesis:
     Every number is FROZEN - score, recommendation, confidence and the
     confidence as-of date all reflect the retrieved evidence and the Gold
     snapshot, neither of which a refinement changes, so they are carried forward
-    from the current thesis. Only the refined content (narrative + displayed
-    tags) is swapped in; key risks follow the refined risk list.
+    from the current thesis. covered_weeks/window_weeks come with them: they are
+    the fraction confidence_level IS, so letting them reset while the ratio
+    persists would render as "36% (0 of 0 weeks)".
+
+    tag_sources is deliberately NOT frozen. A refinement can add or drop a
+    displayed tag (the planner's cap deltas), and the citation trail has to
+    describe the tags actually on screen, so it is swapped in with them.
 
     components is (key_themes, risks, investment_signals, sources, raw_output,
-    summary_status, refusal_reason).
+    tag_sources, summary_status, refusal_reason).
     """
-    key_themes, risks, investment_signals, sources, raw_output, summary_status, refusal_reason = components
+    (key_themes, risks, investment_signals, sources, raw_output,
+     tag_sources, summary_status, refusal_reason) = components
     return StructuredThesis(
         key_themes=key_themes,
         risks=risks,
@@ -134,9 +141,12 @@ def _score_and_build(components, current: StructuredThesis) -> StructuredThesis:
         raw_output=raw_output,
         opportunity_score=current.opportunity_score,
         confidence_level=current.confidence_level,
+        covered_weeks=current.covered_weeks,
+        window_weeks=current.window_weeks,
         confidence_as_of=current.confidence_as_of,
         recommendation=current.recommendation,
         key_risk_factors=risks[:min(3, len(risks))],
+        tag_sources=tag_sources,
         summary_status=summary_status,
         refusal_reason=refusal_reason,
     )

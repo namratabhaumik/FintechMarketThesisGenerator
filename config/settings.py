@@ -202,6 +202,11 @@ class AppConfig:
     supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
     ai_gateway: AIGatewayConfig = field(default_factory=AIGatewayConfig)
 
+    # Share of the evidence pool a tag must appear in before its lift is trusted
+    # when ranking displayed tags. A single field rather than its own config
+    # object - it is the only knob the ranking step has.
+    tag_min_source_articles_fraction: float = 0.10
+
     rss_feeds: List[RSSFeedConfig] = field(default_factory=lambda: [
         RSSFeedConfig(
             name="TechCrunch",
@@ -331,6 +336,12 @@ class AppConfig:
             min_similarity=float(os.getenv("RETRIEVAL_MIN_SIMILARITY", "0.72")),
         )
 
+        # Share of the evidence pool a tag must appear in before its lift is
+        # trusted for ranking. 0.10 of a 50-article pool = 5 articles.
+        tag_min_source_articles_fraction = float(
+            os.getenv("TAG_MIN_SOURCE_ARTICLES_FRACTION", "0.10")
+        )
+
         # Supabase configuration (optional — falls back to in-memory if not set)
         supabase_url = os.getenv("SUPABASE_URL", "")
         supabase_service_role_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -369,6 +380,7 @@ class AppConfig:
             ),
             vectorstore=VectorStoreConfig(provider=vs_provider),
             retrieval=retrieval,
+            tag_min_source_articles_fraction=tag_min_source_articles_fraction,
             supabase=SupabaseConfig(
                 url=supabase_url,
                 service_role_key=supabase_service_role_key,

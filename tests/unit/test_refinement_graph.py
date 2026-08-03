@@ -52,10 +52,13 @@ class TestResolveComponents:
         result = {
             "tool": "refine_thesis", "key_themes": ["A", "B"], "risks": ["R"],
             "investment_signals": ["S"], "sources": ["x"], "raw_output": "new",
+            "tag_sources": {"themes": {"A": ["x"]}, "risks": {}, "signals": {}},
             "summary_status": "refused", "refusal_reason": "llm_judgment",
         }
         assert _resolve_components("refine_thesis", result, current_thesis) == (
-            ["A", "B"], ["R"], ["S"], ["x"], "new", "refused", "llm_judgment"
+            ["A", "B"], ["R"], ["S"], ["x"], "new",
+            {"themes": {"A": ["x"]}, "risks": {}, "signals": {}},
+            "refused", "llm_judgment",
         )
 
     def test_refine_thesis_falls_back_to_current_for_missing_keys(self, current_thesis):
@@ -63,8 +66,8 @@ class TestResolveComponents:
         assert comp == (
             current_thesis.key_themes, current_thesis.risks,
             current_thesis.investment_signals, current_thesis.sources,
-            current_thesis.raw_output, current_thesis.summary_status,
-            current_thesis.refusal_reason,
+            current_thesis.raw_output, current_thesis.tag_sources,
+            current_thesis.summary_status, current_thesis.refusal_reason,
         )
 
     def test_unknown_tool_returns_none(self, current_thesis):
@@ -82,6 +85,7 @@ class TestScoreAndBuild:
     def test_freezes_numbers_and_swaps_content(self, current_thesis):
         components = (["Digital Payments"], ["Regulatory Risk", "Credit Risk"],
                       ["Payment Infrastructure"], ["u1", "u2"], "new prose",
+                      {"themes": {"Digital Payments": ["u1"]}, "risks": {}, "signals": {}},
                       "ok", None)
         thesis = _score_and_build(components, current_thesis)
 
@@ -98,11 +102,39 @@ class TestScoreAndBuild:
         assert thesis.summary_status == "ok"
         assert thesis.refusal_reason is None
 
+    def test_confidence_week_counts_are_frozen_with_the_ratio(self, current_thesis):
+        """covered_weeks/window_weeks ARE the fraction confidence_level is, so they
+        must survive refinement with it - resetting them renders "36% (0 of 0 weeks)"."""
+        current_thesis.confidence_level = 0.36
+        current_thesis.covered_weeks = 17
+        current_thesis.window_weeks = 47
+
+        thesis = _score_and_build(
+            (["T"], ["R"], ["S"], ["u"], "prose", {}, "ok", None), current_thesis
+        )
+
+        assert (thesis.covered_weeks, thesis.window_weeks) == (17, 47)
+        assert thesis.confidence_level == 0.36
+
+    def test_tag_sources_follow_the_refined_tags_and_are_not_frozen(self, current_thesis):
+        """A refinement can add or drop a displayed tag, so the citation trail has
+        to travel with the new tags rather than being carried forward."""
+        current_thesis.tag_sources = {"themes": {"Old": ["u0"]}, "risks": {}, "signals": {}}
+        refined_trail = {"themes": {"New": ["u1", "u2"]}, "risks": {}, "signals": {}}
+
+        thesis = _score_and_build(
+            (["New"], ["R"], ["S"], ["u1"], "prose", refined_trail, "ok", None),
+            current_thesis,
+        )
+
+        assert thesis.tag_sources == refined_trail
+        assert "Old" not in thesis.tag_sources["themes"]
+
     def test_numbers_frozen_regardless_of_content(self, current_thesis):
         # Different refined prose / tags must NOT move any number - they reflect
         # the retrieved evidence and Gold snapshot, which a refinement leaves alone.
-        a = _score_and_build(([], [], [], [], SIGNAL_RICH, "ok", None), current_thesis)
-        b = _score_and_build((["T"], ["R1", "R2"], ["S"], ["u"], RISK_HEAVY, "ok", None), current_thesis)
+        a = _score_and_build(([], [], [], [], SIGNAL_RICH, {}, "ok", None), current_thesis)
+        b = _score_and_build((["T"], ["R1", "R2"], ["S"], ["u"], RISK_HEAVY, {}, "ok", None), current_thesis)
         assert a.opportunity_score == b.opportunity_score == current_thesis.opportunity_score
         assert a.confidence_level == b.confidence_level == current_thesis.confidence_level
 
@@ -240,6 +272,37 @@ class TestCreateThesisTools:
     def test_returns_only_refine_thesis(self):
         tools = create_thesis_tools(thesis_service=None)  # not invoked at build time
         assert [t.name for t in tools] == ["refine_thesis"]
+
+    def test_tool_payload_carries_every_key_the_graph_reads_back(self, current_thesis):
+        """Contract across the tool-call boundary: refine_thesis serialises to JSON
+        and _resolve_components reads it back by key. A field the service returns
+        but the payload omits is silently lost, which is how tag_sources came back
+        empty after every refinement round - so assert the two agree."""
+        refined = StructuredThesis(
+            key_themes=["New"], risks=["R"], investment_signals=["S"],
+            sources=["u1"], raw_output="prose",
+            tag_sources={"themes": {"New": ["u1"]}, "risks": {}, "signals": {}},
+        )
+        service = Mock()
+        service.refine_thesis = AsyncMock(return_value=refined)
+        tool = create_thesis_tools(thesis_service=service)[0]
+
+        payload = json.loads(asyncio.run(tool.ainvoke({
+            "feedback_focus": "sharpen", "theme_delta": 0,
+            "risk_delta": 0, "signal_delta": 0,
+            "state": {
+                "documents": [], "current_thesis": current_thesis,
+                "topic": "t", "feedback_history": [["f"]],
+            },
+        })))
+
+        # Everything the graph resolves must survive the round trip.
+        resolved = _resolve_components("refine_thesis", payload, current_thesis)
+        assert resolved == (
+            ["New"], ["R"], ["S"], ["u1"], "prose",
+            {"themes": {"New": ["u1"]}, "risks": {}, "signals": {}},
+            "ok", None,
+        )
 
 
 class TestRefineThesisContentOnly:
