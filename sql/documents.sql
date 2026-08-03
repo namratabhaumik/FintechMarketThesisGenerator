@@ -34,6 +34,16 @@ create table documents (
 );
 create index on documents using hnsw (embedding vector_cosine_ops);
 
+-- One row per (article URL, chunk text). Silver's build() already skips URLs it
+-- has seen, but that check is a read the DB cannot enforce --> a partial or
+-- failed read means duplicate chunks land silently, and retrieval's URL dedup
+-- hides them (the corpus just bloats and re-embedding is paid for twice). This
+-- makes the guarantee structural instead. `md5(content)` because a chunk is too
+-- long to index directly. Also serves the URL lookup in _fetch_existing_urls,
+-- url being the leading column.
+create unique index if not exists documents_url_content_uniq
+    on documents ((metadata->>'url'), md5(content));
+
 -- match_documents: nearest chunks by cosine distance, optionally restricted to
 -- the last `window_days` OR an explicit `date_from`/`date_to` range (used
 -- when the query names one, e.g. "since March 2024" - see
@@ -91,3 +101,29 @@ begin
   limit match_count;
 end;
 $$;
+
+-- Migration for deployments that already have a `documents` table (the
+-- `drop table ... cascade` above would discard the corpus, so apply by hand).
+-- Adds documents_url_content_uniq. Duplicates must be cleared first or the
+-- index will not build.
+--
+-- 1. Count what is there (expect 0 on a healthy corpus):
+--   select count(*) from (
+--     select metadata->>'url', content
+--       from documents
+--      group by 1, 2
+--     having count(*) > 1
+--   ) d;
+--
+-- 2. Snapshot before deleting:
+--   create table documents_backup as select * from documents;
+--
+-- 3. Keep the earliest row of each duplicate group, drop the rest:
+--   delete from documents d
+--    using documents e
+--    where d.id > e.id
+--      and d.metadata->>'url' = e.metadata->>'url'
+--      and d.content = e.content;
+--
+-- 4. Then create the index (the `create unique index` above, verbatim), and
+--    once retrieval looks healthy:  drop table documents_backup;

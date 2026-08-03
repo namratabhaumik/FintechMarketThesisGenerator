@@ -73,6 +73,21 @@ class TestGoldConfidenceInputs:
         )
         assert (covered, window_weeks, as_of) == (4, 7, self.W0)
 
+    def test_window_wider_than_gold_is_capped_to_the_gold_span(self):
+        # A 52-week retrieval window over 7 weeks of Gold: weeks 8..52 hold no
+        # data and could never be covered, so counting them would make the ratio
+        # report how young the corpus is. Denominator caps at the span (7), which
+        # matches what the whole-corpus path already returns.
+        covered, window_weeks, as_of = _gold_confidence_inputs(
+            [self._doc()], self._metrics(), 52
+        )
+        assert (covered, window_weeks, as_of) == (4, 7, self.W0)
+
+    def test_window_narrower_than_gold_is_left_alone(self):
+        # The cap only bites when the window outruns the data; a deliberately
+        # narrow window still means what the caller asked for.
+        assert _gold_confidence_inputs([self._doc()], self._metrics(), 2)[1] == 2
+
 
 class TestArticleToDocument:
     """article_to_document: the shared Article -> Document conversion."""

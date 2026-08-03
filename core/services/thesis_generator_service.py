@@ -95,9 +95,15 @@ def _gold_confidence_inputs(
         Gold, earliest week to latest, inclusive.
       - as_of: the latest week present in Gold (data freshness), or None if empty.
 
-    The window is derived from the retrieval window, so a 1-year retrieval gives a
-    52-week window, a 6-month retrieval a 26-week window, and so on. Uses the
-    uncapped evidence tags, so the result is stable across a refinement session.
+    The window starts from the retrieval window (1-year retrieval --> 52 weeks,
+    6-month --> 26) but is capped at the span Gold actually holds: a week with no
+    data can never be covered (counting it in the denominator only measures
+    how much history the corpus is missing). Uncapped, the answer is to "what
+    share of a fixed year did we cover?" - which on a corpus younger than that
+    window is really just its age. Capped, it answers "of the weeks we have data
+    for, how many covered this query's categories?", which is the question the
+    number is displayed as. Uses the uncapped evidence tags, so the result is
+    stable across a refinement session.
     """
     counters = _tag_counters(documents)
     evidence = (
@@ -112,11 +118,17 @@ def _gold_confidence_inputs(
     as_of = max(weeks_present)
     matching_weeks = {m.week_start for m in metrics if (m.dimension, m.category) in evidence}
 
+    # The weeks Gold actually holds, earliest to latest inclusive - the ceiling
+    # on any denominator.
+    gold_span = (as_of - min(weeks_present)).days // 7 + 1
+
     if window_weeks is None:
         # Whole-corpus retrieval: the window spans all of Gold.
-        window_weeks = (as_of - min(weeks_present)).days // 7 + 1
+        window_weeks = gold_span
         covered_weeks = len(matching_weeks)
     else:
+        # Retrieval window wider than Gold --> use Gold's span instead.
+        window_weeks = min(window_weeks, gold_span)
         window = {as_of - timedelta(weeks=i) for i in range(window_weeks)}
         covered_weeks = len(matching_weeks & window)
 

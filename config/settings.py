@@ -144,7 +144,9 @@ class RetrievalConfig:
     published within the last `window_days` from the query time (a sliding window
     that moves as time advances). The corpus is sparse and historic, so the
     default is a broad year. Set it to 0 to disable the filter and search the
-    whole corpus.
+    whole corpus. It doubles as the confidence denominator (converted to weeks in
+    `_gold_confidence_inputs`), but is capped there at the span Gold actually
+    holds, so a window wider than the corpus does not drag confidence down.
 
     `min_similarity` cosine floor applied to the `fetch_k` candidates before
     dedup (value specific to EMBEDDING_MODEL & corpus):
