@@ -9,13 +9,21 @@ from langchain_core.documents import Document
 from core.models.trend_metric import TrendMetric
 from core.services.ingestion_service import article_to_document
 from core.models.thesis import StructuredThesis
+from core.models.thesis import RankedTag
 from core.services.thesis_generator_service import (
     ThesisGeneratorService,
     _apply_cap_deltas,
     _gold_confidence_inputs,
+    _min_source_articles,
     _ranked_tags_from_documents,
     _select_feedback_evidence,
+    _tag_sources,
 )
+
+
+def _tag(label, n=1):
+    """A RankedTag stand-in for the cap-delta tests, which only read labels."""
+    return RankedTag(label=label, article_count=n, lift=1.0, sources=[])
 
 
 def _empty_trend():
@@ -39,9 +47,12 @@ class TestGoldConfidenceInputs:
 
     @staticmethod
     def _doc():
-        return Document(page_content="x", metadata={
-            "url": "u", "themes": ["Payments"], "risks": ["Reg"], "signals": ["Infra"],
-        })
+        """The DISPLAYED tags, in the shape _tag_sources produces."""
+        return _tag_sources(
+            [RankedTag("Payments", 1, 1.0, ["u"])],
+            [RankedTag("Reg", 1, 1.0, ["u"])],
+            [RankedTag("Infra", 1, 1.0, ["u"])],
+        )
 
     def _metrics(self):
         return [
@@ -53,15 +64,15 @@ class TestGoldConfidenceInputs:
         ]
 
     def test_empty_gold_gives_zero_over_window(self):
-        assert _gold_confidence_inputs([self._doc()], [], 4) == (0, 4, None)
+        assert _gold_confidence_inputs(self._doc(), [], 4) == (0, 4, None)
         # window None (whole corpus) with no metrics still avoids a zero denominator.
-        assert _gold_confidence_inputs([self._doc()], [], None) == (0, 1, None)
+        assert _gold_confidence_inputs(self._doc(), [], None) == (0, 1, None)
 
     def test_windowed_counts_matching_weeks_in_window(self):
         # Matching weeks: W0, W2 (Payments), W1 (Infra), OLD (Payments, outside window).
         # "Other" is not in the evidence -> ignored. Window = {W0, W1, W2, W3}.
         covered, window_weeks, as_of = _gold_confidence_inputs(
-            [self._doc()], self._metrics(), 4
+            self._doc(), self._metrics(), 4
         )
         assert (covered, window_weeks, as_of) == (3, 4, self.W0)
 
@@ -69,9 +80,24 @@ class TestGoldConfidenceInputs:
         # window None -> denominator is the full span (W0..OLD = 7 weeks inclusive),
         # covered = all distinct matching weeks (W0, W1, W2, OLD).
         covered, window_weeks, as_of = _gold_confidence_inputs(
-            [self._doc()], self._metrics(), None
+            self._doc(), self._metrics(), None
         )
         assert (covered, window_weeks, as_of) == (4, 7, self.W0)
+
+    def test_window_wider_than_gold_is_capped_to_the_gold_span(self):
+        # A 52-week retrieval window over 7 weeks of Gold: weeks 8..52 hold no
+        # data and could never be covered, so counting them would make the ratio
+        # report how young the corpus is. Denominator caps at the span (7), which
+        # matches what the whole-corpus path already returns.
+        covered, window_weeks, as_of = _gold_confidence_inputs(
+            self._doc(), self._metrics(), 52
+        )
+        assert (covered, window_weeks, as_of) == (4, 7, self.W0)
+
+    def test_window_narrower_than_gold_is_left_alone(self):
+        # The cap only bites when the window outruns the data; a deliberately
+        # narrow window still means what the caller asked for.
+        assert _gold_confidence_inputs(self._doc(), self._metrics(), 2)[1] == 2
 
 
 class TestArticleToDocument:
@@ -436,32 +462,87 @@ class TestGroundedTagDerivation:
             },
         )
 
-    def test_ranked_tags_are_frequency_ordered(self):
+    def test_without_base_rates_falls_back_to_frequency_order(self):
+        """Gold has not run -> rank by count, the pre-lift behaviour, with lift
+        left at 0.0 so the fallback is visible rather than silent."""
         docs = [
             self._doc(themes=["Payments", "Crypto"]),
             self._doc(themes=["Payments"]),
             self._doc(themes=["Payments", "Lending"]),
         ]
         themes, risks, signals = _ranked_tags_from_documents(docs)
-        assert themes[0] == "Payments"  # most frequent first
-        assert set(themes) == {"Payments", "Crypto", "Lending"}
+        assert themes[0].label == "Payments"  # most frequent first
+        assert themes[0].article_count == 3
+        assert all(t.lift == 0.0 for t in themes)
+        assert {t.label for t in themes} == {"Payments", "Crypto", "Lending"}
         assert risks == [] and signals == []
+
+    def test_lift_beats_raw_count(self):
+        """The corpus is 80% Payments, so Payments leading the pool is unremarkable;
+        Insurtech at 2/4 against a 5% base rate is what this query is actually about."""
+        docs = [
+            self._doc(themes=["Payments", "Insurtech"], url="a"),
+            self._doc(themes=["Payments", "Insurtech"], url="b"),
+            self._doc(themes=["Payments"], url="c"),
+            self._doc(themes=["Payments"], url="d"),
+        ]
+        base = {("theme", "Payments"): 0.80, ("theme", "Insurtech"): 0.05}
+        themes, _, _ = _ranked_tags_from_documents(docs, base, min_source_articles=1)
+
+        assert [t.label for t in themes] == ["Insurtech", "Payments"]
+        assert themes[0].lift == (2 / 4) / 0.05   # 10x over-represented
+        assert themes[1].lift == (4 / 4) / 0.80   # 1.25x, barely
+        # Citation trail: the articles behind the tag, one entry per article.
+        assert themes[0].sources == ["a", "b"]
+
+    def test_min_source_articles_sets_aside_thinly_evidenced_tags(self):
+        """A single article carrying a rare tag scores a huge ratio by accident;
+        below the support bar it must not outrank a well-evidenced tag."""
+        docs = [self._doc(themes=["Payments"], url=f"u{i}") for i in range(4)]
+        docs.append(self._doc(themes=["Payments", "PropTech"], url="rare"))
+        base = {("theme", "Payments"): 0.80, ("theme", "PropTech"): 0.01}
+
+        unfiltered, _, _ = _ranked_tags_from_documents(docs, base, min_source_articles=1)
+        assert unfiltered[0].label == "PropTech"     # noise wins without the bar
+
+        filtered, _, _ = _ranked_tags_from_documents(docs, base, min_source_articles=3)
+        assert [t.label for t in filtered] == ["Payments"]
+
+    def test_support_bar_that_empties_a_dimension_is_ignored(self):
+        """A narrow query returning few articles must still get tags rather than
+        none, so an over-strict bar falls back to the unfiltered ranking."""
+        docs = [self._doc(themes=["Insurtech"], url="a")]
+        base = {("theme", "Insurtech"): 0.05}
+        themes, _, _ = _ranked_tags_from_documents(docs, base, min_source_articles=99)
+        assert [t.label for t in themes] == ["Insurtech"]
+
+    def test_a_tag_repeated_within_one_article_counts_once(self):
+        docs = [self._doc(themes=["Payments", "Payments"], url="a")]
+        themes, _, _ = _ranked_tags_from_documents(docs)
+        assert themes[0].article_count == 1
+        assert themes[0].sources == ["a"]
 
     def test_missing_metadata_treated_as_no_tags(self):
         docs = [Document(page_content="x", metadata={"url": "u"})]  # no tag keys
         assert _ranked_tags_from_documents(docs) == ([], [], [])
 
+    def test_min_source_articles_scales_with_the_pool_but_has_a_floor(self):
+        assert _min_source_articles(50, 0.10) == 5    # the displayed-sources case
+        assert _min_source_articles(200, 0.10) == 20  # scales as the pool grows
+        assert _min_source_articles(12, 0.10) == 3    # floor protects a narrow query
+        assert _min_source_articles(0, 0.10) == 3
+
     def test_planner_deltas_trim_risks_and_expand_signals(self):
         kt, kr, ks = _apply_cap_deltas(
-            ["T1", "T2", "T3", "T4"],
-            ["R1", "R2", "R3", "R4"],
-            ["S1", "S2", "S3", "S4"],
+            [_tag(f"T{i}") for i in range(1, 5)],
+            [_tag(f"R{i}") for i in range(1, 5)],
+            [_tag(f"S{i}") for i in range(1, 5)],
             theme_delta=0, risk_delta=-1, signal_delta=1,
             base_cap=3,
         )
-        assert kr == ["R1", "R2"]                 # risks trimmed to base-1
-        assert ks == ["S1", "S2", "S3", "S4"]     # signals expanded to base+1
-        assert kt == ["T1", "T2", "T3"]           # themes unchanged at base
+        assert [t.label for t in kr] == ["R1", "R2"]              # trimmed to base-1
+        assert [t.label for t in ks] == ["S1", "S2", "S3", "S4"]  # expanded to base+1
+        assert [t.label for t in kt] == ["T1", "T2", "T3"]        # unchanged at base
 
     def test_delta_expansion_bounded_by_evidence(self):
         # +1 expands signals, but only as far as the evidence goes.

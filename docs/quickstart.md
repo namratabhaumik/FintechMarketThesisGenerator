@@ -29,11 +29,11 @@ The result page, top to bottom:
 | Section | What it tells you |
 | --- | --- |
 | **Investment Score** | Opportunity score from 1 to 5, computed from the strength of the evidence across the thesis dimensions. |
-| **Confidence** | How well recent corpus trends cover this area, with the date of the trend window it was computed from ("trends as of ..."). |
+| **Confidence** | How consistently the corpus covered this thesis's topics over time: the share of weeks of available history in which articles carrying its themes, risks or signals were published (e.g. 17 of 47 weeks). It measures the evidence behind the thesis, not whether the thesis is right - a low figure means the topic was reported sporadically, not that the analysis is incomplete. Shown with the date of the trend window it was computed from ("trends as of ..."). Rises over time as ingestion fills in more weeks. |
 | **Recommendation** | `Pursue`, `Investigate`, or `Skip`. |
 | **Source Articles** | Every article the thesis is grounded in, with publication date range and a per-article "% relevant to your query" retrieval similarity. |
 | **Raw Summary** | The narrative summary, written specifically to answer your query from those sources. |
-| **Key Themes / Risks / Investment Signals** | The structured dimensions, each derived from tags assigned to the source articles at ingestion time. |
+| **Key Themes / Risks / Investment Signals** | The structured dimensions, each derived from tags assigned to the source articles at ingestion time - never invented at request time. Which ones surface is decided by how **over-represented** each tag is in your sources compared with the corpus as a whole, so a category that is simply common everywhere does not crowd out the one that makes your query distinctive. Each surfaced tag knows the source articles behind it. |
 
 The URL now carries a `?job_id=...` parameter: bookmark or share it and the full thesis state restores on load.
 

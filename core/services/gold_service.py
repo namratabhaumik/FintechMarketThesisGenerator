@@ -20,6 +20,7 @@ from core.interfaces.article_content_repository import IArticleContentRepository
 from core.interfaces.silver_repository import ISilverRepository
 from core.interfaces.trend_repository import ITrendRepository
 from core.interfaces.untagged_repository import IUntaggedRepository
+from core.models.tag_base_rate import TagBaseRate
 from core.models.trend_metric import TrendMetric
 from core.utils.data_quality import check_gold
 
@@ -51,7 +52,8 @@ class GoldService:
         read accepted-article tags from Silver --> walk all stored article
         content --> for each article, add 1 to every (week, dimension, category)
         tally across all three dimensions --> turn tallies into TrendMetric rows
-        --> save metrics + untagged.
+        --> roll the same tallies up across weeks into corpus-wide TagBaseRates
+        --> save metrics + base rates + untagged.
         """
         # URL --> {themes, risks, signals}, for fintech-accepted articles only
         # (Silver's verdict view of "what is relevant and what it carries"). A
@@ -99,16 +101,35 @@ class GoldService:
             )
             for (week, dimension, category), count in sorted(buckets.items())
         ]
+        # Corpus-wide share per (dimension, category), from the same tallies: an
+        # article contributes to exactly one week per category it carries, so
+        # summing a category's weekly counts gives the articles carrying it.
+        # `fintech` is the shared denominator.
+        base_counts: Dict[Tuple[str, str], int] = defaultdict(int)
+        for (_, dimension, category), count in buckets.items():
+            base_counts[(dimension, category)] += count
+        base_rates = [
+            TagBaseRate(
+                dimension=dimension,
+                category=category,
+                article_count=count,
+                total_articles=fintech,
+            )
+            for (dimension, category), count in sorted(base_counts.items())
+        ]
+
         check_gold(
             fintech_verdicts=len(tags_by_url),
             fintech_with_content=fintech,
             metrics=metrics,
         )
         self._trend_repository.upsert(metrics)
+        self._trend_repository.upsert_base_rates(base_rates)
         self._untagged_repository.save(untagged)
         logger.info(
             f"Gold: wrote {len(metrics)} (week, dimension, category) metrics "
             f"across {len({w for w, _, _ in buckets})} weeks; "
+            f"{len(base_rates)} base rates over {fintech} articles; "
             f"{len(untagged)} untagged"
         )
         return len(metrics)
