@@ -108,9 +108,9 @@ create trigger annotations_set_updated_at
 alter table annotations enable row level security;
 
 -- Visibility follows the thesis, not the annotation: you may read notes on a
--- thesis you own, one shared with you, or (as an admin) any thesis. This is the
--- first policy shape here that is not a plain "auth.uid() = user_id" - that
--- form cannot express "someone else's row, on a thesis I can see".
+-- thesis you own, or (as an admin) any thesis. This is the first policy shape
+-- here that is not a plain "auth.uid() = user_id" - that form cannot express
+-- "someone else's row, on a thesis I can see".
 create policy "annotations_select" on annotations
   for select using (
     exists (select 1 from jobs j where j.id = annotations.job_id and j.user_id = auth.uid())

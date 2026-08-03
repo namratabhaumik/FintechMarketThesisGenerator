@@ -1,4 +1,10 @@
--- profiles: public, readable identity for annotation authors.
+-- profiles: display identity for annotation authors.
+--
+-- Deliberately NOT a public directory: a row is readable by its owner and by an
+-- admin, which is all the annotation panel needs while a thesis is owner-only.
+-- Widening this is part of sharing.
+--
+-- display_name is a name, not an email.
 
 create table if not exists profiles (
     id           uuid primary key references auth.users(id) on delete cascade,
@@ -9,10 +15,14 @@ create table if not exists profiles (
 
 alter table profiles enable row level security;
 
--- Any signed-in user may read any profile: annotation threads are shared, so
--- rendering one means rendering other people's names.
-create policy "profiles_select_authenticated" on profiles
-  for select using (auth.role() = 'authenticated');
+-- Own row, plus admin (who can open any thesis and so any thread on it).
+drop policy if exists "profiles_select_authenticated" on profiles;
+drop policy if exists "profiles_select_own" on profiles;
+create policy "profiles_select_own" on profiles
+  for select using (
+    auth.uid() = id
+    or (auth.jwt() -> 'app_metadata' ->> 'role') = 'admin'
+  );
 
 -- A user may only ever write their own row. Inserts come from the trigger
 -- below (which runs as definer), so this only governs self-service edits.
@@ -22,7 +32,7 @@ create policy "profiles_update_own" on profiles
 -- Populate on signup. SECURITY DEFINER because the trigger runs in auth's
 -- context, not the new user's, and must bypass the policies above.
 -- The metadata keys are what Google's OAuth provider returns; both are left
--- null for providers that don't supply them.
+-- null for providers that don't supply them (no email fallback - see the header).
 create or replace function handle_new_user()
 returns trigger
 language plpgsql
@@ -35,8 +45,7 @@ begin
     new.id,
     coalesce(
       new.raw_user_meta_data ->> 'full_name',
-      new.raw_user_meta_data ->> 'name',
-      new.raw_user_meta_data ->> 'email'
+      new.raw_user_meta_data ->> 'name'
     ),
     new.raw_user_meta_data ->> 'avatar_url'
   )
@@ -58,9 +67,17 @@ select
   u.id,
   coalesce(
     u.raw_user_meta_data ->> 'full_name',
-    u.raw_user_meta_data ->> 'name',
-    u.raw_user_meta_data ->> 'email'
+    u.raw_user_meta_data ->> 'name'
   ),
   u.raw_user_meta_data ->> 'avatar_url'
 from auth.users u
 on conflict (id) do nothing;
+
+-- Clean-up for environments that ran the earlier version of this file, which
+-- fell back to the email address. `on conflict do nothing` above will not
+-- correct rows that already exist, so clear the ones holding an email.
+update profiles p
+   set display_name = null
+  from auth.users u
+ where u.id = p.id
+   and p.display_name = u.email;

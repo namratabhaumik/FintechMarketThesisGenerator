@@ -347,6 +347,24 @@ export function RecentPage({ auth }: { auth: AuthInfo }) {
       });
   }, []);
 
+  // One panel, rendered into both layouts below (desktop column, mobile sheet).
+  // CSS decides which one is visible, so its wiring lives in a single place.
+  const notesPanel = (
+    <AnnotationsPanel
+      threads={annotations.threads}
+      loading={annotations.loading}
+      error={annotations.error}
+      userId={auth.userId}
+      activeId={activeId}
+      onSelect={setActiveId}
+      onReply={(parentId, body) => void annotations.reply(parentId, body)}
+      onEdit={(id, body) => void annotations.edit(id, body)}
+      onDelete={(id) => void annotations.remove(id)}
+      onResolve={(id, resolution) => void annotations.resolve(id, resolution)}
+      onClose={() => setPanelOpen(false)}
+    />
+  );
+
   return (
     <>
       <QueryPanel
@@ -416,19 +434,7 @@ export function RecentPage({ auth }: { auth: AuthInfo }) {
             would leave the document unreadably narrow, so it becomes a sheet. */}
         {currentJob && panelOpen && (
           <aside className="print:hidden hidden lg:block w-80 flex-shrink-0 border-l border-base-300 sticky top-14 h-[calc(100vh-3.5rem)]">
-            <AnnotationsPanel
-              threads={annotations.threads}
-              loading={annotations.loading}
-              error={annotations.error}
-              userId={auth.userId}
-              activeId={activeId}
-              onSelect={setActiveId}
-              onReply={(parentId, body) => void annotations.reply(parentId, body)}
-              onEdit={(id, body) => void annotations.edit(id, body)}
-              onDelete={(id) => void annotations.remove(id)}
-              onResolve={(id, resolution) => void annotations.resolve(id, resolution)}
-              onClose={() => setPanelOpen(false)}
-            />
+            {notesPanel}
           </aside>
         )}
       </div>
@@ -443,19 +449,7 @@ export function RecentPage({ auth }: { auth: AuthInfo }) {
             onClick={() => setPanelOpen(false)}
           />
           <div className="absolute left-0 right-0 bottom-0 h-[70vh] bg-base-100 border-t border-base-300 rounded-t-box overflow-hidden">
-            <AnnotationsPanel
-              threads={annotations.threads}
-              loading={annotations.loading}
-              error={annotations.error}
-              userId={auth.userId}
-              activeId={activeId}
-              onSelect={setActiveId}
-              onReply={(parentId, body) => void annotations.reply(parentId, body)}
-              onEdit={(id, body) => void annotations.edit(id, body)}
-              onDelete={(id) => void annotations.remove(id)}
-              onResolve={(id, resolution) => void annotations.resolve(id, resolution)}
-              onClose={() => setPanelOpen(false)}
-            />
+            {notesPanel}
           </div>
         </div>
       )}

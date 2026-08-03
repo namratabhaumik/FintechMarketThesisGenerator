@@ -13,6 +13,7 @@ Env knobs (all optional):
                               SlowAPIMiddleware in main.py; /health is exempt.
     RATE_LIMIT_GENERATE       Per-IP limit on thesis generation. Default "10/minute".
     RATE_LIMIT_REFINE         Per-IP limit on refinement.        Default "20/minute".
+    RATE_LIMIT_ANNOTATE       Per-IP limit on annotation writes. Default "60/minute".
 """
 
 import os
@@ -57,6 +58,9 @@ limiter = Limiter(
 # Per-route limits for the cost-bearing (LLM) endpoints, tunable without a deploy.
 GENERATE_LIMIT = os.getenv("RATE_LIMIT_GENERATE", "10/minute")
 REFINE_LIMIT = os.getenv("RATE_LIMIT_REFINE", "20/minute")
+
+# Reads are unlimited: the panel loads on every thesis open.
+ANNOTATE_LIMIT = os.getenv("RATE_LIMIT_ANNOTATE", "60/minute")
 
 
 def rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:

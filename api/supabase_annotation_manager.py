@@ -120,4 +120,5 @@ class SupabaseAnnotationManager(IAnnotationRepository):
             .in_("id", list(set(user_ids)))
             .execute()
         )
-        return {row["id"]: row for row in (resp.data or [])}
+        rows: list[dict] = resp.data or []
+        return {row["id"]: row for row in rows}

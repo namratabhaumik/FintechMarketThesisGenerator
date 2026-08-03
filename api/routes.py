@@ -26,6 +26,7 @@ from api.auth import (
 )
 from api.deps import get_container
 from api.security import (
+    ANNOTATE_LIMIT,
     GENERATE_LIMIT,
     REFINE_LIMIT,
     limiter,
@@ -569,9 +570,8 @@ async def _with_authors(
     am: IAnnotationRepository, rows: list[dict]
 ) -> List[AnnotationResponse]:
     """Attach display identities in one profiles query for the whole list."""
-    profiles = await am.get_profiles(
-        [r.get("user_id") for r in rows if r.get("user_id")]
-    )
+    author_ids = [uid for r in rows if (uid := r.get("user_id"))]
+    profiles = await am.get_profiles(author_ids)
     return [_annotation_to_response(r, profiles) for r in rows]
 
 
@@ -605,7 +605,9 @@ async def list_annotations(
     status_code=201,
     tags=["annotations"],
 )
+@limiter.limit(ANNOTATE_LIMIT)
 async def create_annotation(
+    request: Request,
     job_id: str,
     payload: AnnotationCreateRequest,
     jm: IJobManager = Depends(get_user_job_manager),
@@ -644,18 +646,29 @@ async def create_annotation(
             "body": payload.body,
         }
     else:
+        version, section = payload.version, payload.section
+        start, end, quote = payload.start_offset, payload.end_offset, payload.quote
         missing = [
             name
             for name, value in (
-                ("version", payload.version),
-                ("section", payload.section),
-                ("start_offset", payload.start_offset),
-                ("end_offset", payload.end_offset),
-                ("quote", payload.quote),
+                ("version", version),
+                ("section", section),
+                ("start_offset", start),
+                ("end_offset", end),
+                ("quote", quote),
             )
             if value is None
         ]
-        if missing:
+        # `missing` names what is absent for the message; the None checks beside it
+        # are what let the type checker see these as set in `fields` below.
+        if (
+            missing
+            or version is None
+            or section is None
+            or start is None
+            or end is None
+            or quote is None
+        ):
             raise _error(
                 400,
                 "invalid_annotation",
@@ -664,19 +677,19 @@ async def create_annotation(
         # Reject a version that does not exist yet: history holds the superseded
         # versions and the current one is refinement_count + 1.
         latest = job.refinement_count + 1
-        if payload.version > latest:
+        if version > latest:
             raise _error(
                 400,
                 "invalid_annotation",
-                f"Version {payload.version} does not exist",
+                f"Version {version} does not exist",
             )
         fields = {
             "job_id": job_id,
-            "version": payload.version,
-            "section": payload.section.value,
-            "start_offset": payload.start_offset,
-            "end_offset": payload.end_offset,
-            "quote": payload.quote,
+            "version": version,
+            "section": section.value,
+            "start_offset": start,
+            "end_offset": end,
+            "quote": quote,
             "body": payload.body,
         }
 
@@ -700,7 +713,9 @@ async def create_annotation(
     response_model=AnnotationResponse,
     tags=["annotations"],
 )
+@limiter.limit(ANNOTATE_LIMIT)
 async def update_annotation(
+    request: Request,
     annotation_id: str,
     payload: AnnotationUpdateRequest,
     am: IAnnotationRepository = Depends(get_user_annotation_manager),
@@ -722,7 +737,9 @@ async def update_annotation(
     response_model=AnnotationResponse,
     tags=["annotations"],
 )
+@limiter.limit(ANNOTATE_LIMIT)
 async def resolve_annotation(
+    request: Request,
     annotation_id: str,
     payload: AnnotationResolveRequest,
     am: IAnnotationRepository = Depends(get_user_annotation_manager),
@@ -759,7 +776,9 @@ async def resolve_annotation(
 
 
 @router.delete("/annotations/{annotation_id}", status_code=204, tags=["annotations"])
+@limiter.limit(ANNOTATE_LIMIT)
 async def delete_annotation(
+    request: Request,
     annotation_id: str,
     am: IAnnotationRepository = Depends(get_user_annotation_manager),
 ):
@@ -771,6 +790,3 @@ async def delete_annotation(
         logger.exception(f"Failed to delete annotation {annotation_id}")
         raise _error(500, "deletion_failed", "Comment could not be deleted") from exc
     return Response(status_code=204)
-
-
-# --- Sharing -------------------------------------------------------------

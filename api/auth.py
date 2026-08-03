@@ -22,8 +22,8 @@ from jwt import PyJWKClient
 from supabase import acreate_client
 
 from api.supabase_annotation_manager import SupabaseAnnotationManager
-from core.interfaces.annotation_repository import IAnnotationRepository
 from api.supabase_job_manager import SupabaseJobManager
+from core.interfaces.annotation_repository import IAnnotationRepository
 from core.interfaces.job_manager import IJobManager
 
 logger = logging.getLogger(__name__)
@@ -187,8 +187,8 @@ async def get_user_job_manager(
 async def get_user_annotation_manager(
     user: AuthUser = Depends(get_current_user),
 ) -> AsyncIterator[IAnnotationRepository]:
-    """A per-request annotation manager on a user-scoped client, so annotation,
-    share and profile queries all run under RLS as the caller.
+    """A per-request annotation manager on a user-scoped client, so annotation and
+    profile queries both run under RLS as the caller.
 
     Same pooling contract as get_user_job_manager: the postgrest.auth() re-scope
     below MUST run after every acquire() and before any query, because a pooled
