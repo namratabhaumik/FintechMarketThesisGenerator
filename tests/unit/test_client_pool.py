@@ -3,6 +3,8 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from api.auth import SupabaseClientPool
 
 
@@ -141,11 +143,8 @@ def test_pool_survives_create_failure():
             mock_create.side_effect = [RuntimeError("connection failed"), good_client]
 
             # First acquire fails.
-            try:
+            with pytest.raises(RuntimeError):
                 await pool.acquire()
-                assert False, "expected the create to raise"
-            except RuntimeError:
-                pass
 
             # The slot must have been returned: a second acquire must not hang.
             client = await asyncio.wait_for(pool.acquire(), timeout=1.0)

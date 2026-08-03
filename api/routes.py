@@ -15,15 +15,28 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from postgrest.exceptions import APIError
 
-from api.auth import AuthUser, get_current_user, get_user_job_manager, require_admin
+from api.auth import (
+    AuthUser,
+    get_current_user,
+    get_user_annotation_manager,
+    get_user_job_manager,
+    require_admin,
+)
 from api.deps import get_container
 from api.security import (
+    ANNOTATE_LIMIT,
     GENERATE_LIMIT,
     REFINE_LIMIT,
     limiter,
 )
 from api.schemas import (
+    AnnotationAuthor,
+    AnnotationCreateRequest,
+    AnnotationResolveRequest,
+    AnnotationResponse,
+    AnnotationUpdateRequest,
     JobResponse,
     RefinementRequest,
     RefinementStatus,
@@ -35,6 +48,7 @@ from api.schemas import (
 )
 from config.settings import FEEDBACK_OPTIONS
 from core.agents.hallucination_detector import HallucinationDetector
+from core.interfaces.annotation_repository import IAnnotationRepository
 from core.interfaces.job_manager import IJobManager
 from core.services.thesis_generator_service import _tag_strengths_from_documents
 from core.utils.observability import trace_request
@@ -48,6 +62,13 @@ router = APIRouter(prefix="/api")
 # Query-to-query comparison, so it depends on the embedding model only:
 # 0.86 = same-topic + related sub-topics, drops same-domain-different-topic.
 RECALL_MIN_SIMILARITY = 0.86
+
+# SQLSTATEs raised deliberately by set_annotation_resolution (sql/annotations.sql).
+# Matching these instead of the message text keeps the API's status codes from
+# depending on the function's prose.
+SQLSTATE_INVALID_PARAMETER = "22023"  # invalid_parameter_value
+SQLSTATE_INSUFFICIENT_PRIVILEGE = "42501"
+SQLSTATE_NO_DATA_FOUND = "P0002"
 
 
 # --- Helpers ---
@@ -203,9 +224,9 @@ async def create_thesis(
 
     try:
         docs, summary_docs = await asyncio.to_thread(_retrieve_and_select)
-    except Exception:
+    except Exception as err:
         logger.exception("Retrieval failed")
-        raise _error(500, "retrieval_failed", "Could not retrieve documents from the corpus")
+        raise _error(500, "retrieval_failed", "Could not retrieve documents from the corpus") from err
     if not docs:
         raise _error(
             422,
@@ -252,9 +273,9 @@ async def create_thesis(
             thesis = await container.get_thesis_service().generate_thesis(
                 query, docs, summary_documents=summary_docs
             )
-        except Exception:
+        except Exception as err:
             logger.exception("Thesis generation failed")
-            raise _error(502, "generation_failed", "The language model failed to generate a thesis")
+            raise _error(502, "generation_failed", "The language model failed to generate a thesis") from err
 
         try:
             # One atomic insert with the full completed state: a failure (or crash)
@@ -274,9 +295,9 @@ async def create_thesis(
             )
             # Re-fetch so the response carries DB-populated fields (created_at).
             created = await jm.get_job(job.id)
-        except Exception:
+        except Exception as err:
             logger.exception("Failed to persist thesis job")
-            raise _error(500, "persistence_failed", "Thesis was generated but could not be saved")
+            raise _error(500, "persistence_failed", "Thesis was generated but could not be saved") from err
 
         response.headers["Location"] = f"/api/theses/{job.id}"
         trace.annotate(job_id=str(job.id), num_sources=len(docs))
@@ -374,7 +395,7 @@ async def create_refinement(
     try:
         graph, langfuse_handler = await asyncio.to_thread(container.get_refinement_graph)
     except NotImplementedError as e:
-        raise _error(501, "refinement_not_supported", str(e))
+        raise _error(501, "refinement_not_supported", str(e)) from e
 
     langgraph_state = {
         "topic": job.query,
@@ -396,14 +417,14 @@ async def create_refinement(
         try:
             result_state = await graph.ainvoke(langgraph_state, config=invoke_config)
         except NotImplementedError as e:
-            raise _error(501, "refinement_not_supported", str(e))
-        except Exception:
+            raise _error(501, "refinement_not_supported", str(e)) from e
+        except Exception as err:
             logger.exception("Error during thesis refinement")
             raise _error(
                 502,
                 "refinement_failed",
                 "The language model was unavailable. Please try again shortly.",
-            )
+            ) from err
         trace.annotate(job_id=job_id)
 
     detector = HallucinationDetector()
@@ -438,9 +459,9 @@ async def create_refinement(
             execution_log=execution_log,
         )
         updated = await jm.get_job(job_id) if persisted else None
-    except Exception:
+    except Exception as err:
         logger.exception("Failed to persist refinement")
-        raise _error(500, "persistence_failed", "Refinement ran but could not be saved")
+        raise _error(500, "persistence_failed", "Refinement ran but could not be saved") from err
     if not persisted:
         raise _error(
             409,
@@ -473,9 +494,9 @@ async def approve_thesis(job_id: str, jm: IJobManager = Depends(get_user_job_man
         try:
             await jm.update_job(job_id, **updates)
             job = await jm.get_job(job_id)
-        except Exception:
+        except Exception as err:
             logger.exception("Failed to record approval")
-            raise _error(500, "persistence_failed", "Approval could not be saved")
+            raise _error(500, "persistence_failed", "Approval could not be saved") from err
         logger.info(f"Thesis approved at {ts} (job {job_id})")
     return await _job_to_response(job, jm)
 
@@ -490,9 +511,9 @@ async def delete_thesis(
     await _get_job_or_404(jm, job_id)
     try:
         await jm.delete_job(job_id)
-    except Exception:
+    except Exception as err:
         logger.exception(f"Failed to delete job {job_id}")
-        raise _error(500, "deletion_failed", "Thesis could not be deleted")
+        raise _error(500, "deletion_failed", "Thesis could not be deleted") from err
 
 
 @router.get("/feedback-options", response_model=List[str], tags=["meta"])
@@ -507,3 +528,265 @@ def health_check():
     """Health check endpoint. Exempt from limits so a global ceiling
     (RATE_LIMIT_DEFAULT) never trips the platform's health probes."""
     return {"status": "ok"}
+
+# --- Annotations ---------------------------------------------------------
+#
+# Visibility and write permission are enforced by RLS (sql/annotations.sql),
+# not re-implemented here: a query returning nothing means the policies said no.
+# These handlers only translate that into HTTP and keep the root/reply shapes
+# from mixing, so a bad request fails as 400 rather than a DB constraint error.
+
+
+def _annotation_to_response(row: dict, profiles: dict) -> AnnotationResponse:
+    """Row + profile lookup -> response. A missing profile still renders: a
+    brand-new signup can outrun its profile row, and a nameless author must not
+    break the thread."""
+    author_id = row.get("user_id") or ""
+    profile = profiles.get(author_id, {})
+    return AnnotationResponse(
+        id=row["id"],
+        job_id=row["job_id"],
+        version=row["version"],
+        body=row["body"],
+        section=row.get("section"),
+        start_offset=row.get("start_offset"),
+        end_offset=row.get("end_offset"),
+        quote=row.get("quote"),
+        parent_id=row.get("parent_id"),
+        resolution=row.get("resolution"),
+        resolved_at=row.get("resolved_at"),
+        resolved_by=row.get("resolved_by"),
+        author=AnnotationAuthor(
+            user_id=author_id,
+            display_name=profile.get("display_name"),
+            avatar_url=profile.get("avatar_url"),
+        ),
+        created_at=row.get("created_at"),
+        updated_at=row.get("updated_at"),
+    )
+
+
+async def _with_authors(
+    am: IAnnotationRepository, rows: list[dict]
+) -> List[AnnotationResponse]:
+    """Attach display identities in one profiles query for the whole list."""
+    author_ids = [uid for r in rows if (uid := r.get("user_id"))]
+    profiles = await am.get_profiles(author_ids)
+    return [_annotation_to_response(r, profiles) for r in rows]
+
+
+@router.get(
+    "/theses/{job_id}/annotations",
+    response_model=List[AnnotationResponse],
+    tags=["annotations"],
+)
+async def list_annotations(
+    job_id: str,
+    version: Optional[int] = Query(
+        None, gt=0, description="Scope to one thesis version"
+    ),
+    jm: IJobManager = Depends(get_user_job_manager),
+    am: IAnnotationRepository = Depends(get_user_annotation_manager),
+):
+    """Annotations on a thesis, roots and replies together (threaded by the
+    client) so a thread never needs a second round trip.
+
+    The job is fetched first so an inaccessible thesis is a clear 404 rather
+    than an empty list that reads as "no notes yet".
+    """
+    await _get_job_or_404(jm, job_id)
+    rows = await am.list_annotations(job_id, version)
+    return await _with_authors(am, rows)
+
+
+@router.post(
+    "/theses/{job_id}/annotations",
+    response_model=AnnotationResponse,
+    status_code=201,
+    tags=["annotations"],
+)
+@limiter.limit(ANNOTATE_LIMIT)
+async def create_annotation(
+    request: Request,
+    job_id: str,
+    payload: AnnotationCreateRequest,
+    jm: IJobManager = Depends(get_user_job_manager),
+    am: IAnnotationRepository = Depends(get_user_annotation_manager),
+):
+    """Add a root annotation (anchored to a passage) or a reply.
+
+    A root pins to the version the client rendered; that version's text is
+    frozen once superseded, which is what keeps plain offsets valid. A reply
+    inherits its parent's version and carries no anchor of its own.
+    """
+    job = await _get_job_or_404(jm, job_id)
+
+    if payload.parent_id:
+        anchor_fields = (
+            payload.section,
+            payload.start_offset,
+            payload.end_offset,
+            payload.quote,
+        )
+        if any(f is not None for f in anchor_fields):
+            raise _error(
+                400, "invalid_annotation", "A reply cannot carry its own anchor"
+            )
+        parent = await am.get_annotation(payload.parent_id)
+        if parent is None or parent.get("job_id") != job_id:
+            raise _error(404, "not_found", "Parent annotation not found on this thesis")
+        if parent.get("parent_id"):
+            raise _error(
+                400, "invalid_annotation", "Replies cannot be nested under a reply"
+            )
+        fields = {
+            "job_id": job_id,
+            "version": parent["version"],
+            "parent_id": payload.parent_id,
+            "body": payload.body,
+        }
+    else:
+        version, section = payload.version, payload.section
+        start, end, quote = payload.start_offset, payload.end_offset, payload.quote
+        missing = [
+            name
+            for name, value in (
+                ("version", version),
+                ("section", section),
+                ("start_offset", start),
+                ("end_offset", end),
+                ("quote", quote),
+            )
+            if value is None
+        ]
+        # `missing` names what is absent for the message; the None checks beside it
+        # are what let the type checker see these as set in `fields` below.
+        if (
+            missing
+            or version is None
+            or section is None
+            or start is None
+            or end is None
+            or quote is None
+        ):
+            raise _error(
+                400,
+                "invalid_annotation",
+                f"An anchored annotation requires: {', '.join(missing)}",
+            )
+        # Reject a version that does not exist yet: history holds the superseded
+        # versions and the current one is refinement_count + 1.
+        latest = job.refinement_count + 1
+        if version > latest:
+            raise _error(
+                400,
+                "invalid_annotation",
+                f"Version {version} does not exist",
+            )
+        fields = {
+            "job_id": job_id,
+            "version": version,
+            "section": section.value,
+            "start_offset": start,
+            "end_offset": end,
+            "quote": quote,
+            "body": payload.body,
+        }
+
+    try:
+        row = await am.create_annotation(**fields)
+    except Exception:
+        logger.exception("Failed to create annotation")
+        raise _error(
+            500, "persistence_failed", "Could not save the annotation"
+        ) from None
+    if row is None:
+        # The insert policy refused it: readable thesis, no comment rights.
+        raise _error(
+            403, "forbidden", "You do not have permission to annotate this thesis"
+        )
+    return (await _with_authors(am, [row]))[0]
+
+
+@router.patch(
+    "/annotations/{annotation_id}",
+    response_model=AnnotationResponse,
+    tags=["annotations"],
+)
+@limiter.limit(ANNOTATE_LIMIT)
+async def update_annotation(
+    request: Request,
+    annotation_id: str,
+    payload: AnnotationUpdateRequest,
+    am: IAnnotationRepository = Depends(get_user_annotation_manager),
+):
+    """Edit a comment's text. Author-only - RLS matches no row for anyone else,
+    which surfaces here as 403 rather than a silent no-op."""
+    try:
+        row = await am.update_annotation_body(annotation_id, payload.body)
+    except Exception as exc:
+        logger.exception(f"Failed to update annotation {annotation_id}")
+        raise _error(500, "persistence_failed", "Comment could not be updated") from exc
+    if row is None:
+        raise _error(403, "forbidden", "You can only edit your own comments")
+    return (await _with_authors(am, [row]))[0]
+
+
+@router.patch(
+    "/annotations/{annotation_id}/resolution",
+    response_model=AnnotationResponse,
+    tags=["annotations"],
+)
+@limiter.limit(ANNOTATE_LIMIT)
+async def resolve_annotation(
+    request: Request,
+    annotation_id: str,
+    payload: AnnotationResolveRequest,
+    am: IAnnotationRepository = Depends(get_user_annotation_manager),
+):
+    """Tick (accepted) or reopen (null).
+
+    Resolving is a state change on the thread rather than an edit to anyone's
+    words, so it goes through a definer function that writes only the state
+    columns - `body` is never in its UPDATE.
+    """
+    resolution = payload.resolution.value if payload.resolution else None
+    try:
+        await am.set_resolution(annotation_id, resolution)
+    except APIError as exc:
+        # Branch on the SQLSTATE the function raises, not its message: the
+        # wording is prose that may be reworded, the code is a contract.
+        # See the `using errcode` clauses in sql/annotations.sql.
+        if exc.code == SQLSTATE_INSUFFICIENT_PRIVILEGE:
+            raise _error(403, "forbidden", "You cannot resolve this annotation") from exc
+        if exc.code == SQLSTATE_NO_DATA_FOUND:
+            raise _error(404, "not_found", "Annotation not found, or it is a reply") from exc
+        if exc.code == SQLSTATE_INVALID_PARAMETER:
+            raise _error(400, "invalid_resolution", "Unrecognised resolution value") from exc
+        logger.exception("Failed to set annotation resolution")
+        raise _error(500, "persistence_failed", "Could not update the annotation") from exc
+    except Exception as exc:
+        logger.exception("Failed to set annotation resolution")
+        raise _error(500, "persistence_failed", "Could not update the annotation") from exc
+
+    row = await am.get_annotation(annotation_id)
+    if not row:
+        raise _error(404, "not_found", "Annotation not found")
+    return (await _with_authors(am, [row]))[0]
+
+
+@router.delete("/annotations/{annotation_id}", status_code=204, tags=["annotations"])
+@limiter.limit(ANNOTATE_LIMIT)
+async def delete_annotation(
+    request: Request,
+    annotation_id: str,
+    am: IAnnotationRepository = Depends(get_user_annotation_manager),
+):
+    """Delete a comment (replies cascade). RLS scopes this to the author or the
+    thesis owner; anything else deletes nothing."""
+    try:
+        await am.delete_annotation(annotation_id)
+    except Exception as exc:
+        logger.exception(f"Failed to delete annotation {annotation_id}")
+        raise _error(500, "deletion_failed", "Comment could not be deleted") from exc
+    return Response(status_code=204)

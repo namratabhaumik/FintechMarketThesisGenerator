@@ -27,6 +27,22 @@ See [Authentication](../guides/auth.md) for how to obtain a token. Requests are 
 | `GET` | `/feedback-options` | The fixed set of refinement feedback reasons the app offers. |
 | `GET` | `/health` | Health check. No auth. |
 
+### Annotations
+
+Notes on a thesis: an anchored highlight (a root) and the replies under it. See [Annotating a thesis](../guides/annotating.md) for what they are for.
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET` | `/theses/{job_id}/annotations` | Every annotation on the thesis, roots and replies together, so a thread needs no second call. Optional `version` scopes it to one version. `404` if the thesis is not visible to you. |
+| `POST` | `/theses/{job_id}/annotations` | Create a root or a reply (`201`). A root requires `version`, `section`, `start_offset`, `end_offset` and `quote`; a reply requires `parent_id` and must carry none of those. |
+| `PATCH` | `/annotations/{annotation_id}` | Edit a comment's text. Author only. |
+| `PATCH` | `/annotations/{annotation_id}/resolution` | Tick a thread (`"resolution": "accepted"`) or reopen it (`"resolution": null`). Roots only. Open to the thesis owner and admins, not just the author, because resolving is a state change rather than an edit. |
+| `DELETE` | `/annotations/{annotation_id}` | Delete a comment; replies cascade (`204`). The author or the thesis owner. |
+
+`section` is one of `raw_summary`, `key_themes`, `risks`, `investment_signals`. Offsets are character positions in that section's plain text.
+
+An annotation is pinned to the thesis version it was written against: a version's text is frozen once superseded, which is what keeps the offsets valid. Refining therefore produces a version with no annotations on it.
+
 For full request and response schemas, use the interactive Swagger UI served by the dev environment: [https://fintechmarketthesisgenerator.onrender.com/docs](https://fintechmarketthesisgenerator.onrender.com/docs). It reflects the current API by construction (the production API is the same code with schema browsing disabled). Note the dev service is free-tier hosted, so the first load after idle can take a minute, and executing calls from Swagger still requires a bearer token.
 
 ## Error format
@@ -55,6 +71,9 @@ Errors carry a machine-readable body:
 | `max_refinements_reached` | 409 | The three-round refinement cap is exhausted. |
 | `conflict` | 409 | The job was approved or refined elsewhere while this request ran; reload. |
 | `refinement_not_supported` | 501 | The configured backend cannot run the refinement agent. |
-| `forbidden` | 403 | Admin role required. |
-| `deletion_failed` | 500 | Admin delete errored. |
-| `rate_limit_exceeded` | 429 | Too many requests; retry after the window resets. |
+| `forbidden` | 403 | Admin role required, or the annotation is not yours to edit or resolve. |
+| `deletion_failed` | 500 | A delete errored. |
+| `not_found` | 404 | No annotation with that id, or it is a reply where a root is required. |
+| `invalid_annotation` | 400 | The annotation's shape is wrong: a reply carrying an anchor, a root missing anchor fields, a nested reply, or a version that does not exist. |
+| `invalid_resolution` | 400 | Unrecognised resolution value. |
+| `rate_limited` | 429 | Too many requests; retry after the window resets. |

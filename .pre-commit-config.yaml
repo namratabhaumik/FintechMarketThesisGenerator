@@ -1,0 +1,54 @@
+default_install_hook_types: [pre-commit]
+repos:
+  # Secret scanning
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.0
+    hooks:
+      - id: gitleaks
+
+  # SAST
+  - repo: https://github.com/semgrep/semgrep
+    rev: v1.165.0
+    hooks:
+      - id: semgrep
+        args: ["--config", "auto", "--error"]
+        language_version: python3.11
+        types_or: [python, javascript, ts, tsx]
+
+  # Python lint + security rules (S = bandit-equivalent, B = bugbear, ASYNC = async pitfalls)
+  # --fix only for style/correctness rules; security findings (S) are review-only, never auto-rewritten.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.17
+    hooks:
+      - id: ruff
+        name: ruff (autofix style/bugs)
+        args: ["--select=E,F,B", "--fix"]
+      - id: ruff
+        name: ruff (security, review-only)
+        args: ["--select=S,ASYNC"]
+
+  # Dependency vulnerability audit against uv.lock (pip-audit only reads PEP 751
+  # pylock.toml, not uv.lock directly, so export it first, audit, then clean up)
+  - repo: local
+    hooks:
+      - id: pip-audit
+        name: pip-audit (backend dependency vulnerability audit)
+        entry: >-
+          bash -c 'uv export --no-hashes --format pylock.toml -o pylock.toml -q &&
+          uv run --with pip-audit==2.10.1 pip-audit --locked .;
+          rc=$?; rm -f pylock.toml; exit $rc'
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock)$
+
+  # Frontend dependency vulnerability audit, same as ci.yml. Dev-tooling advisories 
+  # are covered by cve-scan.yml, which audits the full tree on a
+  # schedule.
+  - repo: local
+    hooks:
+      - id: npm-audit
+        name: npm audit (frontend dependency vulnerability audit)
+        entry: bash -c 'cd frontend && npm audit --omit=dev --audit-level=high'
+        language: system
+        pass_filenames: false
+        files: ^frontend/package(-lock)?\.json$

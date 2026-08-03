@@ -22,12 +22,12 @@ class LocalSummarizerModel(ILanguageModel):
         # General fintech
         "fintech", "financial", "finance", "payment", "lending", "banking",
         # Payments & Transfers
-        "payment", "transfer", "transaction", "wallet", "peer-to-peer", "p2p",
+        "transfer", "transaction", "wallet", "peer-to-peer", "p2p",
         "cash app", "venmo", "stripe", "square", "paypal",
         # Digital Banking
         "neobank", "digital bank", "challenger bank", "online banking",
         # Lending & Credit
-        "lending", "loan", "credit", "borrowing", "bnpl", "buy now pay later",
+        "loan", "credit", "borrowing", "bnpl", "buy now pay later",
         "credit score", "underwriting",
         # Blockchain & Crypto
         "blockchain", "crypto", "bitcoin", "ethereum", "web3", "defi", "nft",
@@ -162,7 +162,9 @@ class LocalSummarizerModel(ILanguageModel):
             for s in sentences
             if len(s.strip()) > 20                                  # At least 20 chars
             and s.strip()[-1] in ".!?"                             # Must end with punctuation
-            and not re.search(r'[.,][A-Z]', s.strip()[:-1])       # No punctuation immediately followed by uppercase without space (scraping artifact)
+            # No punctuation immediately followed by uppercase without a
+            # space (a scraping artifact).
+            and not re.search(r'[.,][A-Z]', s.strip()[:-1])
         ]
 
     @staticmethod

@@ -99,5 +99,5 @@ export function downloadFile(filename: string, content: string, mimeType: string
 
 /** The current run's shareable URL (requires the viewer to be signed in). */
 export function shareableUrl(job: JobResponse): string {
-  return `${location.origin}${location.pathname}?job_id=${encodeURIComponent(job.job_id)}`;
+  return `${location.origin}/thesis/${encodeURIComponent(job.job_id)}`;
 }
