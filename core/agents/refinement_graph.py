@@ -250,12 +250,16 @@ def _make_assemble_node():
 
 
 def _escalate_node(state: ThesisRefinementState) -> dict:
-    """Terminal node when max refinements reached."""
+    """Terminal node when max refinements reached.
+
+    Logged as "skipped", not "executed": this node runs no tool and returns no
+    new thesis.
+    """
     logger.info("Max refinements reached. Escalating.")
     execution_log = list(state.get("execution_log", []))
     execution_log.append({
         "tool_name": "escalate",
-        "status": "executed",
+        "status": "skipped",
         "reason": "max_refinements_reached",
     })
     return {"status": "escalated", "execution_log": execution_log}

@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 from core.agents.refinement_graph import (
     _diff_thesis,
+    _escalate_node,
     _make_assemble_node,
     _resolve_components,
     _score_and_build,
@@ -193,6 +194,44 @@ class TestAssembleNode:
         msg = ToolMessage(content="not json", tool_call_id="3")
         out = assemble(self._state(current_thesis, msg))
         assert out["execution_log"][-1]["status"] == "parse_error"
+
+
+class TestEscalateNode:
+    """Escalation must not look like a round that ran.
+
+    test_api's refinement tests mock the graph, so they assert the route's
+    behaviour against an assumed log shape. These pin the real node, which is
+    where the two drifted: it emitted "executed", and the route consequently
+    snapshotted the unchanged thesis as a "previous version".
+    """
+
+    def _state(self):
+        return {"refinement_count": 3, "execution_log": [{"tool_name": "refine_thesis",
+                                                          "status": "executed"}]}
+
+    def test_escalation_is_not_an_executed_round(self):
+        out = _escalate_node(self._state())
+        entry = out["execution_log"][-1]
+        assert entry["tool_name"] == "escalate"
+        # "executed" is what api/routes.py keys on to snapshot a previous
+        # version, and what the UI keys on to call a round a no-op. Escalation
+        # runs no tool and returns no thesis, so it is neither.
+        assert entry["status"] == "skipped"
+        assert entry["reason"] == "max_refinements_reached"
+
+    def test_escalation_returns_no_new_thesis_or_count(self):
+        """The duplicate history entry was only harmful because nothing else
+        moved: no new thesis to diff against and no refinement_count bump, so
+        prev and current resolved to the same version number."""
+        out = _escalate_node(self._state())
+        assert out["status"] == "escalated"
+        assert "current_thesis" not in out
+        assert "refinement_count" not in out
+
+    def test_escalation_preserves_prior_log(self):
+        out = _escalate_node(self._state())
+        assert len(out["execution_log"]) == 2
+        assert out["execution_log"][0]["tool_name"] == "refine_thesis"
 
 
 class TestCreateThesisTools:

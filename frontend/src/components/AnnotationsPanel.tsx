@@ -30,15 +30,21 @@ function wasEdited(a: AnnotationResponse): boolean {
   return updated - created > 1000;
 }
 
+// Render initials.
+function initials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length >= 2) return words[0][0] + words[1][0];
+  return name.slice(0, 2);
+}
+
 function Avatar({ a }: { a: AnnotationResponse }) {
-  const url = a.author.avatar_url;
   const name = authorName(a);
-  if (url) {
-    return <img src={url} alt="" className="w-5 h-5 rounded-full flex-shrink-0" />;
-  }
   return (
-    <span className="w-5 h-5 rounded-full bg-base-300 text-[9px] flex items-center justify-center flex-shrink-0 uppercase">
-      {name.slice(0, 2)}
+    <span
+      title={name}
+      className="w-5 h-5 rounded-full bg-base-300 text-[9px] flex items-center justify-center flex-shrink-0 uppercase"
+    >
+      {initials(name)}
     </span>
   );
 }
