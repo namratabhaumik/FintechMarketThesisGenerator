@@ -221,12 +221,17 @@ def _make_assemble_node():
             )
             return skip("no_tool", "skipped")
 
+        content = tool_messages[-1].content
         try:
-            result = json.loads(tool_messages[-1].content)
+            # A ToolMessage's content is typed str | list[...] for multimodal
+            # replies; our tools only ever return a JSON string, so anything
+            # else is the same "unparseable" case json.loads would raise on.
+            if not isinstance(content, str):
+                raise TypeError(f"non-string tool content: {type(content).__name__}")
+            result = json.loads(content)
         except (json.JSONDecodeError, TypeError):
             logger.error(
-                f"assemble_node: could not parse tool result as JSON: "
-                f"{tool_messages[-1].content[:200]}"
+                f"assemble_node: could not parse tool result as JSON: {content[:200]}"
             )
             return skip("unknown", "parse_error")
 
