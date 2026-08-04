@@ -11,6 +11,10 @@ Env knobs (all optional):
                               "120/hour"). Unset -> only the per-route limits
                               below apply. Enabling it also enables
                               SlowAPIMiddleware in main.py; /health is exempt.
+    RATE_LIMIT_TRUSTED_HOPS   How many reverse proxies sit in front of the app.
+                              Default 1 (Render). Decides how far from the
+                              right-hand end of X-Forwarded-For the client IP is
+                              read; see _rate_limit_key.
     RATE_LIMIT_GENERATE       Per-IP limit on thesis generation. Default "10/minute".
     RATE_LIMIT_REFINE         Per-IP limit on refinement.        Default "20/minute".
     RATE_LIMIT_ANNOTATE       Per-IP limit on annotation writes. Default "60/minute".
@@ -27,6 +31,11 @@ from slowapi.util import get_remote_address
 
 # --- Rate limiter -------------------------------------------------------------
 
+# Proxies we sit behind. Render alone is 1. See _rate_limit_key for why this
+# counts from the right-hand end of X-Forwarded-For.
+TRUSTED_PROXY_HOPS = max(1, int(os.getenv("RATE_LIMIT_TRUSTED_HOPS", "1")))
+
+
 def _rate_limit_key(request: Request) -> str:
     """per-user limiting on a shared bucket for all endpoints (frontend surfaces
     a single "rate limit exceeded" error). This is the default key_func for the
@@ -36,10 +45,27 @@ def _rate_limit_key(request: Request) -> str:
     on it would put every user in ONE bucket and let a single client's burst
     429 everyone. Prefer the client IP the proxy records in X-Forwarded-For;
     absent that header (local dev, direct access), fall back to the peer
-    address."""
+    address.
+
+    Reads from the RIGHT, not the left. X-Forwarded-For is client-supplied
+    until a proxy overwrites it, and Render's own docs contradict themselves on
+    whether it overwrites or merely appends -- so the leftmost entry may be a
+    value the caller invented to get a fresh rate-limit bucket per request.
+    Entries are appended left-to-right, so the LAST one was written by the hop
+    closest to us (the only one we can vouch for). The rightmost read is correct
+    under either Render behaviour: if it appends, the last entry is the real
+    peer; if it overwrites, there is one entry and last == first.
+
+    RATE_LIMIT_TRUSTED_HOPS counts the proxies we run behind (1 for Render
+    alone; raise it if a CDN is added in front, or the CDN's appended entry
+    becomes the key and buckets collapse to one per edge node). A chain shorter
+    than that means the request did not arrive through the expected proxies, so
+    trust none of it and key on the peer."""
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        return forwarded.split(",")[0].strip()
+        hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+        if len(hops) >= TRUSTED_PROXY_HOPS:
+            return hops[-TRUSTED_PROXY_HOPS]
     return get_remote_address(request)
 
 
