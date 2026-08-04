@@ -15,6 +15,7 @@ from core.services.thesis_generator_service import (
     _apply_cap_deltas,
     _gold_confidence_inputs,
     _min_source_articles,
+    _ranking_mode,
     _ranked_tags_from_documents,
     _select_feedback_evidence,
     _tag_sources,
@@ -525,6 +526,29 @@ class TestGroundedTagDerivation:
     def test_missing_metadata_treated_as_no_tags(self):
         docs = [Document(page_content="x", metadata={"url": "u"})]  # no tag keys
         assert _ranked_tags_from_documents(docs) == ([], [], [])
+
+    def test_ranking_mode_reports_which_path_actually_ran(self):
+        """The count fallback is silent and produces a structurally identical
+        thesis, so the mode is read off the result: lift is 0.0 exactly when no
+        base rate was found."""
+        docs = [self._doc(themes=["Payments"], url=f"u{i}") for i in range(3)]
+
+        no_rates, _, _ = _ranked_tags_from_documents(docs)
+        assert _ranking_mode(no_rates) == "count"
+
+        with_rates, _, _ = _ranked_tags_from_documents(
+            docs, {("theme", "Payments"): 0.4}, min_source_articles=1
+        )
+        assert _ranking_mode(with_rates) == "lift"
+
+    def test_ranking_mode_is_count_when_rates_miss_these_tags(self):
+        """A non-empty lookup that covers none of the pool's tags is still the
+        fallback - checking the lookup rather than the result would miss it."""
+        docs = [self._doc(themes=["Insurtech"], url="a")]
+        ranked, _, _ = _ranked_tags_from_documents(
+            docs, {("theme", "Something Else"): 0.4}, min_source_articles=1
+        )
+        assert _ranking_mode(ranked) == "count"
 
     def test_min_source_articles_scales_with_the_pool_but_has_a_floor(self):
         assert _min_source_articles(50, 0.10) == 5    # the displayed-sources case

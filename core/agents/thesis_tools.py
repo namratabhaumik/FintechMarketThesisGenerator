@@ -95,6 +95,7 @@ def create_thesis_tools(
             # refinement can add or drop a displayed tag, so a stale trail would
             # cite tags no longer shown.
             "tag_sources": refined.tag_sources,
+            "tags_ranked_by": refined.tags_ranked_by,
             "summary_status": refined.summary_status,
             "refusal_reason": refined.refusal_reason,
         })

@@ -108,6 +108,7 @@ def _resolve_components(tool_name: str, result: dict, current: StructuredThesis)
             result.get("sources", current.sources),
             result.get("raw_output", current.raw_output),
             result.get("tag_sources", current.tag_sources),
+            result.get("tags_ranked_by", current.tags_ranked_by),
             result.get("summary_status", current.summary_status),
             result.get("refusal_reason", current.refusal_reason),
         )
@@ -128,11 +129,14 @@ def _score_and_build(components, current: StructuredThesis) -> StructuredThesis:
     displayed tag (the planner's cap deltas), and the citation trail has to
     describe the tags actually on screen, so it is swapped in with them.
 
+    tags_ranked_by travels with tag_sources for the same reason: it describes how
+    the tags now on screen were ranked, and a refinement re-ranks them.
+
     components is (key_themes, risks, investment_signals, sources, raw_output,
-    tag_sources, summary_status, refusal_reason).
+    tag_sources, tags_ranked_by, summary_status, refusal_reason).
     """
     (key_themes, risks, investment_signals, sources, raw_output,
-     tag_sources, summary_status, refusal_reason) = components
+     tag_sources, tags_ranked_by, summary_status, refusal_reason) = components
     return StructuredThesis(
         key_themes=key_themes,
         risks=risks,
@@ -147,6 +151,7 @@ def _score_and_build(components, current: StructuredThesis) -> StructuredThesis:
         recommendation=current.recommendation,
         key_risk_factors=risks[:min(3, len(risks))],
         tag_sources=tag_sources,
+        tags_ranked_by=tags_ranked_by,
         summary_status=summary_status,
         refusal_reason=refusal_reason,
     )

@@ -49,6 +49,9 @@ class StructuredThesis:
     # --> the source URLs carrying it. Lets the UI answer "why this tag?" without
     # re-deriving it from the stored docs.
     tag_sources: Dict[str, Dict[str, List[str]]] = field(default_factory=dict)
+    # How the displayed tags were ranked: "lift" (against corpus base rates) or
+    # "count" (raw frequency).
+    tags_ranked_by: str = "count"
     recommendation: str = ""
     key_risk_factors: List[str] = field(default_factory=list)
     # What produced raw_output: "llm" (Gemini narrative) or "local" (extractive

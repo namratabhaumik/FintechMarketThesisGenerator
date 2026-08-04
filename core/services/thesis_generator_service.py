@@ -154,6 +154,16 @@ def _base_rate_lookup(rates: Sequence[TagBaseRate]) -> Dict[Tuple[str, str], flo
     return {(r.dimension, r.category): r.rate for r in rates if r.rate > 0}
 
 
+def _ranking_mode(*dimensions: Sequence[RankedTag]) -> str:
+    """Which ranking actually ran: "lift" or the "count" fallback.
+
+    Read off the result rather than off the base rates, because a lookup can be
+    non-empty and still cover none of THESE tags. lift is 0.0 exactly when no
+    base rate was found, so any non-zero lift means the lift path ran.
+    """
+    return "lift" if any(t.lift for d in dimensions for t in d) else "count"
+
+
 def _tag_strengths_from_documents(
     documents: List[Document],
 ) -> Tuple[int, int, int]:
@@ -512,6 +522,12 @@ class ThesisGeneratorService:
         risks = _labels(top_risks)
         investment_signals = _labels(top_signals)
         tag_sources = _tag_sources(top_themes, top_risks, top_signals)
+        tags_ranked_by = _ranking_mode(ranked_themes, ranked_risks, ranked_signals)
+        if tags_ranked_by == "count":
+            logger.warning(
+                "Step 3: tags ranked by COUNT - no corpus base rates covered them, "
+                "so the displayed tags reflect the corpus rather than the query"
+            )
 
         # Step 4: Extract sources from the wide pool (one URL per distinct
         # article - the analytics set already deduped by URL upstream).
@@ -562,6 +578,7 @@ class ThesisGeneratorService:
             recommendation=score_result["recommendation"],
             key_risk_factors=score_result["key_risks"],
             tag_sources=tag_sources,
+            tags_ranked_by=tags_ranked_by,
             summary_source=summary_source,
             summary_status=summary_status,
             refusal_reason=refusal_reason,
@@ -684,6 +701,7 @@ class ThesisGeneratorService:
             sources=sources,
             raw_output=refined_summary,
             tag_sources=_tag_sources(top_themes, top_risks, top_signals),
+            tags_ranked_by=_ranking_mode(ranked_themes, ranked_risks, ranked_signals),
             summary_status=summary_status,
             refusal_reason=refusal_reason,
         )
