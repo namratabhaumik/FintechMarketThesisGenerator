@@ -3,7 +3,7 @@
 import json
 import logging
 from datetime import datetime
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Tuple
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -24,6 +24,33 @@ QUERY_NAME = "match_documents"
 # How many URLs to ask about per dedup lookup. `in_` is serialized into the query
 # string, so an unbounded batch can exceed the gateway's URI limit.
 URL_LOOKUP_BATCH = 100
+
+
+def _dedupe_chunks(chunks: List[Document]) -> List[Document]:
+    """Drop chunks that repeat (url, content) within this batch, first one wins.
+
+    An article can split into two byte-identical chunks when the scraped text
+    repeats a block - a per-source author bio or footer surviving the scrape is
+    enough. That is the same key documents_url_content_uniq enforces, the whole 
+    insert fails on it.
+
+    Nothing is lost: identical text embeds to an identical vector and carries
+    identical Silver tags, and retrieval dedupes to one chunk per article anyway.
+    Keyed per URL, so two different articles sharing a boilerplate paragraph both
+    keep theirs - only a repeat WITHIN one article is redundant.
+    """
+    seen: Set[Tuple[str, str]] = set()
+    kept: List[Document] = []
+    for chunk in chunks:
+        key = ((chunk.metadata or {}).get("url", ""), chunk.page_content)
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(chunk)
+    dropped = len(chunks) - len(kept)
+    if dropped:
+        logger.info(f"Dropped {dropped} repeated chunk(s) before embedding")
+    return kept
 
 
 class SupabaseVectorStoreImpl(IVectorStore):
@@ -75,7 +102,7 @@ class SupabaseVectorStoreImpl(IVectorStore):
                 chunk_overlap=self._config.chunk_overlap,
             )
             # chunks: the per-piece documents actually written to pgvector.
-            chunks = splitter.split_documents(new_docs)
+            chunks = _dedupe_chunks(splitter.split_documents(new_docs))
             logger.info(f"Upserting {len(chunks)} chunks to Supabase pgvector")
             # Embed every chunk and insert the vectors into the documents table.
             SupabaseVectorStore.from_documents(
@@ -139,7 +166,9 @@ class SupabaseVectorStoreImpl(IVectorStore):
             params["date_from"] = date_from.isoformat()
         if date_to is not None:
             params["date_to"] = date_to.isoformat()
-        rows = self._client.rpc(QUERY_NAME, params).execute().data or []
+        # Annotated because postgrest types .data as JSON?, which mypy will
+        # neither iterate nor index; same annotation as the other read sites.
+        rows: list = self._client.rpc(QUERY_NAME, params).execute().data or []
 
         # Relevance floor: an off-topic query returns fewer/zero docs
         if min_similarity > 0.0:
@@ -207,12 +236,12 @@ class SupabaseVectorStoreImpl(IVectorStore):
         # outgrow the gateway's URI limit on a backlog run (a few hundred
         # articles at ~80 chars each). Ask in slices and union the answers.
         for i in range(0, len(urls), URL_LOOKUP_BATCH):
-            chunk = urls[i:i + URL_LOOKUP_BATCH]
+            url_batch = urls[i:i + URL_LOOKUP_BATCH]
             try:
                 resp = (
                     self._client.table(TABLE)
                     .select("metadata->>url")
-                    .in_("metadata->>url", chunk)
+                    .in_("metadata->>url", url_batch)
                     .execute()
                 )
             except Exception as e:
@@ -220,5 +249,6 @@ class SupabaseVectorStoreImpl(IVectorStore):
                 # would make build() re-embed those articles and duplicate chunks.
                 raise RuntimeError(f"Failed to read existing URLs from Supabase: {e}") from e
             # Many chunks per article --> the set collapses them to one per URL.
-            found.update(row["url"] for row in (resp.data or []) if row.get("url"))
+            found_rows: list = resp.data or []
+            found.update(row["url"] for row in found_rows if row.get("url"))
         return found

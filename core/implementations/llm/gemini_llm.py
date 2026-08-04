@@ -15,6 +15,18 @@ from core.utils.text_utils import wrap_untrusted
 logger = logging.getLogger(__name__)
 
 
+def _text(content) -> str:
+    """A message's content, typed str | list[...] for multimodal replies.
+
+    Our prompts are text-only, so Gemini always answers with a plain string;
+    anything else would mean the SDK started returning multimodal content we
+    are not prepared to parse, so fail loud rather than silently stringify it.
+    """
+    if not isinstance(content, str):
+        raise TypeError(f"expected a text reply from Gemini, got {type(content).__name__}")
+    return content
+
+
 class GeminiLanguageModel(ILanguageModel):
     """Gemini LLM implementation."""
 
@@ -68,7 +80,7 @@ If the source documents do not contain enough information to address the topic, 
 {wrap_untrusted(doc_content, label="documents")}"""
 
             result = await self._llm.ainvoke([HumanMessage(content=prompt)])
-            return result.content
+            return _text(result.content)
 
         except Exception as e:
             logger.error(f"Gemini summarization failed: {e}")
@@ -140,7 +152,7 @@ Revised thesis:"""
             logger.info("Refining thesis with Gemini based on user feedback")
             result = await self._llm.ainvoke([HumanMessage(content=prompt)])
             logger.info("Thesis refinement complete")
-            return result.content
+            return _text(result.content)
         except Exception as e:
             logger.error(f"Gemini refinement failed: {e}")
             raise

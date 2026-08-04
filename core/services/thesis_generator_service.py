@@ -154,6 +154,46 @@ def _base_rate_lookup(rates: Sequence[TagBaseRate]) -> Dict[Tuple[str, str], flo
     return {(r.dimension, r.category): r.rate for r in rates if r.rate > 0}
 
 
+def _ranking_modes(
+    themes: Sequence[RankedTag],
+    risks: Sequence[RankedTag],
+    signals: Sequence[RankedTag],
+) -> Dict[str, str]:
+    """Per-dimension ranking mode: "lift", the "count" fallback, or "none" for a
+    dimension that surfaced no tags at all.
+
+    Read off the result rather than off the base rates, because a lookup can be
+    non-empty and still cover none of THESE tags. lift is 0.0 exactly when no
+    base rate was found, so any non-zero lift means the lift path ran.
+
+    Per dimension because the fallback IS per dimension (_ranked_tags_from_documents
+    decides it independently for each).
+    """
+    return {
+        name: (
+            "none" if not tags
+            else "lift" if any(t.lift for t in tags)
+            else "count"
+        )
+        for name, tags in (("themes", themes), ("risks", risks), ("signals", signals))
+    }
+
+
+def _ranking_mode(modes: Dict[str, str]) -> str:
+    """Fold the per-dimension modes into the single value stored on the thesis:
+    "lift", "count", or "mixed" when the dimensions that have tags disagree.
+
+    "mixed" exists so a partial fallback stops being recorded as a clean "lift".
+
+    An empty dimension does not vote: it was not ranked either way. All three empty 
+    falls to "count".
+    """
+    ranked = {mode for mode in modes.values() if mode != "none"}
+    if not ranked:
+        return "count"
+    return ranked.pop() if len(ranked) == 1 else "mixed"
+
+
 def _tag_strengths_from_documents(
     documents: List[Document],
 ) -> Tuple[int, int, int]:
@@ -512,6 +552,16 @@ class ThesisGeneratorService:
         risks = _labels(top_risks)
         investment_signals = _labels(top_signals)
         tag_sources = _tag_sources(top_themes, top_risks, top_signals)
+        ranking_modes = _ranking_modes(ranked_themes, ranked_risks, ranked_signals)
+        tags_ranked_by = _ranking_mode(ranking_modes)
+        # Warn per dimension. Debugging key: tag_ranking_count_fallback.
+        fell_back = [name for name, mode in ranking_modes.items() if mode == "count"]
+        if fell_back:
+            logger.warning(
+                f"Step 3: tag_ranking_count_fallback dimensions={','.join(fell_back)} "
+                f"overall={tags_ranked_by} - no corpus base rate covered those "
+                "categories, so those tags reflect the corpus rather than the query"
+            )
 
         # Step 4: Extract sources from the wide pool (one URL per distinct
         # article - the analytics set already deduped by URL upstream).
@@ -562,6 +612,7 @@ class ThesisGeneratorService:
             recommendation=score_result["recommendation"],
             key_risk_factors=score_result["key_risks"],
             tag_sources=tag_sources,
+            tags_ranked_by=tags_ranked_by,
             summary_source=summary_source,
             summary_status=summary_status,
             refusal_reason=refusal_reason,
@@ -671,6 +722,14 @@ class ThesisGeneratorService:
             ranked_themes, ranked_risks, ranked_signals,
             theme_delta, risk_delta, signal_delta, self._max_tags
         )
+        ranking_modes = _ranking_modes(ranked_themes, ranked_risks, ranked_signals)
+        fell_back = [name for name, mode in ranking_modes.items() if mode == "count"]
+        if fell_back:
+            logger.warning(
+                f"Step 2: tag_ranking_count_fallback dimensions={','.join(fell_back)} "
+                f"overall={_ranking_mode(ranking_modes)} - refined tags for those "
+                "dimensions reflect the corpus rather than the query"
+            )
 
         # Step 3: Extract sources from document metadata (same as generate_thesis)
         logger.info("Step 3: Extracting sources from documents...")
@@ -684,6 +743,7 @@ class ThesisGeneratorService:
             sources=sources,
             raw_output=refined_summary,
             tag_sources=_tag_sources(top_themes, top_risks, top_signals),
+            tags_ranked_by=_ranking_mode(ranking_modes),
             summary_status=summary_status,
             refusal_reason=refusal_reason,
         )

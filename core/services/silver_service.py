@@ -202,13 +202,31 @@ class SilverService:
     def _commit(self, batch: _Batch, total_pending: int) -> int:
         """Persist a collected batch; return the count of fintech articles.
 
-        Order matters: persist the validated text BEFORE embedding, so if
-        embedding fails the next run can re-embed from it without re-scraping.
-        Record verdicts only AFTER embedding succeeds (failed embed -> no verdict
-        -> a later run re-attempts it, cheaply, from persisted text). The vector
-        store dedups by URL.
+        Write order:
+          text is what a retry needs --> save it before the embed --> a failed
+            embed re-embeds without re-scraping
+          rejected article has no document --> an embed failure cannot make its
+            verdict inconsistent --> record it before the embed --> a crash stops
+            throwing away classifier calls already paid for
+          accepted article has an embedding --> the verdict must not outlive a
+            failed embed --> record it after --> the article stays pending -->
+            the next run retries it cheaply from the persisted text
+          quarantined article has no document either, and its failure is terminal
+            (transient ones go to `errored` and stay pending) --> park it before
+            the embed --> a crash stops re-scraping URLs already known to fail
+
+        Vector store dedups by URL and record() upserts with ignore_duplicates
+        --> the split write stays idempotent.
         """
         self._content_repository.save(batch.new_content)
+
+        # Split by the verdict itself: only accepted articles have an embedding
+        # to stay consistent with.
+        accepted = [v for v in batch.verdicts if v.fintech_relevant]
+        rejected = [v for v in batch.verdicts if not v.fintech_relevant]
+        self._silver_repository.record(rejected)
+        self._quarantine_repository.add(batch.quarantined)
+
         if batch.documents:
             logger.info(
                 f"Sending {len(batch.documents)} fintech articles to the vector "
@@ -218,8 +236,7 @@ class SilverService:
         else:
             logger.info("No new fintech articles to send")
 
-        self._silver_repository.record(batch.verdicts)
-        self._quarantine_repository.add(batch.quarantined)
+        self._silver_repository.record(accepted)
 
         check_silver(
             pending=total_pending,

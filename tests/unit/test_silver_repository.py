@@ -4,51 +4,7 @@ from core.implementations.repositories.supabase_silver_repository import (
     SupabaseSilverRepository,
 )
 from core.models.silver_record import SilverVerdict
-
-
-class _FakeResp:
-    def __init__(self, data=None):
-        self.data = data
-
-
-class _FakeTable:
-    def __init__(self, store: dict):
-        self._store = store  # url -> full row dict
-        self._op = None
-        self._payload = None
-        self._filter = None
-
-    def upsert(self, rows, on_conflict=None, ignore_duplicates=False):
-        new = [r for r in rows if r["url"] not in self._store]
-        for r in new:
-            self._store[r["url"]] = r
-        self._op, self._payload = "upsert", new
-        return self
-
-    def select(self, *args):
-        self._op = "select"
-        return self
-
-    def eq(self, column, value):
-        self._filter = (column, value)
-        return self
-
-    def execute(self):
-        if self._op == "upsert":
-            return _FakeResp(data=self._payload)
-        rows = list(self._store.values())
-        if self._filter:
-            col, val = self._filter
-            rows = [r for r in rows if r.get(col) == val]
-        return _FakeResp(data=rows)
-
-
-class _FakeClient:
-    def __init__(self):
-        self.store: dict = {}
-
-    def table(self, name):
-        return _FakeTable(self.store)
+from tests.unit.fake_supabase import FakeClient as _FakeClient
 
 
 def test_record_and_processed_urls():

@@ -12,7 +12,7 @@ All endpoints except `GET /api/health` require a Supabase JWT:
 Authorization: Bearer <access_token>
 ```
 
-See [Authentication](../guides/auth.md) for how to obtain a token. Requests are subject to per-account rate limits ([Limits](../limits.md)).
+See [Authentication](../guides/auth.md) for how to obtain a token. Requests are subject to per-IP rate limits ([Limits](../limits.md)).
 
 ## Endpoints
 
@@ -53,8 +53,9 @@ Most of the thesis response is self-describing. These few carry meaning the sche
 | `covered_weeks` / `window_weeks` | The fraction behind `confidence_level`, so a client can render "17 of 47 weeks" rather than a bare decimal. `covered_weeks` counts weeks of corpus history in which the thesis's displayed tags were reported; `window_weeks` is the retrieval window in weeks, capped at the span the trend data actually holds. See [The thesis pipeline](../concepts/pipeline.md#why-confidence-counts-weeks-and-only-for-the-displayed-tags). |
 | `confidence_level` | `covered_weeks / window_weeks`. A property of the corpus behind the thesis, not a probability that the thesis is correct. |
 | `summary_status` / `refusal_reason` | Whether the narrative was written or declined, and by which gate. See [Refusals and fallbacks](../concepts/refusals.md). |
+| `tags_ranked_by` | How the displayed tags were chosen. `lift` means they were ranked against corpus-wide base rates, so they describe what this query's evidence is unusually full of. `count` means no base rate covered them and they fell back to raw frequency, which on a wide evidence pool tends to describe the corpus rather than the query - read those tags with more caution. `mixed` means some dimensions ranked by lift and others fell back. Recorded at generation time and never recomputed, so it explains that thesis, not the corpus today. |
 
-Theses generated before a given field existed simply omit it; clients should treat all four as optional.
+Theses generated before a given field existed simply omit it; treat every field in this table as optional.
 
 For full request and response schemas, use the interactive Swagger UI served by the dev environment: [https://fintechmarketthesisgenerator.onrender.com/docs](https://fintechmarketthesisgenerator.onrender.com/docs). It reflects the current API by construction (the production API is the same code with schema browsing disabled). Note the dev service is free-tier hosted, so the first load after idle can take a minute, and executing calls from Swagger still requires a bearer token.
 

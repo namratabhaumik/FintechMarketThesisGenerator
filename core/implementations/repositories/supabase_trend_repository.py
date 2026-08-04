@@ -6,6 +6,7 @@ from typing import List, Optional
 
 from supabase import Client
 
+from core.implementations.repositories.paging import fetch_paged
 from core.interfaces.trend_repository import ITrendRepository
 from core.models.tag_base_rate import TagBaseRate
 from core.models.trend_metric import TrendMetric
@@ -69,13 +70,18 @@ class SupabaseTrendRepository(ITrendRepository):
 
     def fetch_all(self) -> List[TrendMetric]:
         # Read every bucket, newest week first --> rebuild each as a TrendMetric.
-        resp = (
-            self._client.table(TABLE)
+        # Paged: one row per (week, dimension, category), so Gold grows this
+        # table fastest of all - a truncated read would silently drop the oldest
+        # weeks out of the trend history. Sorting on the full upsert key
+        # (week_start, dimension, category) makes it unique, so paging is stable.
+        rows = fetch_paged(
+            lambda: self._client.table(TABLE)
             .select("*")
             .order("week_start", desc=True)
-            .execute()
+            .order("dimension")
+            .order("category")
         )
-        return [self._to_metric(row) for row in (resp.data or [])]
+        return [self._to_metric(row) for row in rows]
 
     def fetch_recent(self, window_weeks: Optional[int]) -> List[TrendMetric]:
         # Confidence only looks at the last `window_weeks` Gold weeks ending at
@@ -92,14 +98,18 @@ class SupabaseTrendRepository(ITrendRepository):
         if as_of is None:
             return []
         cutoff = as_of - timedelta(weeks=window_weeks - 1)
-        resp = (
-            self._client.table(TABLE)
+        # Paged like fetch_all. The window bounds the rows but does not cap them:
+        # a wide window over a taxonomy with many categories still multiplies out
+        # past the row limit, and confidence is computed from what comes back.
+        rows = fetch_paged(
+            lambda: self._client.table(TABLE)
             .select("*")
             .gte("week_start", cutoff.isoformat())
             .order("week_start", desc=True)
-            .execute()
+            .order("dimension")
+            .order("category")
         )
-        return [self._to_metric(row) for row in (resp.data or [])]
+        return [self._to_metric(row) for row in rows]
 
     def upsert_base_rates(self, rates: List[TagBaseRate]) -> int:
         # One computed_at per recompute, same lineage story as upsert().
@@ -131,8 +141,16 @@ class SupabaseTrendRepository(ITrendRepository):
 
     def fetch_base_rates(self) -> List[TagBaseRate]:
         # Small by construction: one row per (dimension, category), not per week.
-        resp = self._client.table(BASE_RATE_TABLE).select("*").execute()
-        return [self._to_base_rate(row) for row in (resp.data or [])]
+        # Paged anyway - these are the lift denominators, and a silently short
+        # read would inflate lift for whichever categories fell off the end.
+        # (dimension, category) is the upsert key, so it orders uniquely.
+        rows = fetch_paged(
+            lambda: self._client.table(BASE_RATE_TABLE)
+            .select("*")
+            .order("dimension")
+            .order("category")
+        )
+        return [self._to_base_rate(row) for row in rows]
 
     def _latest_week(self) -> Optional[date]:
         # Cheap probe (LIMIT 1) for the newest week_start - the anchor the
@@ -144,7 +162,9 @@ class SupabaseTrendRepository(ITrendRepository):
             .limit(1)
             .execute()
         )
-        rows = resp.data or []
+        # Annotated because postgrest types .data as JSON?, which mypy will not
+        # let us index; the same annotation is used at the other read sites.
+        rows: list = resp.data or []
         return date.fromisoformat(rows[0]["week_start"]) if rows else None
 
     @staticmethod
