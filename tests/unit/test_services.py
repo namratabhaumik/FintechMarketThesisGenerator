@@ -1,6 +1,7 @@
 """Unit tests for service layer."""
 
 import asyncio
+import logging
 from datetime import date
 from unittest.mock import Mock
 
@@ -243,6 +244,42 @@ class TestDocumentRetrievalService:
 
         assert [d.metadata["url"] for d in selected] == ["u0", "u1"]
         assert all("embedding" not in d.metadata for d in selected)
+
+    def test_select_diverse_fallback_logs_reason_and_counts(self, caplog):
+        """The fallback is invisible in the output (still k docs, still a
+        thesis), so the log line is the only signal. It carries counts because
+        one doc missing a vector is routine and all of them missing is an
+        embedding outage."""
+        from config.settings import RetrievalConfig
+
+        pool = [
+            Document(page_content=f"a{i}", metadata={"url": f"u{i}", "embedding": [1.0, 0.0]})
+            for i in range(4)
+        ]
+        pool[2].metadata["embedding"] = None
+        service, _ = self._service(RetrievalConfig(k=2), docs=pool)
+
+        with caplog.at_level(logging.WARNING):
+            service.select_diverse(pool, query_embedding=[1.0, 0.0])
+
+        assert "select_diverse_fallback" in caplog.text
+        assert "reason=missing_candidate_vectors" in caplog.text
+        assert "missing=1/4" in caplog.text
+
+    def test_select_diverse_fallback_names_both_reasons(self, caplog):
+        from config.settings import RetrievalConfig
+
+        pool = [
+            Document(page_content=f"a{i}", metadata={"url": f"u{i}", "embedding": None})
+            for i in range(4)
+        ]
+        service, _ = self._service(RetrievalConfig(k=2), docs=pool)
+
+        with caplog.at_level(logging.WARNING):
+            service.select_diverse(pool, query_embedding=None)
+
+        assert "reason=no_query_vector+missing_candidate_vectors" in caplog.text
+        assert "missing=4/4" in caplog.text
 
     def test_retrieve_query_date_intent_overrides_window_days(self):
         from config.settings import RetrievalConfig
