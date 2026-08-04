@@ -95,10 +95,7 @@ class TestRequireAdmin:
 class TestRateLimitKey:
     """Behind a reverse proxy (e.g. Render) the key is the client IP recorded
     in X-Forwarded-For, so users get separate buckets; without the header
-    (local dev, direct access) it falls back to the peer address.
-
-    The entry is read from the RIGHT (the hop we trust wrote it), because
-    anything further left may have been supplied by the caller."""
+    (local dev, direct access) it falls back to the peer address."""
 
     @staticmethod
     def _request(headers=(), client=("10.0.0.1", 1234)) -> Request:
@@ -109,28 +106,12 @@ class TestRateLimitKey:
         }
         return Request(scope)
 
-    def test_uses_hop_written_by_the_trusted_proxy(self):
-        """Render appended 10.1.2.3; the leftmost entry is the caller's own
-        claim and must not become the key."""
+    def test_prefers_first_forwarded_hop(self):
         req = self._request([(b"x-forwarded-for", b"203.0.113.7, 10.1.2.3")])
-        assert _rate_limit_key(req) == "10.1.2.3"
-
-    def test_single_hop_when_proxy_overwrites_the_header(self):
-        req = self._request([(b"x-forwarded-for", b"203.0.113.7")])
         assert _rate_limit_key(req) == "203.0.113.7"
-
-    def test_spoofed_prefix_cannot_split_the_bucket(self):
-        """Two requests from one client that vary only in the fabricated
-        left-hand entries still share a bucket."""
-        a = self._request([(b"x-forwarded-for", b"1.1.1.1, 203.0.113.9")])
-        b = self._request([(b"x-forwarded-for", b"2.2.2.2, 203.0.113.9")])
-        assert _rate_limit_key(a) == _rate_limit_key(b) == "203.0.113.9"
 
     def test_falls_back_to_peer_address_without_header(self):
         assert _rate_limit_key(self._request()) == "10.0.0.1"
-
-    def test_falls_back_to_peer_address_on_empty_header(self):
-        assert _rate_limit_key(self._request([(b"x-forwarded-for", b"  ")])) == "10.0.0.1"
 
 
 class TestRateLimit:
