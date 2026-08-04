@@ -66,8 +66,9 @@ class ThesisResponse(BaseModel):
     # Citation trail: dimension -> displayed tag -> the source URLs behind it.
     # Theses generated before this existed omit it, hence the empty default.
     tag_sources: Dict[str, Dict[str, List[str]]] = {}
-    # "lift" (ranked against corpus base rates) or "count" (raw frequency, the
-    # fallback when base rates are unavailable).
+    # "lift" (ranked against corpus base rates), "count" (raw frequency, the
+    # fallback when base rates are unavailable), or "mixed" when only some
+    # dimensions had base rates covering their categories.
     tags_ranked_by: str = "count"
     # What produced raw_output: "llm" or "local" (extractive fallback).
     summary_source: str = "llm"

@@ -16,13 +16,15 @@ The boundaries you may run into, and why they exist.
 
 ## Rate limits
 
-Applied per account:
+Applied per client IP, not per account - the limiter reads the address recorded by the proxy in front of the service, so it applies before any token is inspected:
 
 | Operation | Default |
 | --- | --- |
 | Thesis generation | 10 per minute |
 | Refinement | 20 per minute |
 | Annotation writes (add, edit, resolve, delete) | 60 per minute |
+
+Two consequences of keying on the address rather than the account: people sharing one office or campus connection draw on the same bucket, and one person on two networks gets a bucket on each. Signing in does not raise a limit.
 
 Exceeding a limit returns `429` with a `rate_limited` error; wait for the window to reset and retry. Generation and refinement are limited because each invokes the language model. Annotation writes cost no tokens, so their limit is a row-flooding guard set well above normal note-taking. Reads (library, single thesis, annotations, health) are not separately limited by default.
 

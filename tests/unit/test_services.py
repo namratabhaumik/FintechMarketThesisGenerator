@@ -17,6 +17,7 @@ from core.services.thesis_generator_service import (
     _gold_confidence_inputs,
     _min_source_articles,
     _ranking_mode,
+    _ranking_modes,
     _ranked_tags_from_documents,
     _select_feedback_evidence,
     _tag_sources,
@@ -570,11 +571,13 @@ class TestGroundedTagDerivation:
         base rate was found."""
         docs = [self._doc(themes=["Payments"], url=f"u{i}") for i in range(3)]
 
-        no_rates, _, _ = _ranked_tags_from_documents(docs)
+        no_rates = _ranking_modes(*_ranked_tags_from_documents(docs))
         assert _ranking_mode(no_rates) == "count"
 
-        with_rates, _, _ = _ranked_tags_from_documents(
-            docs, {("theme", "Payments"): 0.4}, min_source_articles=1
+        with_rates = _ranking_modes(
+            *_ranked_tags_from_documents(
+                docs, {("theme", "Payments"): 0.4}, min_source_articles=1
+            )
         )
         assert _ranking_mode(with_rates) == "lift"
 
@@ -582,10 +585,44 @@ class TestGroundedTagDerivation:
         """A non-empty lookup that covers none of the pool's tags is still the
         fallback - checking the lookup rather than the result would miss it."""
         docs = [self._doc(themes=["Insurtech"], url="a")]
-        ranked, _, _ = _ranked_tags_from_documents(
-            docs, {("theme", "Something Else"): 0.4}, min_source_articles=1
+        modes = _ranking_modes(
+            *_ranked_tags_from_documents(
+                docs, {("theme", "Something Else"): 0.4}, min_source_articles=1
+            )
         )
-        assert _ranking_mode(ranked) == "count"
+        assert _ranking_mode(modes) == "count"
+
+    def test_ranking_mode_is_mixed_when_only_some_dimensions_have_base_rates(self):
+        """The fallback is decided per dimension, so Gold covering themes but not
+        risks must not be recorded as a clean "lift" - that is the case a young
+        corpus makes likeliest, and folding it away hides it."""
+        docs = [self._doc(themes=["Payments"], risks=["Fraud"], url="a")]
+        modes = _ranking_modes(
+            *_ranked_tags_from_documents(
+                docs, {("theme", "Payments"): 0.4}, min_source_articles=1
+            )
+        )
+        assert modes["themes"] == "lift"
+        assert modes["risks"] == "count"     # no base rate for the risk category
+        assert modes["signals"] == "none"    # no signal tags at all
+        assert _ranking_mode(modes) == "mixed"
+
+    def test_a_dimension_with_no_tags_does_not_vote(self):
+        """A dimension that surfaced nothing was ranked neither way, so it must
+        not drag a fully lift-ranked thesis into "mixed"."""
+        docs = [self._doc(themes=["Payments"], url="a")]
+        modes = _ranking_modes(
+            *_ranked_tags_from_documents(
+                docs, {("theme", "Payments"): 0.4}, min_source_articles=1
+            )
+        )
+        assert [modes["risks"], modes["signals"]] == ["none", "none"]
+        assert _ranking_mode(modes) == "lift"
+
+    def test_ranking_mode_falls_to_count_when_nothing_was_ranked(self):
+        """No tags in any dimension - the stored value stays the neutral default
+        rather than claiming a ranking ran."""
+        assert _ranking_mode(_ranking_modes([], [], [])) == "count"
 
     def test_min_source_articles_scales_with_the_pool_but_has_a_floor(self):
         assert _min_source_articles(50, 0.10) == 5    # the displayed-sources case
