@@ -5,6 +5,7 @@ from typing import List, Set
 
 from supabase import Client
 
+from core.implementations.repositories.paging import fetch_paged
 from core.interfaces.quarantine_repository import IQuarantineRepository
 from core.models.quarantine_record import QuarantineRecord
 
@@ -58,6 +59,10 @@ class SupabaseQuarantineRepository(IQuarantineRepository):
     def quarantined_urls(self) -> Set[str]:
         # Fetch just the URL column --> build a set so callers can quickly test
         # "is this URL already quarantined?" and skip it.
-        resp = self._client.table(TABLE).select("url").execute()
-        rows: list = resp.data or []
+        # Paged, and for the same reason as processed_urls(): this is the other
+        # half of Silver's `skip` set, so a dropped URL sends an article that
+        # already failed to scrape back through the scraper every run.
+        rows = fetch_paged(
+            lambda: self._client.table(TABLE).select("url").order("url")
+        )
         return {row["url"] for row in rows}

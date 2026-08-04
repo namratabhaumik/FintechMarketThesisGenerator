@@ -166,7 +166,9 @@ class SupabaseVectorStoreImpl(IVectorStore):
             params["date_from"] = date_from.isoformat()
         if date_to is not None:
             params["date_to"] = date_to.isoformat()
-        rows = self._client.rpc(QUERY_NAME, params).execute().data or []
+        # Annotated because postgrest types .data as JSON?, which mypy will
+        # neither iterate nor index; same annotation as the other read sites.
+        rows: list = self._client.rpc(QUERY_NAME, params).execute().data or []
 
         # Relevance floor: an off-topic query returns fewer/zero docs
         if min_similarity > 0.0:
@@ -234,12 +236,12 @@ class SupabaseVectorStoreImpl(IVectorStore):
         # outgrow the gateway's URI limit on a backlog run (a few hundred
         # articles at ~80 chars each). Ask in slices and union the answers.
         for i in range(0, len(urls), URL_LOOKUP_BATCH):
-            chunk = urls[i:i + URL_LOOKUP_BATCH]
+            url_batch = urls[i:i + URL_LOOKUP_BATCH]
             try:
                 resp = (
                     self._client.table(TABLE)
                     .select("metadata->>url")
-                    .in_("metadata->>url", chunk)
+                    .in_("metadata->>url", url_batch)
                     .execute()
                 )
             except Exception as e:
@@ -247,5 +249,6 @@ class SupabaseVectorStoreImpl(IVectorStore):
                 # would make build() re-embed those articles and duplicate chunks.
                 raise RuntimeError(f"Failed to read existing URLs from Supabase: {e}") from e
             # Many chunks per article --> the set collapses them to one per URL.
-            found.update(row["url"] for row in (resp.data or []) if row.get("url"))
+            found_rows: list = resp.data or []
+            found.update(row["url"] for row in found_rows if row.get("url"))
         return found

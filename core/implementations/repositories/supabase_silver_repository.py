@@ -5,6 +5,7 @@ from typing import Dict, List, Set
 
 from supabase import Client
 
+from core.implementations.repositories.paging import fetch_paged
 from core.interfaces.silver_repository import ISilverRepository
 from core.models.silver_record import SilverVerdict
 
@@ -32,19 +33,26 @@ class SupabaseSilverRepository(ISilverRepository):
     def processed_urls(self) -> Set[str]:
         # Fetch just the URL column --> set of URLs already given a verdict, so
         # the build can skip them and stay idempotent.
-        resp = self._client.table(TABLE).select("url").execute()
-        rows: list = resp.data or []
+        # Paged: a short read here is the worst of the lot. Silver unions this
+        # into its `skip` set, so a missing URL reads as "never decided" and the
+        # article is re-classified and re-embedded - burning classifier calls and
+        # violating the frozen-verdict rule. Ordered by the UNIQUE url so paging
+        # is stable.
+        rows = fetch_paged(
+            lambda: self._client.table(TABLE).select("url").order("url")
+        )
         return {row["url"] for row in rows}
 
     def fintech_tags(self) -> Dict[str, Dict[str, List[str]]]:
         # Pull all three tag dimensions for the accepted (fintech) rows.
-        resp = (
-            self._client.table(TABLE)
+        # Paged: these tags are Gold's aggregation input, so a truncated read
+        # quietly shrinks every trend count rather than failing.
+        rows = fetch_paged(
+            lambda: self._client.table(TABLE)
             .select("url, themes, risks, signals")
             .eq("fintech_relevant", True)
-            .execute()
+            .order("url")
         )
-        rows: list = resp.data or []
         # url --> {themes, risks, signals}; each null dimension falls back to []
         return {
             row["url"]: {

@@ -8,6 +8,7 @@ from typing import List
 from postgrest.types import CountMethod
 from supabase import Client
 
+from core.implementations.repositories.paging import fetch_paged
 from core.interfaces.article_repository import IArticleRepository
 from core.models.raw_article import RawArticle
 
@@ -59,14 +60,23 @@ class SupabaseArticleRepository(IArticleRepository):
         return inserted
 
     def fetch_all(self) -> List[RawArticle]:
-        # Read every Bronze row, newest first --> rebuild each as a RawArticle.
-        resp = (
-            self._client.table(TABLE)
+        """Every Bronze row, newest first --> rebuilt as RawArticles.
+
+        Paged: Silver treats whatever this returns as the whole of Bronze, so a
+        truncated read means an article below the cutoff is never classified -
+        and it fails silently, because the row never reaches `pending` and the
+        check_silver gate reconciles against `pending`.
+
+        `url` is the tiebreaker: feed entries very often share a published_at,
+        and paging needs a unique sort key to stay stable across requests.
+        """
+        rows = fetch_paged(
+            lambda: self._client.table(TABLE)
             .select("*")
             .order("published_at", desc=True)
-            .execute()
+            .order("url")
         )
-        return [self._to_raw_article(row) for row in (resp.data or [])]
+        return [self._to_raw_article(row) for row in rows]
 
     def count(self) -> int:
         # Ask Postgres for an exact row count without pulling the rows.

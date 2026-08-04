@@ -6,44 +6,9 @@ from core.implementations.repositories.supabase_article_content_repository impor
     SupabaseArticleContentRepository,
 )
 from core.models.article import Article
+from tests.unit.fake_supabase import FakeClient as _FakeClient
 
 PUB = datetime(2026, 1, 1, tzinfo=timezone.utc)
-
-
-class _FakeResp:
-    def __init__(self, data=None):
-        self.data = data
-
-
-class _FakeTable:
-    def __init__(self, store: dict):
-        self._store = store
-        self._op = None
-        self._payload = None
-
-    def upsert(self, rows, on_conflict=None, ignore_duplicates=False):
-        new = [r for r in rows if r["url"] not in self._store]
-        for r in new:
-            self._store[r["url"]] = r
-        self._op, self._payload = "upsert", new
-        return self
-
-    def select(self, *args):
-        self._op = "select"
-        return self
-
-    def execute(self):
-        if self._op == "upsert":
-            return _FakeResp(data=self._payload)
-        return _FakeResp(data=list(self._store.values()))
-
-
-class _FakeClient:
-    def __init__(self):
-        self.store: dict = {}
-
-    def table(self, name):
-        return _FakeTable(self.store)
 
 
 def _article(url, title="Title"):

@@ -6,6 +6,7 @@ from typing import List
 
 from supabase import Client
 
+from core.implementations.repositories.paging import fetch_paged
 from core.interfaces.article_content_repository import IArticleContentRepository
 from core.models.article import Article
 
@@ -62,8 +63,12 @@ class SupabaseArticleContentRepository(IArticleContentRepository):
 
     def fetch_all(self) -> List[Article]:
         # Pull every stored row, then turn each DB row back into an Article.
-        resp = self._client.table(TABLE).select("*").execute()
-        rows: list = resp.data or []
+        # Paged: Silver reuses these rows to avoid re-scraping a URL it already
+        # has text for, so a truncated read sends the scraper back out over
+        # articles already on disk. Ordered by the UNIQUE url to page stably.
+        rows = fetch_paged(
+            lambda: self._client.table(TABLE).select("*").order("url")
+        )
         # for each row --> rebuild an Article, parsing the ISO string back
         # into a datetime.
         return [
