@@ -7,84 +7,16 @@ from core.implementations.repositories.supabase_trend_repository import (
 )
 from core.models.tag_base_rate import TagBaseRate
 from core.models.trend_metric import TrendMetric
+from tests.unit.fake_supabase import FakeClient
 
 
-class _FakeResp:
-    def __init__(self, data=None):
-        self.data = data
-
-
-class _FakeTable:
-    def __init__(self, store: dict, key=None):
-        self._store = store  # composite key -> row
-        self._key = key or (lambda r: (r["week_start"], r["dimension"], r["category"]))
-        self._op = None
-        self._filters = []  # (column, min_value) for .gte
-        self._neq = None    # (column, value) for .neq
-        self._order = None  # (column, desc)
-        self._limit = None
-
-    def upsert(self, rows, on_conflict=None):
-        # Composite key overwrite, mirroring ON CONFLICT DO UPDATE.
-        for r in rows:
-            self._store[self._key(r)] = r
-        self._op = "upsert"
-        return self
-
-    def delete(self):
-        self._op = "delete"
-        return self
-
-    def neq(self, column, value):
-        self._neq = (column, value)
-        return self
-
-    def select(self, *args):
-        self._op = "select"
-        return self
-
-    def gte(self, column, value):
-        self._filters.append((column, value))
-        return self
-
-    def order(self, column, desc=False):
-        self._order = (column, desc)
-        return self
-
-    def limit(self, n):
-        self._limit = n
-        return self
-
-    def execute(self):
-        if self._op == "delete":
-            column, value = self._neq
-            for k in [k for k, r in self._store.items() if r.get(column) != value]:
-                del self._store[k]
-            return _FakeResp(data=[])
-        # week_start rows are ISO strings, so >= and sort compare lexically,
-        # which for ISO-8601 dates matches chronological order.
-        rows = list(self._store.values())
-        for column, value in self._filters:
-            rows = [r for r in rows if r[column] >= value]
-        if self._order:
-            column, desc = self._order
-            rows.sort(key=lambda r: r[column], reverse=desc)
-        if self._limit is not None:
-            rows = rows[: self._limit]
-        return _FakeResp(data=rows)
-
-
-class _FakeClient:
-    def __init__(self):
-        self.store: dict = {}
-        self.base_rate_store: dict = {}
-
-    def table(self, name):
-        if name == "tag_base_rates":
-            return _FakeTable(
-                self.base_rate_store, key=lambda r: (r["dimension"], r["category"])
-            )
-        return _FakeTable(self.store)
+def _FakeClient():
+    """Gold's two tables are the only ones not keyed by url, so they need their
+    real ON CONFLICT targets spelled out for the fake to dedupe like Postgres."""
+    return FakeClient(keys={
+        "trend_metrics": lambda r: (r["week_start"], r["dimension"], r["category"]),
+        "tag_base_rates": lambda r: (r["dimension"], r["category"]),
+    })
 
 
 def _m(week, dimension, category, count, load_ids=None):

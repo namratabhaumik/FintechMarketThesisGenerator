@@ -1,6 +1,7 @@
 """Unit tests for service layer."""
 
 import asyncio
+import logging
 from datetime import date
 from unittest.mock import Mock
 
@@ -15,6 +16,8 @@ from core.services.thesis_generator_service import (
     _apply_cap_deltas,
     _gold_confidence_inputs,
     _min_source_articles,
+    _ranking_mode,
+    _ranking_modes,
     _ranked_tags_from_documents,
     _select_feedback_evidence,
     _tag_sources,
@@ -242,6 +245,42 @@ class TestDocumentRetrievalService:
 
         assert [d.metadata["url"] for d in selected] == ["u0", "u1"]
         assert all("embedding" not in d.metadata for d in selected)
+
+    def test_select_diverse_fallback_logs_reason_and_counts(self, caplog):
+        """The fallback is invisible in the output (still k docs, still a
+        thesis), so the log line is the only signal. It carries counts because
+        one doc missing a vector is routine and all of them missing is an
+        embedding outage."""
+        from config.settings import RetrievalConfig
+
+        pool = [
+            Document(page_content=f"a{i}", metadata={"url": f"u{i}", "embedding": [1.0, 0.0]})
+            for i in range(4)
+        ]
+        pool[2].metadata["embedding"] = None
+        service, _ = self._service(RetrievalConfig(k=2), docs=pool)
+
+        with caplog.at_level(logging.WARNING):
+            service.select_diverse(pool, query_embedding=[1.0, 0.0])
+
+        assert "select_diverse_fallback" in caplog.text
+        assert "reason=missing_candidate_vectors" in caplog.text
+        assert "missing=1/4" in caplog.text
+
+    def test_select_diverse_fallback_names_both_reasons(self, caplog):
+        from config.settings import RetrievalConfig
+
+        pool = [
+            Document(page_content=f"a{i}", metadata={"url": f"u{i}", "embedding": None})
+            for i in range(4)
+        ]
+        service, _ = self._service(RetrievalConfig(k=2), docs=pool)
+
+        with caplog.at_level(logging.WARNING):
+            service.select_diverse(pool, query_embedding=None)
+
+        assert "reason=no_query_vector+missing_candidate_vectors" in caplog.text
+        assert "missing=4/4" in caplog.text
 
     def test_retrieve_query_date_intent_overrides_window_days(self):
         from config.settings import RetrievalConfig
@@ -525,6 +564,65 @@ class TestGroundedTagDerivation:
     def test_missing_metadata_treated_as_no_tags(self):
         docs = [Document(page_content="x", metadata={"url": "u"})]  # no tag keys
         assert _ranked_tags_from_documents(docs) == ([], [], [])
+
+    def test_ranking_mode_reports_which_path_actually_ran(self):
+        """The count fallback is silent and produces a structurally identical
+        thesis, so the mode is read off the result: lift is 0.0 exactly when no
+        base rate was found."""
+        docs = [self._doc(themes=["Payments"], url=f"u{i}") for i in range(3)]
+
+        no_rates = _ranking_modes(*_ranked_tags_from_documents(docs))
+        assert _ranking_mode(no_rates) == "count"
+
+        with_rates = _ranking_modes(
+            *_ranked_tags_from_documents(
+                docs, {("theme", "Payments"): 0.4}, min_source_articles=1
+            )
+        )
+        assert _ranking_mode(with_rates) == "lift"
+
+    def test_ranking_mode_is_count_when_rates_miss_these_tags(self):
+        """A non-empty lookup that covers none of the pool's tags is still the
+        fallback - checking the lookup rather than the result would miss it."""
+        docs = [self._doc(themes=["Insurtech"], url="a")]
+        modes = _ranking_modes(
+            *_ranked_tags_from_documents(
+                docs, {("theme", "Something Else"): 0.4}, min_source_articles=1
+            )
+        )
+        assert _ranking_mode(modes) == "count"
+
+    def test_ranking_mode_is_mixed_when_only_some_dimensions_have_base_rates(self):
+        """The fallback is decided per dimension, so Gold covering themes but not
+        risks must not be recorded as a clean "lift" - that is the case a young
+        corpus makes likeliest, and folding it away hides it."""
+        docs = [self._doc(themes=["Payments"], risks=["Fraud"], url="a")]
+        modes = _ranking_modes(
+            *_ranked_tags_from_documents(
+                docs, {("theme", "Payments"): 0.4}, min_source_articles=1
+            )
+        )
+        assert modes["themes"] == "lift"
+        assert modes["risks"] == "count"     # no base rate for the risk category
+        assert modes["signals"] == "none"    # no signal tags at all
+        assert _ranking_mode(modes) == "mixed"
+
+    def test_a_dimension_with_no_tags_does_not_vote(self):
+        """A dimension that surfaced nothing was ranked neither way, so it must
+        not drag a fully lift-ranked thesis into "mixed"."""
+        docs = [self._doc(themes=["Payments"], url="a")]
+        modes = _ranking_modes(
+            *_ranked_tags_from_documents(
+                docs, {("theme", "Payments"): 0.4}, min_source_articles=1
+            )
+        )
+        assert [modes["risks"], modes["signals"]] == ["none", "none"]
+        assert _ranking_mode(modes) == "lift"
+
+    def test_ranking_mode_falls_to_count_when_nothing_was_ranked(self):
+        """No tags in any dimension - the stored value stays the neutral default
+        rather than claiming a ranking ran."""
+        assert _ranking_mode(_ranking_modes([], [], [])) == "count"
 
     def test_min_source_articles_scales_with_the_pool_but_has_a_floor(self):
         assert _min_source_articles(50, 0.10) == 5    # the displayed-sources case

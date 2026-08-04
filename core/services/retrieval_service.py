@@ -123,8 +123,22 @@ class DocumentRetrievalService:
         # the query embedding failed upstream, or a doc has no carried embedding
         # (e.g. a rehydrated stored doc), fall back to the leading
         # relevance-ordered docs - which are already the best matches.
-        if query_embedding is None or any(e is None for e in candidate_embeddings):
-            logger.warning("select_diverse: no query/candidate vectors; falling back to top-k by relevance")
+        #
+        # Log the counts because the numbers are what separate "one rehydrated doc 
+        # lacks a vector" (routine) from "the embedding model is down and none of 
+        # them have one" (an outage worth paging on). Debugging key: select_diverse_fallback.
+        missing = sum(1 for e in candidate_embeddings if e is None)
+        if query_embedding is None or missing:
+            reasons = []
+            if query_embedding is None:
+                reasons.append("no_query_vector")
+            if missing:
+                reasons.append("missing_candidate_vectors")
+            logger.warning(
+                f"select_diverse_fallback reason={'+'.join(reasons)} "
+                f"missing={missing}/{len(candidate_embeddings)} "
+                f"k={effective_k} pool={len(docs)}"
+            )
             return [_without_embedding(d) for d in docs[:effective_k]]
 
         selected = maximal_marginal_relevance(

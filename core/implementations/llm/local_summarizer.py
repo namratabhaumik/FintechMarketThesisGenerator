@@ -2,7 +2,7 @@
 
 import logging
 import re
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from langchain_core.documents import Document
 
@@ -128,7 +128,7 @@ class LocalSummarizerModel(ILanguageModel):
             )[:top_count]
 
             # Deduplicate near-identical sentences (>70% word overlap)
-            deduplicated = []
+            deduplicated: List[Tuple[str, float]] = []
             for sent, score in top_sentences:
                 if not self._is_duplicate(sent, [s for s, _ in deduplicated]):
                     deduplicated.append((sent, score))

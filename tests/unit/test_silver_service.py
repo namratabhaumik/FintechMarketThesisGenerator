@@ -356,3 +356,70 @@ def test_a_success_resets_the_failure_streak():
     assert embedded == 0
     # Only the one success recorded a verdict; the streak never reached 5.
     assert [v.fintech_relevant for v in silver_repo.recorded] == [False]
+
+
+class _BoomVectorStore:
+    """Mimics the embed failing mid-commit (the 23505 that broke the pipeline)."""
+
+    def __init__(self):
+        self.built = []
+
+    def build(self, documents):
+        raise RuntimeError("duplicate key value violates unique constraint")
+
+
+def test_failed_embed_keeps_rejected_verdicts_but_not_accepted():
+    """A rejected article has no document, so its verdict does not depend on the
+    embed. Losing it made the next run re-ask the classifier the same questions."""
+    raw = [
+        _raw("A fintech story", "https://x/1"),   # accepted -> needs the embed
+        _raw("Sports roundup", "https://x/2"),    # rejected -> independent of it
+        _raw("Weather today", "https://x/3"),     # rejected
+    ]
+    silver_repo = _FakeSilverRepo()
+
+    with pytest.raises(RuntimeError, match="duplicate key"):
+        _service(raw, silver_repo, _BoomVectorStore()).build()
+
+    # The two classifier NOs are durable; the accepted one is not, so a later
+    # run retries only it.
+    assert {v.url for v in silver_repo.recorded} == {"https://x/2", "https://x/3"}
+    assert all(v.fintech_relevant is False for v in silver_repo.recorded)
+
+
+def test_successful_run_still_records_both_kinds():
+    raw = [
+        _raw("A fintech story", "https://x/1"),
+        _raw("Sports roundup", "https://x/2"),
+    ]
+    silver_repo = _FakeSilverRepo()
+
+    _service(raw, silver_repo, _FakeVectorStore()).build()
+
+    by_url = {v.url: v.fintech_relevant for v in silver_repo.recorded}
+    assert by_url == {"https://x/1": True, "https://x/2": False}
+
+
+def test_failed_embed_keeps_quarantine_so_the_scrape_is_not_repeated():
+    """Quarantine is a terminal decision and the article has no document, so it
+    must survive a failed embed - otherwise the next run re-scrapes a URL already
+    known to fail."""
+    raw = [
+        _raw("A fintech story", "https://x/1"),   # scrapes fine -> needs embed
+        _raw("A fintech dud", "https://x/2"),     # scrape returns nothing
+    ]
+    silver_repo = _FakeSilverRepo()
+    quarantine_repo = _FakeQuarantineRepo()
+
+    # Only x/2 fails, so x/1 still produces a document and the embed is reached.
+    class _OneBadUrlScraper(IWebScraper):
+        def scrape(self, url: str) -> str:
+            return "" if url.endswith("/2") else f"payment infrastructure {url}"
+
+    with pytest.raises(RuntimeError, match="duplicate key"):
+        _service(
+            raw, silver_repo, _BoomVectorStore(),
+            quarantine_repo=quarantine_repo, scraper=_OneBadUrlScraper(),
+        ).build()
+
+    assert [q.url for q in quarantine_repo.added] == ["https://x/2"]

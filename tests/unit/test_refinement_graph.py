@@ -53,12 +53,13 @@ class TestResolveComponents:
             "tool": "refine_thesis", "key_themes": ["A", "B"], "risks": ["R"],
             "investment_signals": ["S"], "sources": ["x"], "raw_output": "new",
             "tag_sources": {"themes": {"A": ["x"]}, "risks": {}, "signals": {}},
+            "tags_ranked_by": "lift",
             "summary_status": "refused", "refusal_reason": "llm_judgment",
         }
         assert _resolve_components("refine_thesis", result, current_thesis) == (
             ["A", "B"], ["R"], ["S"], ["x"], "new",
             {"themes": {"A": ["x"]}, "risks": {}, "signals": {}},
-            "refused", "llm_judgment",
+            "lift", "refused", "llm_judgment",
         )
 
     def test_refine_thesis_falls_back_to_current_for_missing_keys(self, current_thesis):
@@ -67,6 +68,7 @@ class TestResolveComponents:
             current_thesis.key_themes, current_thesis.risks,
             current_thesis.investment_signals, current_thesis.sources,
             current_thesis.raw_output, current_thesis.tag_sources,
+            current_thesis.tags_ranked_by,
             current_thesis.summary_status, current_thesis.refusal_reason,
         )
 
@@ -86,7 +88,7 @@ class TestScoreAndBuild:
         components = (["Digital Payments"], ["Regulatory Risk", "Credit Risk"],
                       ["Payment Infrastructure"], ["u1", "u2"], "new prose",
                       {"themes": {"Digital Payments": ["u1"]}, "risks": {}, "signals": {}},
-                      "ok", None)
+                      "lift", "ok", None)
         thesis = _score_and_build(components, current_thesis)
 
         assert isinstance(thesis, StructuredThesis)
@@ -110,7 +112,7 @@ class TestScoreAndBuild:
         current_thesis.window_weeks = 47
 
         thesis = _score_and_build(
-            (["T"], ["R"], ["S"], ["u"], "prose", {}, "ok", None), current_thesis
+            (["T"], ["R"], ["S"], ["u"], "prose", {}, "lift", "ok", None), current_thesis
         )
 
         assert (thesis.covered_weeks, thesis.window_weeks) == (17, 47)
@@ -123,7 +125,7 @@ class TestScoreAndBuild:
         refined_trail = {"themes": {"New": ["u1", "u2"]}, "risks": {}, "signals": {}}
 
         thesis = _score_and_build(
-            (["New"], ["R"], ["S"], ["u1"], "prose", refined_trail, "ok", None),
+            (["New"], ["R"], ["S"], ["u1"], "prose", refined_trail, "lift", "ok", None),
             current_thesis,
         )
 
@@ -133,8 +135,8 @@ class TestScoreAndBuild:
     def test_numbers_frozen_regardless_of_content(self, current_thesis):
         # Different refined prose / tags must NOT move any number - they reflect
         # the retrieved evidence and Gold snapshot, which a refinement leaves alone.
-        a = _score_and_build(([], [], [], [], SIGNAL_RICH, {}, "ok", None), current_thesis)
-        b = _score_and_build((["T"], ["R1", "R2"], ["S"], ["u"], RISK_HEAVY, {}, "ok", None), current_thesis)
+        a = _score_and_build(([], [], [], [], SIGNAL_RICH, {}, "lift", "ok", None), current_thesis)
+        b = _score_and_build((["T"], ["R1", "R2"], ["S"], ["u"], RISK_HEAVY, {}, "lift", "ok", None), current_thesis)
         assert a.opportunity_score == b.opportunity_score == current_thesis.opportunity_score
         assert a.confidence_level == b.confidence_level == current_thesis.confidence_level
 
@@ -282,6 +284,7 @@ class TestCreateThesisTools:
             key_themes=["New"], risks=["R"], investment_signals=["S"],
             sources=["u1"], raw_output="prose",
             tag_sources={"themes": {"New": ["u1"]}, "risks": {}, "signals": {}},
+            tags_ranked_by="lift",
         )
         service = Mock()
         service.refine_thesis = AsyncMock(return_value=refined)
@@ -301,7 +304,7 @@ class TestCreateThesisTools:
         assert resolved == (
             ["New"], ["R"], ["S"], ["u1"], "prose",
             {"themes": {"New": ["u1"]}, "risks": {}, "signals": {}},
-            "ok", None,
+            "lift", "ok", None,
         )
 
 

@@ -2,6 +2,7 @@
 
 import logging
 import re
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup, Tag
@@ -11,6 +12,16 @@ from core.exceptions import TransientScrapeError
 from core.interfaces.scraper import IWebScraper
 
 logger = logging.getLogger(__name__)
+
+# Article-body containers, most-specific first. Generic WordPress structure
+# shared by the configured feeds rather than any one site's markup. Module-level
+# so the "none of them matched" warning can report how many were tried.
+ARTICLE_CONTAINER_SELECTORS = (
+    "div.wp-block-post-content",
+    "div.entry-content",
+    "article",
+    "main",
+)
 
 
 class BeautifulSoupScraper(IWebScraper):
@@ -74,18 +85,15 @@ class BeautifulSoupScraper(IWebScraper):
             # root: the subtree we will read text from. Start at the whole
             # document, then try to narrow it to the tightest article container.
             root: Tag = soup
-            for selector in (
-                "div.wp-block-post-content",
-                "div.entry-content",
-                "article",
-                "main",
-            ):
+            matched_selector = None
+            for selector in ARTICLE_CONTAINER_SELECTORS:
                 # First selector that matches wins (most-specific first) -->
                 # narrow root to it and stop --> if none match, root stays the
                 # whole document.
                 match = soup.select_one(selector)
                 if match:
                     root = match
+                    matched_selector = selector
                     break
 
             # Capture all body text blocks, not just <p>: subheadings, list
@@ -110,7 +118,25 @@ class BeautifulSoupScraper(IWebScraper):
             # space-joined blob collapses to one line, so a single boilerplate
             # match would delete everything to the end of the article.
             text = "\n".join(blocks).strip()
-            logger.debug(f"Successfully scraped {len(blocks)} text blocks from {url}")
+            if matched_selector is None:
+                # Every selector missed, so root stayed the whole document and
+                # `blocks` is the page (not the article); sidebars, related-post
+                # lists and author bios all read as body text. Nothing raises --
+                # the article is stored, embedded, and tagged on that noise, and
+                # Silver verdicts are frozen, so the damage is permanent and
+                # silent. A site changing its template is the likely cause, so
+                # log the host to show WHICH of the configured feeds drifted.
+                # Debugging key: scrape_no_article_container.
+                logger.warning(
+                    f"scrape_no_article_container host={urlparse(url).netloc} "
+                    f"blocks={len(blocks)} chars={len(text)} "
+                    f"selectors_tried={len(ARTICLE_CONTAINER_SELECTORS)} url={url}"
+                )
+            else:
+                logger.debug(
+                    f"Successfully scraped {len(blocks)} text blocks from {url} "
+                    f"(container={matched_selector})"
+                )
             return text
 
         except (requests.Timeout, requests.ConnectionError) as e:

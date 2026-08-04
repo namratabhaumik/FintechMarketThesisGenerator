@@ -11,6 +11,7 @@ from langchain_core.documents import Document
 
 from config.settings import VectorStoreConfig
 from core.implementations.vectorstores.supabase_vector_store import (
+    _dedupe_chunks,
     SupabaseVectorStoreImpl,
 )
 
@@ -102,6 +103,36 @@ class TestFetchExistingUrls:
         client = _FakeClient(stored_urls={"a"}, fail=True)
         with pytest.raises(RuntimeError, match="Failed to read existing URLs"):
             _store(client)._fetch_existing_urls(["a"])
+
+
+class TestChunkDedup:
+    """Repeated chunks within one article collide on documents_url_content_uniq,
+    which fails the whole insert. They are dropped before embedding."""
+
+    def test_identical_chunks_in_one_article_collapse_to_one(self):
+        bio = Document(page_content="Richie is an advisor.", metadata={"url": "a"})
+        chunks = [
+            Document(page_content="body", metadata={"url": "a"}),
+            bio,
+            Document(page_content=bio.page_content, metadata={"url": "a"}),
+        ]
+        kept = _dedupe_chunks(chunks)
+        assert [c.page_content for c in kept] == ["body", "Richie is an advisor."]
+
+    def test_same_text_under_different_urls_is_kept(self):
+        # Two articles sharing a boilerplate paragraph do not collide: the unique
+        # key is (url, content), so each article keeps its own copy.
+        chunks = [
+            Document(page_content="shared footer", metadata={"url": "a"}),
+            Document(page_content="shared footer", metadata={"url": "b"}),
+        ]
+        assert len(_dedupe_chunks(chunks)) == 2
+
+    def test_no_repeats_passes_everything_through(self):
+        chunks = [
+            Document(page_content=f"c{i}", metadata={"url": "a"}) for i in range(3)
+        ]
+        assert _dedupe_chunks(chunks) == chunks
 
 
 class TestBuildDedup:

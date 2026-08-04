@@ -33,4 +33,4 @@ class HuggingFaceFintechClassifier(BaseChatClassifier):
             temperature=0.0,
         )
         # Hand the raw reply text back to the base class to parse into YES/NO.
-        return completion.choices[0].message.content
+        return completion.choices[0].message.content or ""

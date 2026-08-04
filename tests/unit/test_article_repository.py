@@ -6,59 +6,13 @@ from core.implementations.repositories.supabase_article_repository import (
     SupabaseArticleRepository,
 )
 from core.models.raw_article import RawArticle
+from tests.unit.fake_supabase import FakeClient as _FakeClient
 
 PUB = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
 
-class _FakeResp:
-    def __init__(self, data=None, count=None):
-        self.data = data
-        self.count = count
-
-
-class _FakeTable:
-    """Mimics supabase-py's table builder for upsert/select used by the repo."""
-
-    def __init__(self, store: dict):
-        self._store = store
-        self._op = None
-        self._payload = None
-        self._count = None
-
-    def upsert(self, rows, on_conflict=None, ignore_duplicates=False):
-        # Emulate UNIQUE(url) + ignore_duplicates: only never-seen URLs insert.
-        new = [r for r in rows if r["url"] not in self._store]
-        for r in new:
-            self._store[r["url"]] = r
-        self._op, self._payload = "upsert", new
-        return self
-
-    def select(self, *args, count=None):
-        self._op = "select"
-        self._count = count
-        return self
-
-    def order(self, column, desc=False):
-        return self
-
-    def execute(self):
-        if self._op == "upsert":
-            return _FakeResp(data=self._payload)
-        if self._count is not None:
-            return _FakeResp(count=len(self._store))
-        return _FakeResp(data=list(self._store.values()))
-
-
-class _FakeClient:
-    def __init__(self):
-        self.store: dict = {}
-
-    def table(self, name):
-        return _FakeTable(self.store)
-
-
-def _raw(url, title="Title"):
-    return RawArticle(title=title, url=url, published_at=PUB, summary="s")
+def _raw(url, title="Title", published_at=PUB):
+    return RawArticle(title=title, url=url, published_at=published_at, summary="s")
 
 
 def test_save_inserts_and_counts():
@@ -109,3 +63,42 @@ def test_fetch_all_round_trips_to_raw_articles():
     assert {a.url for a in out} == {"https://x/1", "https://x/2"}
     assert all(isinstance(a.published_at, datetime) for a in out)
     assert all(a.published_at == PUB for a in out)
+
+
+class TestFetchAllPaging:
+    """Bronze outgrew PostgREST's max-rows cap, which truncates a read with no
+    error. Silver treats fetch_all as the whole of Bronze, so anything left
+    behind is never classified and no gate can see the loss.
+
+    Paging mechanics are covered once in test_paging.py; these two check the
+    parts specific to this repository - that it pages at all, and that its sort
+    is unique enough to page over.
+    """
+
+    def _fill(self, client, n, published_at=PUB):
+        repo = SupabaseArticleRepository(client)
+        repo.save([
+            _raw(f"https://x/{i:03d}", published_at=published_at) for i in range(n)
+        ])
+        return repo
+
+    def test_reads_past_the_max_rows_cap(self):
+        client = _FakeClient(max_rows=10)
+        repo = self._fill(client, 25)
+
+        out = repo.fetch_all()
+
+        # 25 rows behind a 10-row cap: the old unpaged read stopped at 10.
+        assert len(out) == 25
+        assert len({a.url for a in out}) == 25
+
+    def test_tied_published_at_does_not_drop_or_repeat_rows(self):
+        # Feed entries routinely share a timestamp, and published_at alone is a
+        # non-unique sort: tied rows may reorder between requests, so a row can
+        # be served twice while another is skipped. The url tiebreaker pins it.
+        client = _FakeClient(max_rows=5)
+        repo = self._fill(client, 20, published_at=PUB)
+
+        urls = [a.url for a in repo.fetch_all()]
+
+        assert len(urls) == len(set(urls)) == 20
